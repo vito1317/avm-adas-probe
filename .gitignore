@@ -1,0 +1,31 @@
+# Android / Gradle
+.gradle/
+build/
+/app/build/
+captures/
+.externalNativeBuild/
+.cxx/
+
+# 機器相關（SDK 路徑），不進版控
+/local.properties
+
+# IDE
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# 建置產物
+*.apk
+*.aab
+*.ap_
+*.dex
+
+# OS
+.DS_Store
+
+# Python（模型匯出用的虛擬環境，若在專案內）
+tools/__pycache__/
+*.pyc
+.venv/
+yolovenv/

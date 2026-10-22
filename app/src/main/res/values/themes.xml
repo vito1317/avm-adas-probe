@@ -1,0 +1,7 @@
+<resources>
+    <style name="Theme.AvmProbe" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/teal</item>
+        <item name="colorPrimaryVariant">@color/teal_dark</item>
+        <item name="colorOnPrimary">#FFFFFF</item>
+    </style>
+</resources>
