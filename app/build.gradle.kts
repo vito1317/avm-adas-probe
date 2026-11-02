@@ -1,6 +1,15 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
+}
+
+// 固定簽章：金鑰與密碼放在專案根目錄的 keystore.properties（不進版控）。
+// 每版都用同一把 key 簽，車機才能直接覆蓋安裝，不用先解除安裝。
+val keystoreProps = Properties().apply {
+    val f = rootProject.file("keystore.properties")
+    if (f.exists()) f.inputStream().use { load(it) }
 }
 
 android {
@@ -15,8 +24,26 @@ android {
         versionName = "0.2"
     }
 
+    signingConfigs {
+        if (keystoreProps.getProperty("storeFile") != null) {
+            create("fixed") {
+                storeFile = rootProject.file(keystoreProps.getProperty("storeFile"))
+                storePassword = keystoreProps.getProperty("storePassword")
+                keyAlias = keystoreProps.getProperty("keyAlias")
+                keyPassword = keystoreProps.getProperty("keyPassword")
+            }
+        } else {
+            logger.warn("找不到 keystore.properties：改用本機 debug key，裝到車機上可能要先解除安裝舊版")
+        }
+    }
+
     buildTypes {
+        val fixed = signingConfigs.findByName("fixed")
+        debug {
+            if (fixed != null) signingConfig = fixed
+        }
         release {
+            if (fixed != null) signingConfig = fixed
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),

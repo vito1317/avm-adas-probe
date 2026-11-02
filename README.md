@@ -45,6 +45,21 @@ python tools/export_model.py --imgsz 320
 
 int8 版信心分數會被量化成粗階（多半顯示 50%），偵測結果與 fp32 相同。
 
+## 簽章
+
+每版都用同一把固定金鑰簽（憑證 SHA-256 `fa5736a4…6e92`），新版可直接覆蓋安裝，設定不會被清掉。
+
+金鑰不進版控：`signing/avm-adas-probe.jks` + 專案根目錄的 `keystore.properties`：
+
+```properties
+storeFile=signing/avm-adas-probe.jks
+storePassword=…
+keyAlias=avm
+keyPassword=…
+```
+
+沒有這兩個檔案時會退回本機 debug key（可以建置，但裝到車機上要先解除安裝舊版）。
+
 ## 3D 面板本機預覽
 
 ```bash

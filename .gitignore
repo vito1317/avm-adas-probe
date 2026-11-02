@@ -9,6 +9,12 @@ captures/
 # 機器相關（SDK 路徑），不進版控
 /local.properties
 
+# 簽章金鑰（公開 repo，絕對不能進版控）
+/keystore.properties
+/signing/
+*.jks
+*.keystore
+
 # IDE
 .idea/
 *.iml
