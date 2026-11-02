@@ -60,6 +60,11 @@ android {
         jvmTarget = "17"
     }
 
+    // release 建置不跑 lint 檢查（它要另外下載 IntelliJ 元件，網路不穩時會讓建置失敗）
+    lint {
+        checkReleaseBuilds = false
+    }
+
     // tflite 模型不要被壓縮，才能用 mmap 直接載入
     androidResources {
         noCompress += "tflite"
