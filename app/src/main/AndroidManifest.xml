@@ -5,6 +5,9 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.CAMERA" />
+
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
 
     <!-- USB 探測（UVC 採集盒偵測） -->
     <uses-feature android:name="android.hardware.usb.host" android:required="false" />
@@ -28,6 +31,11 @@
 
         <activity
             android:name=".UvcActivity"
+            android:exported="false"
+            android:screenOrientation="landscape" />
+
+        <activity
+            android:name=".CameraTestActivity"
             android:exported="false"
             android:screenOrientation="landscape" />
 

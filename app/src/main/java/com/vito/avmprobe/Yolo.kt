@@ -5,11 +5,13 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.Rect
 import android.graphics.RectF
 import android.util.Log
 import org.tensorflow.lite.Interpreter
 import org.tensorflow.lite.gpu.CompatibilityList
 import org.tensorflow.lite.gpu.GpuDelegate
+import org.tensorflow.lite.gpu.GpuDelegateFactory
 import java.io.FileInputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -32,10 +34,11 @@ data class Detection(
  */
 class Yolo(
     context: Context,
-    modelAsset: String = "model.tflite",
+    modelAsset: String = "model_320.tflite",
     labelAsset: String = "coco_labels.txt",
     private val confThreshold: Float = 0.30f,
-    private val iouThreshold: Float = 0.45f
+    private val iouThreshold: Float = 0.45f,
+    useGpu: Boolean = true
 ) {
     companion object {
         private const val TAG = "Yolo"
@@ -48,7 +51,7 @@ class Yolo(
     private var gpuDelegate: GpuDelegate? = null
 
     val engineName: String
-    private val inputSize: Int
+    val inputSize: Int
     private val chFirst: Boolean   // true: NCHW [1,3,H,W]；false: NHWC [1,H,W,3]
 
     // 輸出張量形狀（[1, A, B]）
@@ -62,6 +65,7 @@ class Yolo(
     private val letterboxCanvas: Canvas
     private val letterboxPaint = Paint(Paint.FILTER_BITMAP_FLAG)
     private val pixels: IntArray
+    private val output: Array<Array<FloatArray>>   // 重用，避免每幀配置數 MB
 
     init {
         labels = context.assets.open(labelAsset).bufferedReader().readLines()
@@ -74,13 +78,17 @@ class Yolo(
         val options = Interpreter.Options()
         try {
             val compat = CompatibilityList()
-            if (compat.isDelegateSupportedOnThisDevice) {
-                delegate = GpuDelegate(compat.bestOptionsForThisDevice)
+            if (useGpu && compat.isDelegateSupportedOnThisDevice) {
+                val gpuOpts = compat.bestOptionsForThisDevice
+                gpuOpts.setPrecisionLossAllowed(true)   // fp16 運算，Mali 上較快
+                gpuOpts.setInferencePreference(GpuDelegateFactory.Options.INFERENCE_PREFERENCE_SUSTAINED_SPEED)
+                delegate = GpuDelegate(gpuOpts)
                 options.addDelegate(delegate)
                 eng = "GPU"
             } else {
                 val n = Runtime.getRuntime().availableProcessors().coerceAtMost(4)
                 options.setNumThreads(n)
+                options.setUseXNNPACK(true)   // CPU 走 XNNPACK（int8 模型也吃）
                 eng = "CPU(x$n)"
             }
         } catch (t: Throwable) {
@@ -121,6 +129,7 @@ class Yolo(
         letterboxBmp = Bitmap.createBitmap(inputSize, inputSize, Bitmap.Config.ARGB_8888)
         letterboxCanvas = Canvas(letterboxBmp)
         pixels = IntArray(inputSize * inputSize)
+        output = Array(1) { Array(a) { FloatArray(b) } }
 
         Log.i(TAG, "engine=$engineName input=$inputSize out=[$a,$b] transposed=$transposed")
     }
@@ -136,10 +145,15 @@ class Yolo(
         }
     }
 
-    /** 回傳偵測結果（座標在原始 bitmap 空間），以及本次純推論耗時（ms）。 */
-    fun detect(bitmap: Bitmap): Pair<List<Detection>, Long> {
-        val srcW = bitmap.width
-        val srcH = bitmap.height
+    /**
+     * 回傳偵測結果（座標在原始 bitmap 空間），以及本次純推論耗時（ms）。
+     * roi 不為 null 時只偵測該區域（直接從原圖裁切縮放，不額外配置 bitmap）。
+     */
+    fun detect(bitmap: Bitmap, roi: Rect? = null): Pair<List<Detection>, Long> {
+        val offX = roi?.left ?: 0
+        val offY = roi?.top ?: 0
+        val srcW = roi?.width() ?: bitmap.width
+        val srcH = roi?.height() ?: bitmap.height
 
         // letterbox：等比縮放至 inputSize，四周填灰(114)
         val scale = min(inputSize / srcW.toFloat(), inputSize / srcH.toFloat())
@@ -150,7 +164,7 @@ class Yolo(
 
         letterboxCanvas.drawColor(Color.rgb(114, 114, 114))
         val dst = RectF(padX, padY, padX + newW, padY + newH)
-        letterboxCanvas.drawBitmap(bitmap, null, dst, letterboxPaint)
+        letterboxCanvas.drawBitmap(bitmap, roi, dst, letterboxPaint)
 
         // 填入 inputBuffer（NHWC, float32, /255）
         letterboxBmp.getPixels(pixels, 0, inputSize, 0, 0, inputSize, inputSize)
@@ -169,10 +183,6 @@ class Yolo(
             }
         }
         inputBuffer.rewind()
-
-        val output = Array(1) { Array(if (transposed) featCount else boxCount) {
-            FloatArray(if (transposed) boxCount else featCount)
-        } }
 
         val t0 = System.nanoTime()
         interpreter.run(inputBuffer, output)
@@ -213,7 +223,9 @@ class Yolo(
             if (x2 - x1 < 1f || y2 - y1 < 1f) continue
 
             val label = labels.getOrElse(bestCls) { "cls$bestCls" }
-            candidates.add(Detection(RectF(x1, y1, x2, y2), label, bestCls, bestScore))
+            candidates.add(Detection(
+                RectF(x1 + offX, y1 + offY, x2 + offX, y2 + offY), label, bestCls, bestScore
+            ))
         }
 
         return Pair(nms(candidates), inferMs)

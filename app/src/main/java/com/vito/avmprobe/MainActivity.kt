@@ -6,12 +6,14 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
+import android.graphics.Typeface
 import android.media.projection.MediaProjectionManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.view.Gravity
+import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.LinearLayout
@@ -24,6 +26,7 @@ import androidx.core.content.ContextCompat
 
 class MainActivity : AppCompatActivity() {
 
+    private lateinit var prefs: AppPrefs
     private lateinit var log: TextView
 
     private val projectionLauncher = registerForActivityResult(
@@ -35,7 +38,7 @@ class MainActivity : AppCompatActivity() {
                 putExtra(ScreenCaptureService.EXTRA_DATA, result.data)
             }
             ContextCompat.startForegroundService(this, svc)
-            toast("偵測已啟動，切到「全景360」看疊加框")
+            toast("偵測已啟動，切到「全景360」並開俯視畫面")
         } else {
             toast("使用者取消了螢幕擷取授權")
         }
@@ -43,10 +46,11 @@ class MainActivity : AppCompatActivity() {
 
     private val notiLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
-    ) { /* 可忽略結果 */ }
+    ) { }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        prefs = AppPrefs(this)
         setContentView(buildUi())
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
@@ -56,55 +60,106 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun buildUi(): android.view.View {
-        val root = LinearLayout(this).apply {
+    private fun buildUi(): View {
+        val col = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(40, 40, 40, 40)
+            setPadding(40, 32, 40, 32)
         }
 
-        root.addView(TextView(this).apply {
-            text = "AVM ADAS Probe"
+        col.addView(TextView(this).apply {
+            text = "AVM ADAS Probe  v${packageManager.getPackageInfo(packageName, 0).versionName}"
             textSize = 24f
             setTextColor(Color.parseColor("#008577"))
         })
-        root.addView(TextView(this).apply {
-            text = "Phase 1：截「全景360」畫面 → YOLO 偵測 → 疊框量 FPS\n先授予「懸浮窗」權限，再按開始。"
+        col.addView(TextView(this).apply {
+            text = "截「全景360」俯視畫面 → YOLO 偵測 → 右側 3D 面板即時重建周遭物件。\n" +
+                "改了模型／引擎／面板位置，要按「停止」再「開始」才生效；俯視區校正在 3D 面板右上角「校正」。"
             textSize = 14f
-            setPadding(0, 12, 0, 24)
+            setPadding(0, 10, 0, 18)
         })
 
-        root.addView(btn("① 授予懸浮窗權限") { requestOverlay() })
-        root.addView(btn("② 開始偵測（截螢幕）") { startDetection() })
-        root.addView(btn("■ 停止") { stopDetection() })
-        root.addView(btn("UVC 直讀偵測（免 root）") {
+        col.addView(section("模型（輸入解析度，小＝快；int8＝量化版）"))
+        col.addView(segRow(AppPrefs.models(this), { prefs.model }) { prefs.model = it })
+
+        col.addView(section("推論引擎"))
+        col.addView(segRow(
+            listOf("GPU" to "gpu", "CPU 4 核" to "cpu"),
+            { if (prefs.useGpu) "gpu" else "cpu" }
+        ) { prefs.useGpu = it == "gpu" })
+
+        col.addView(section("3D 面板位置（不要擋住俯視圖那一側）"))
+        col.addView(segRow(
+            listOf("右側" to AppPrefs.PANEL_RIGHT, "左側" to AppPrefs.PANEL_LEFT, "關閉" to AppPrefs.PANEL_OFF),
+            { prefs.panel }
+        ) { prefs.panel = it })
+
+        col.addView(section("執行"))
+        col.addView(btn("① 授予懸浮窗權限") { requestOverlay() })
+        col.addView(btn("② 開始偵測（截螢幕）") { startDetection() })
+        col.addView(btn("■ 停止") { stopDetection() })
+
+        col.addView(section("硬體測試"))
+        col.addView(btn("鏡頭直開測試（Camera2，免 root）") {
+            startActivity(Intent(this, CameraTestActivity::class.java))
+        })
+        col.addView(btn("UVC 直讀偵測（USB 鏡頭用）") {
             startActivity(Intent(this, UvcActivity::class.java))
         })
-        root.addView(btn("硬體探測（USB / v4l2）") { runProbe() })
+        col.addView(btn("硬體探測（Camera2 / USB / v4l2）") { runProbe() })
 
         log = TextView(this).apply {
             text = "— 硬體探測結果會顯示在這裡 —"
             textSize = 13f
-            typeface = android.graphics.Typeface.MONOSPACE
-            setPadding(0, 24, 0, 0)
+            typeface = Typeface.MONOSPACE
+            setPadding(0, 20, 0, 0)
             setTextIsSelectable(true)
         }
-        val scroll = ScrollView(this).apply {
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT
-            )
-            addView(log)
+        col.addView(log)
+
+        return ScrollView(this).apply { addView(col) }
+    }
+
+    private fun section(title: String) = TextView(this).apply {
+        text = title
+        textSize = 13f
+        setTextColor(Color.parseColor("#7a8b99"))
+        setPadding(0, 22, 0, 6)
+    }
+
+    /** 單選按鈕列：選中的前面加 ●。 */
+    private fun segRow(
+        options: List<Pair<String, String>>,
+        current: () -> String,
+        onPick: (String) -> Unit
+    ): View {
+        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val buttons = ArrayList<Pair<Button, Pair<String, String>>>()
+        fun refresh() {
+            val cur = current()
+            for ((b, opt) in buttons) b.text = if (opt.second == cur) "● ${opt.first}" else opt.first
         }
-        root.addView(scroll)
-        return root
+        for (opt in options) {
+            val b = Button(this).apply {
+                isAllCaps = false
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                setOnClickListener {
+                    onPick(opt.second)
+                    refresh()
+                }
+            }
+            buttons.add(b to opt)
+            row.addView(b)
+        }
+        refresh()
+        return row
     }
 
     private fun btn(label: String, onClick: () -> Unit): Button =
         Button(this).apply {
             text = label
+            isAllCaps = false
             layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
             )
             setOnClickListener { onClick() }
         }
@@ -115,10 +170,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
         startActivity(
-            Intent(
-                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                Uri.parse("package:$packageName")
-            )
+            Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))
         )
     }
 

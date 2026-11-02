@@ -1,0 +1,546 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>環景 3D</title>
+<style>
+  /* 車機夜間 HUD：單一深色主題。字型用系統字（車機離線、不連 Google Fonts） */
+  :root{
+    --bg:#090d13; --panel:rgba(14,20,28,.8); --line:rgba(120,160,200,.18);
+    --fg:#e8f1f8; --muted:#8ba1b4;
+    --cyan:#38e1ff; --amber:#ffc24b; --green:#5ef08a; --violet:#b58cff; --red:#ff5a4d;
+    color-scheme:dark;
+  }
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);overflow:hidden;
+    font-family:system-ui,-apple-system,"Noto Sans TC","PingFang TC","Microsoft JhengHei",sans-serif;
+    -webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}
+  #app{position:relative;width:100%;height:100%}
+  canvas{display:block}
+  .hud{position:absolute;z-index:5}
+
+  .panel{top:10px;left:10px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:9px 12px;pointer-events:none;min-width:122px}
+  .panel h1{margin:0 0 6px;font-size:12px;letter-spacing:.14em;font-weight:700}
+  .rows{display:flex;flex-direction:column;gap:5px}
+  .row{display:flex;align-items:center;gap:8px;font-size:13px}
+  .dot{width:9px;height:9px;border-radius:3px;flex:none}
+  .row .nm{color:var(--muted);flex:1}
+  .row .ct{font-weight:700;font-size:17px;font-variant-numeric:tabular-nums}
+  .stat{margin-top:8px;font-size:11px;color:var(--muted);line-height:1.55;font-variant-numeric:tabular-nums}
+  .stat .bad{color:var(--red)}
+
+  .alert{top:10px;left:50%;transform:translateX(-50%);background:rgba(255,90,77,.18);border:1px solid rgba(255,90,77,.6);color:#ff8278;padding:6px 14px;border-radius:999px;font-weight:700;letter-spacing:.12em;font-size:13px;pointer-events:none;animation:blink 1s infinite;white-space:nowrap}
+  @keyframes blink{50%{opacity:.35}}
+  .wait{top:50%;left:50%;transform:translate(-50%,-50%);color:var(--muted);font-size:14px;letter-spacing:.06em;background:var(--panel);padding:10px 16px;border-radius:10px;border:1px solid var(--line);pointer-events:none;text-align:center;line-height:1.6}
+
+  .dock{left:50%;bottom:10px;transform:translateX(-50%);display:flex;gap:4px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:5px}
+  button{font:inherit;font-size:12px;font-weight:600;color:var(--muted);background:transparent;border:0;border-radius:8px;padding:8px 11px;white-space:nowrap}
+  button:focus-visible{outline:2px solid var(--cyan);outline-offset:1px}
+  .dock button[aria-pressed="true"]{background:rgba(56,225,255,.16);color:var(--cyan)}
+  .dock button.g[aria-pressed="true"]{background:rgba(94,240,138,.16);color:var(--green)}
+  .topbtn{position:absolute;top:10px;right:10px;z-index:6;background:var(--panel);border:1px solid var(--line)}
+  .topbtn[aria-pressed="true"]{color:var(--amber);border-color:rgba(255,194,75,.5)}
+
+  .cal{top:50px;right:10px;width:260px;max-height:calc(100% - 112px);overflow:auto;background:var(--panel);border:1px solid rgba(255,194,75,.45);border-radius:12px;padding:10px 12px;font-size:12px}
+  .cal h2{margin:0 0 4px;font-size:12px;color:var(--amber);letter-spacing:.1em}
+  .cal p{margin:0 0 8px;color:var(--muted);line-height:1.5}
+  .cal label{display:flex;align-items:center;gap:8px;margin:8px 0}
+  .cal label span{width:58px;color:var(--muted);flex:none}
+  .cal input[type=range]{flex:1;min-width:0;accent-color:var(--amber)}
+  .cal output{width:46px;text-align:right;font-variant-numeric:tabular-nums;flex:none}
+  .cal .chk span{width:auto}
+  .cal input[type=checkbox]{accent-color:var(--amber)}
+
+  .tag{font-size:12px;font-weight:600;padding:2px 7px;border-radius:7px;white-space:nowrap;background:rgba(9,13,19,.82);border:1px solid var(--line);color:var(--fg);transform:translateY(-4px)}
+  .tag.car{border-color:rgba(56,225,255,.55)}
+  .tag.truck{border-color:rgba(181,140,255,.55)}
+  .tag.moto{border-color:rgba(255,194,75,.55)}
+  .tag.ped{border-color:rgba(94,240,138,.55)}
+  .tag.danger{border-color:var(--red);color:#ff8278}
+  .tag b{margin-left:4px;font-variant-numeric:tabular-nums}
+  [hidden]{display:none!important}
+</style>
+</head>
+<body>
+<div id="app">
+  <div class="hud panel" role="status" aria-label="周遭偵測統計">
+    <h1>周遭偵測</h1>
+    <div class="rows" id="rows"></div>
+    <div class="stat" id="stat">—</div>
+  </div>
+  <div class="hud alert" id="alert" hidden>⚠ 碰撞預警</div>
+  <div class="hud wait" id="wait">等待偵測資料…<br><small>把全景360 切到俯視畫面</small></div>
+
+  <button class="topbtn" id="calBtn" aria-pressed="false">校正</button>
+  <div class="hud cal" id="cal" hidden>
+    <h2>俯視區校正</h2>
+    <p>拖動滑桿，讓螢幕上的黃色虛線框剛好框住全景360 的俯視圖。</p>
+    <label><span>左緣</span><input type="range" id="cL" min="0" max="100" step="0.5"><output id="oL"></output></label>
+    <label><span>右緣</span><input type="range" id="cR" min="0" max="100" step="0.5"><output id="oR"></output></label>
+    <label><span>上緣</span><input type="range" id="cT" min="0" max="100" step="0.5"><output id="oT"></output></label>
+    <label><span>下緣</span><input type="range" id="cB" min="0" max="100" step="0.5"><output id="oB"></output></label>
+    <label><span>橫向寬度</span><input type="range" id="cM" min="2" max="30" step="0.5"><output id="oM"></output></label>
+    <p>寬度＝俯視圖左右兩邊之間的實際公尺數。對照方式：3D 裡自車寬 1.9 m，調到實景地面上的車身跟 3D 車身一樣寬。</p>
+    <label class="chk"><input type="checkbox" id="cF"><span>俯視圖車頭朝下（翻轉）</span></label>
+    <label class="chk"><input type="checkbox" id="cO"><span>只偵測俯視區（較快較準）</span></label>
+  </div>
+
+  <div class="hud dock" id="dock">
+    <button data-view="top">俯視</button>
+    <button data-view="chase" aria-pressed="true">3D 跟車</button>
+    <button data-view="orbit">繞行</button>
+    <button class="g" id="gBtn" aria-pressed="true">實景地面</button>
+  </div>
+</div>
+
+<script src="lib/three.min.js"></script>
+<script src="lib/OrbitControls.js"></script>
+<script src="lib/CSS2DRenderer.js"></script>
+<script src="lib/RoomEnvironment.js"></script>
+<script>
+(function () {
+  'use strict';
+  // 座標約定：自車在原點，車頭朝 -Z；x 正 = 右側。Android 送來的 z 是「前方公尺」，進場景時取負號。
+  var Bridge = window.AndroidBridge || null;
+  var DEMO = location.hash.indexOf('demo') >= 0;
+  var app = document.getElementById('app');
+  var COL = { cyan: 0x38e1ff, amber: 0xffc24b, green: 0x5ef08a, violet: 0xb58cff, red: 0xff5a4d,
+    asphalt: 0x11171f, ego: 0xeaf7ff, glass: 0x0c161d };
+  var NAMES = { car: '汽車', truck: '卡車', moto: '機車', ped: '行人' };
+  var RADIUS = { car: 0.9, truck: 1.2, moto: 0.4, ped: 0.3 };   // 物件約略半寬(m)
+  var EGO_W = 1.9, EGO_L = 4.9, WARN = 1.2, CRIT = 0.5;          // 停車距離門檻(m)
+
+  // ---------- renderer ----------
+  var renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'low-power' });
+  renderer.setPixelRatio(1);
+  renderer.outputEncoding = THREE.sRGBEncoding;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.05;
+  app.appendChild(renderer.domElement);
+
+  var labels = new THREE.CSS2DRenderer();
+  labels.domElement.style.cssText = 'position:absolute;top:0;left:0;pointer-events:none';
+  app.appendChild(labels.domElement);
+
+  var scene = new THREE.Scene();
+  scene.background = new THREE.Color(COL.asphalt);
+  scene.fog = new THREE.Fog(COL.asphalt, 24, 70);
+  try {
+    var pm = new THREE.PMREMGenerator(renderer);
+    scene.environment = pm.fromScene(new THREE.RoomEnvironment(), 0.04).texture;
+  } catch (e) { /* 舊 WebView 不支援就只用燈光 */ }
+
+  var camera = new THREE.PerspectiveCamera(50, 1, 0.1, 200);
+  var controls = new THREE.OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.1;
+  controls.minDistance = 4;
+  controls.maxDistance = 45;
+  controls.maxPolarAngle = Math.PI * 0.49;
+
+  scene.add(new THREE.HemisphereLight(0x9fc4ff, 0x0a0f16, 0.6));
+  var key = new THREE.DirectionalLight(0xffffff, 1.3);
+  key.position.set(6, 14, 4);
+  scene.add(key);
+
+  // ---------- ground ----------
+  var base = new THREE.Mesh(new THREE.PlaneGeometry(140, 140),
+    new THREE.MeshBasicMaterial({ color: COL.asphalt }));   // 不受光：環境光會把柏油照成淺灰
+  base.rotation.x = -Math.PI / 2;
+  scene.add(base);
+  var grid = new THREE.PolarGridHelper(16, 8, 4, 64, 0x2a3c50, 0x1b2a3a);
+  grid.position.y = 0.01;
+  scene.add(grid);
+
+  // 實景地面：全景360 俯視圖即時貼圖（圖上方 = 車頭方向）
+  var groundImg = new Image();
+  var groundTex = new THREE.Texture(groundImg);
+  groundTex.encoding = THREE.sRGBEncoding;
+  groundTex.minFilter = THREE.LinearFilter;
+  groundTex.generateMipmaps = false;
+  var real = new THREE.Mesh(new THREE.PlaneGeometry(1, 1),
+    new THREE.MeshBasicMaterial({ map: groundTex, toneMapped: false }));
+  real.rotation.x = -Math.PI / 2;
+  real.position.y = 0.02;
+  real.visible = false;
+  scene.add(real);
+  var groundLoaded = false, groundLoading = false, groundPending = null, realOn = true;
+  groundImg.onload = function () {
+    groundTex.image = groundImg;
+    groundTex.needsUpdate = true;
+    groundLoaded = true;
+    real.visible = realOn;
+    groundLoading = false;
+    if (groundPending) { var p = groundPending; groundPending = null; loadGround(p); }
+  };
+  groundImg.onerror = function () { groundLoading = false; };
+  function loadGround(url) {
+    if (groundLoading) { groundPending = url; return; }   // 只留最新一張
+    groundLoading = true;
+    groundImg.src = url;
+  }
+
+  // ---------- builders ----------
+  function std(color, metal, rough) {
+    var m = new THREE.MeshStandardMaterial({ color: color, metalness: metal, roughness: rough });
+    m.envMapIntensity = 0.5;   // 反光收斂，車色才看得出來
+    m.userData.baseEm = 0x000000;
+    m.userData.baseEmI = 1;
+    return m;
+  }
+  function mesh(geo, mat, x, y, z) {
+    var m = new THREE.Mesh(geo, mat);
+    m.position.set(x || 0, y || 0, z || 0);
+    return m;
+  }
+  var shadowTex = (function () {
+    var c = document.createElement('canvas'); c.width = c.height = 64;
+    var g = c.getContext('2d'), r = g.createRadialGradient(32, 32, 2, 32, 32, 31);
+    r.addColorStop(0, 'rgba(0,0,0,.55)'); r.addColorStop(1, 'rgba(0,0,0,0)');
+    g.fillStyle = r; g.fillRect(0, 0, 64, 64);
+    return new THREE.CanvasTexture(c);
+  })();
+  function shadow(g, w, l) {
+    var m = new THREE.Mesh(new THREE.PlaneGeometry(w * 1.6, l * 1.3),
+      new THREE.MeshBasicMaterial({ map: shadowTex, transparent: true, depthWrite: false }));
+    m.rotation.x = -Math.PI / 2; m.position.y = 0.025; g.add(m);
+  }
+  function wheels(g, w, l, r) {
+    var tire = std(0x0a0d11, 0, 0.85), rim = std(0x9aa3ad, 0.95, 0.28);
+    var tg = new THREE.CylinderGeometry(r, r, 0.28, 18), rg = new THREE.CylinderGeometry(r * 0.52, r * 0.52, 0.3, 12);
+    [w / 2 - 0.02, -w / 2 + 0.02].forEach(function (x) {
+      [l / 2 - 0.9, -l / 2 + 0.9].forEach(function (z) {
+        var t = mesh(tg, tire, x, r, z); t.rotation.z = Math.PI / 2; g.add(t);
+        var h = mesh(rg, rim, x, r, z); h.rotation.z = Math.PI / 2; g.add(h);
+      });
+    });
+  }
+  function lights(g, l) {
+    var head = new THREE.MeshStandardMaterial({ color: 0xfff6d6, emissive: 0xfff2cf, emissiveIntensity: 1.3 });
+    var tail = new THREE.MeshStandardMaterial({ color: 0xff3b30, emissive: 0xff2a20, emissiveIntensity: 1.0 });
+    [-0.62, 0.62].forEach(function (sx) {
+      g.add(mesh(new THREE.BoxGeometry(0.4, 0.16, 0.07), head, sx, 0.62, l / 2 - 0.02));
+      g.add(mesh(new THREE.BoxGeometry(0.42, 0.16, 0.07), tail, sx, 0.66, -l / 2 + 0.02));
+    });
+  }
+  // 模型車頭在 +Z（區域座標），擺進場景時轉 180° 朝 -Z
+  function makeCar(color, ego) {
+    var g = new THREE.Group(), L = 4.4;
+    var paint = std(color, 0.4, 0.4), glass = std(COL.glass, 0.5, 0.08);
+    g.add(mesh(new THREE.BoxGeometry(1.92, 0.5, L), paint, 0, 0.55, 0));
+    g.add(mesh(new THREE.BoxGeometry(1.8, 0.42, L * 0.92), paint, 0, 0.9, 0));
+    g.add(mesh(new THREE.BoxGeometry(1.62, 0.52, 2.0), glass, 0, 1.26, -0.12));
+    g.add(mesh(new THREE.BoxGeometry(1.56, 0.14, 1.9), paint, 0, 1.53, -0.12));
+    lights(g, L); wheels(g, 1.92, L, 0.36); shadow(g, 1.92, L);
+    if (ego) {
+      paint.metalness = 0.35; paint.roughness = 0.4;
+      paint.emissive = new THREE.Color(COL.cyan); paint.emissiveIntensity = 0.15;
+    }
+    g.userData.paint = paint;
+    return g;
+  }
+  function makeTruck(color) {
+    var g = new THREE.Group(), paint = std(color, 0.5, 0.45);
+    g.add(mesh(new THREE.BoxGeometry(2.2, 1.6, 2.0), paint, 0, 1.1, 2.4));
+    g.add(mesh(new THREE.BoxGeometry(2.05, 0.7, 0.1), std(COL.glass, 0.5, 0.1), 0, 1.5, 3.4));
+    g.add(mesh(new THREE.BoxGeometry(2.3, 2.1, 5.2), std(0x767b86, 0.3, 0.6), 0, 1.35, -1.1));
+    lights(g, 7.6); wheels(g, 2.3, 7.4, 0.42); shadow(g, 2.3, 7.6);
+    g.userData.paint = paint;
+    return g;
+  }
+  function makeScooter(color) {
+    var g = new THREE.Group(), paint = std(color, 0.55, 0.4);
+    g.add(mesh(new THREE.BoxGeometry(0.42, 0.4, 1.5), paint, 0, 0.55, 0));
+    g.add(mesh(new THREE.BoxGeometry(0.16, 0.85, 0.16), std(0x1b1f26, 0.3, 0.6), 0, 0.92, 0.75));
+    g.add(mesh(new THREE.CylinderGeometry(0.22, 0.26, 0.8, 10), std(0x2b3442, 0, 0.7), 0, 1.3, -0.1));
+    g.add(mesh(new THREE.SphereGeometry(0.2, 14, 14), std(0x222831, 0.2, 0.4), 0, 1.92, -0.1));
+    shadow(g, 0.7, 1.7);
+    g.userData.paint = paint;
+    return g;
+  }
+  function makePerson(color) {
+    var g = new THREE.Group(), bodyM = std(color, 0, 0.6);
+    g.add(mesh(new THREE.CylinderGeometry(0.22, 0.26, 1.05, 12), bodyM, 0, 0.7, 0));
+    g.add(mesh(new THREE.SphereGeometry(0.22, 14, 14), std(0xf2c9a0, 0, 0.6), 0, 1.45, 0));
+    shadow(g, 0.6, 0.6);
+    g.userData.paint = bodyM;
+    return g;
+  }
+
+  // ---------- ego + 安全距離框 ----------
+  var ego = makeCar(COL.ego, true);
+  ego.rotation.y = Math.PI;
+  scene.add(ego);
+
+  function roundRect(w, h, r) {
+    var s = new THREE.Shape(), x = -w / 2, y = -h / 2;
+    s.moveTo(x + r, y); s.lineTo(x + w - r, y); s.quadraticCurveTo(x + w, y, x + w, y + r);
+    s.lineTo(x + w, y + h - r); s.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+    s.lineTo(x + r, y + h); s.quadraticCurveTo(x, y + h, x, y + h - r);
+    s.lineTo(x, y + r); s.quadraticCurveTo(x, y, x + r, y);
+    return s;
+  }
+  var ow = EGO_W + 2 * WARN, oh = EGO_L + 2 * WARN;
+  var band = roundRect(ow, oh, WARN + 0.25);
+  band.holes.push(roundRect(ow - 0.22, oh - 0.22, WARN + 0.14));
+  var warnBand = new THREE.Mesh(new THREE.ShapeGeometry(band, 16),
+    new THREE.MeshBasicMaterial({ color: COL.cyan, transparent: true, opacity: 0.22, side: THREE.DoubleSide, depthWrite: false }));
+  warnBand.rotation.x = -Math.PI / 2;
+  warnBand.position.y = 0.04;
+  scene.add(warnBand);
+
+  // ---------- tracks（跨幀關聯，ID 穩定、位置平滑） ----------
+  var tracks = [], nextId = 1;
+  var POOL = { car: [], truck: [], moto: [], ped: [] };
+  function makeObj(t) {
+    var g = t === 'truck' ? makeTruck(0x8f7fd6) : t === 'moto' ? makeScooter(0xe0a63a)
+      : t === 'ped' ? makePerson(0x5ef08a) : makeCar(0x1f7fae);
+    var el = document.createElement('div');
+    el.className = 'tag ' + t;
+    var lab = new THREE.CSS2DObject(el);
+    lab.position.set(0, t === 'truck' ? 3.3 : 2.3, 0);
+    g.add(lab);
+    g.userData.el = el;
+    return g;
+  }
+  function acquire(t) {
+    var g = POOL[t].pop() || makeObj(t);
+    g.userData.el.style.display = '';
+    scene.add(g);
+    return g;
+  }
+  function release(tr) {
+    scene.remove(tr.mesh);
+    tr.mesh.userData.el.style.display = 'none';   // CSS2D 標籤不會跟著父物件消失，要手動藏
+    POOL[tr.t].push(tr.mesh);
+  }
+
+  function associate(objs, now) {
+    var used = {};
+    objs.sort(function (a, b) { return (b.c || 0) - (a.c || 0); });
+    for (var i = 0; i < objs.length; i++) {
+      var o = objs[i], wx = o.x, wz = -o.z, best = null, bd = 2.5;
+      for (var j = 0; j < tracks.length; j++) {
+        var tr = tracks[j];
+        if (used[tr.id] || tr.t !== o.t) continue;
+        var d = Math.hypot(tr.tx - wx, tr.tz - wz);
+        if (d < bd) { bd = d; best = tr; }
+      }
+      if (!best) {
+        best = { id: nextId++, t: o.t, mesh: acquire(o.t), x: wx, z: wz, tx: wx, tz: wz, yaw: 0, yawT: 0, txt: '' };
+        best.mesh.position.set(wx, 0, wz);
+        tracks.push(best);
+      }
+      used[best.id] = true;
+      best.tx = wx; best.tz = wz; best.seen = now;
+      // 框比較寬 → 橫向停放的車
+      if (o.t !== 'ped' && o.w && o.h) best.yawT = o.w > o.h * 1.25 ? Math.PI / 2 : 0;
+    }
+  }
+
+  // ---------- data in ----------
+  var lastData = 0, wm = 8, hm = 6;
+  window.setFrame = function (p) {
+    var now = performance.now();
+    lastData = now;
+    if (p.wm) { wm = p.wm; hm = p.hm || wm; }
+    real.scale.set(wm, hm, 1);
+    real.rotation.set(-Math.PI / 2, 0, p.flip ? Math.PI : 0);
+    if (p.ground && realOn) loadGround(p.ground);
+    if (p.stat) showStat(p.stat, p.overlap);
+    associate(p.objs || [], now);
+  };
+
+  var statEl = document.getElementById('stat');
+  function showStat(s, overlap) {
+    statEl.innerHTML = '引擎 ' + s.eng + ' · 輸入 ' + s.res +
+      '<br>推論 ' + s.inf + 'ms · 端到端 ' + (s.e2e || '–') + 'ms' +
+      '<br>FPS ' + Number(s.fps).toFixed(1) +
+      (overlap ? '<br><span class="bad">⚠ 3D 面板擋到俯視區</span>' : '');
+  }
+
+  // ---------- HUD ----------
+  var LEGEND = [['car', '汽車', 'var(--cyan)'], ['truck', '卡車', 'var(--violet)'],
+    ['moto', '機車', 'var(--amber)'], ['ped', '行人', 'var(--green)']];
+  var rowsEl = document.getElementById('rows'), countEls = {};
+  LEGEND.forEach(function (l) {
+    var r = document.createElement('div');
+    r.className = 'row';
+    r.innerHTML = '<span class="dot" style="background:' + l[2] + '"></span><span class="nm">' + l[1] +
+      '</span><span class="ct" style="color:' + l[2] + '">0</span>';
+    rowsEl.appendChild(r);
+    countEls[l[0]] = r.querySelector('.ct');
+  });
+  var alertEl = document.getElementById('alert'), waitEl = document.getElementById('wait');
+
+  // ---------- views ----------
+  var VIEWS = {
+    top: { pos: [0, 22, 0.01], tgt: [0, 0, 0], rot: false },
+    chase: { pos: [0, 7.5, 10.5], tgt: [0, 0, -1.5], rot: false },
+    orbit: { pos: [9, 7, 9], tgt: [0, 0, 0], rot: true }
+  };
+  function setView(name) {
+    var v = VIEWS[name];
+    if (!v) return;
+    camera.position.set(v.pos[0], v.pos[1], v.pos[2]);
+    controls.target.set(v.tgt[0], v.tgt[1], v.tgt[2]);
+    controls.autoRotate = v.rot;
+    controls.autoRotateSpeed = 0.8;
+    controls.update();
+    var bs = document.querySelectorAll('#dock button[data-view]');
+    for (var i = 0; i < bs.length; i++) bs[i].setAttribute('aria-pressed', String(bs[i].getAttribute('data-view') === name));
+  }
+  document.getElementById('dock').addEventListener('click', function (e) {
+    var b = e.target.closest('button[data-view]');
+    if (b) setView(b.getAttribute('data-view'));
+  });
+  setView('chase');
+
+  var gBtn = document.getElementById('gBtn');
+  gBtn.addEventListener('click', function () {
+    realOn = gBtn.getAttribute('aria-pressed') !== 'true';
+    gBtn.setAttribute('aria-pressed', String(realOn));
+    real.visible = realOn && groundLoaded;
+    if (Bridge) Bridge.setRealGround(realOn);
+  });
+
+  // ---------- 校正（直接寫回 Android 設定，偵測服務下一幀就生效） ----------
+  var calBtn = document.getElementById('calBtn'), cal = document.getElementById('cal');
+  var cL = document.getElementById('cL'), cR = document.getElementById('cR'),
+    cT = document.getElementById('cT'), cB = document.getElementById('cB'),
+    cM = document.getElementById('cM'), cF = document.getElementById('cF'), cO = document.getElementById('cO');
+  function readPrefs() {
+    var p = { l: 0.03, t: 0, r: 0.48, b: 0.86, meters: 8, flip: false, realGround: true, roiOnly: true };
+    if (Bridge) { try { p = JSON.parse(Bridge.getPrefs()); } catch (e) {} }
+    return p;
+  }
+  function syncOut() {
+    document.getElementById('oL').textContent = cL.value + '%';
+    document.getElementById('oR').textContent = cR.value + '%';
+    document.getElementById('oT').textContent = cT.value + '%';
+    document.getElementById('oB').textContent = cB.value + '%';
+    document.getElementById('oM').textContent = cM.value + ' m';
+  }
+  function loadCal() {
+    var p = readPrefs();
+    cL.value = (p.l * 100).toFixed(1); cR.value = (p.r * 100).toFixed(1);
+    cT.value = (p.t * 100).toFixed(1); cB.value = (p.b * 100).toFixed(1);
+    cM.value = p.meters; cF.checked = !!p.flip; cO.checked = p.roiOnly !== false;
+    syncOut();
+  }
+  function pushRoi() {
+    var l = +cL.value, r = +cR.value, t = +cT.value, b = +cB.value;
+    if (r - l < 3) { r = Math.min(100, l + 3); cR.value = r; }
+    if (b - t < 3) { b = Math.min(100, t + 3); cB.value = b; }
+    syncOut();
+    if (Bridge) Bridge.setRoi(l / 100, t / 100, r / 100, b / 100);
+  }
+  [cL, cR, cT, cB].forEach(function (el) { el.addEventListener('input', pushRoi); });
+  cM.addEventListener('input', function () { syncOut(); if (Bridge) Bridge.setMeters(+cM.value); });
+  cF.addEventListener('change', function () { if (Bridge) Bridge.setFlip(cF.checked); });
+  cO.addEventListener('change', function () { if (Bridge) Bridge.setRoiOnly(cO.checked); });
+  calBtn.addEventListener('click', function () {
+    var open = cal.hidden;
+    if (open) loadCal();
+    cal.hidden = !open;
+    calBtn.setAttribute('aria-pressed', String(open));
+  });
+  (function initGround() {
+    realOn = readPrefs().realGround !== false;
+    gBtn.setAttribute('aria-pressed', String(realOn));
+  })();
+
+  // ---------- resize ----------
+  function resize() {
+    var w = app.clientWidth || window.innerWidth, h = app.clientHeight || window.innerHeight;
+    renderer.setSize(w, h);
+    labels.setSize(w, h);
+    camera.aspect = w / h;
+    camera.updateProjectionMatrix();
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  // ---------- loop（限 30fps，把 GPU 留給偵測） ----------
+  var lastT = 0;
+  function update(dt, now) {
+    var k = 1 - Math.pow(0.002, dt);   // 位置平滑
+    var counts = { car: 0, truck: 0, moto: 0, ped: 0 }, anyWarn = false, anyCrit = false;
+    for (var i = tracks.length - 1; i >= 0; i--) {
+      var tr = tracks[i];
+      if (now - tr.seen > 900) { release(tr); tracks.splice(i, 1); continue; }
+      tr.x += (tr.tx - tr.x) * k;
+      tr.z += (tr.tz - tr.z) * k;
+      tr.yaw += (tr.yawT - tr.yaw) * k;
+      tr.mesh.position.set(tr.x, 0, tr.z);
+      tr.mesh.rotation.y = Math.PI + tr.yaw;
+      counts[tr.t]++;
+
+      // 跟自車車身的淨距離（車身外框 → 物件邊緣）
+      var dx = Math.max(Math.abs(tr.x) - EGO_W / 2, 0), dz = Math.max(Math.abs(tr.z) - EGO_L / 2, 0);
+      var clr = Math.max(0, Math.hypot(dx, dz) - RADIUS[tr.t]);
+      var warn = clr < WARN, crit = clr < CRIT;
+      if (warn) anyWarn = true;
+      if (crit) anyCrit = true;
+      var p = tr.mesh.userData.paint;
+      if (warn) {
+        p.emissive.setHex(COL.red);
+        p.emissiveIntensity = (crit ? 0.9 : 0.45) * (0.6 + 0.4 * Math.sin(now / 110));
+      } else {
+        p.emissive.setHex(p.userData.baseEm);
+        p.emissiveIntensity = p.userData.baseEmI;
+      }
+      var txt = NAMES[tr.t] + ' <b>' + clr.toFixed(1) + 'm</b>', cls = 'tag ' + tr.t + (warn ? ' danger' : '');
+      var el = tr.mesh.userData.el;
+      if (tr.txt !== txt) { el.innerHTML = txt; tr.txt = txt; }
+      if (el.className !== cls) el.className = cls;
+    }
+    for (var t in counts) countEls[t].textContent = counts[t];
+    alertEl.hidden = !anyWarn;
+    alertEl.textContent = anyCrit ? '⚠ 距離過近' : '⚠ 碰撞預警';
+    warnBand.material.color.setHex(anyWarn ? COL.red : COL.cyan);
+    warnBand.material.opacity = anyWarn ? 0.35 + 0.3 * Math.abs(Math.sin(now / 160)) : 0.22;
+    waitEl.hidden = now - lastData < 2000;
+  }
+  function loop(t) {
+    requestAnimationFrame(loop);
+    if (t - lastT < 32) return;
+    var dt = Math.min((t - lastT) / 1000, 0.1);
+    lastT = t;
+    update(dt, performance.now());
+    controls.update();
+    renderer.render(scene, camera);
+    labels.render(scene, camera);
+  }
+  requestAnimationFrame(loop);
+
+  // ---------- 示範資料（瀏覽器預覽用：index.html#demo） ----------
+  if (DEMO) {
+    var demoGround = (function () {
+      var c = document.createElement('canvas'); c.width = 256; c.height = 192;
+      var g = c.getContext('2d');
+      g.fillStyle = '#3a3f46'; g.fillRect(0, 0, 256, 192);
+      for (var i = 0; i < 2500; i++) { var v = 50 + Math.random() * 40; g.fillStyle = 'rgba(' + v + ',' + v + ',' + (v + 6) + ',.25)'; g.fillRect(Math.random() * 256, Math.random() * 192, 2, 2); }
+      g.fillStyle = '#d9d2b0';
+      [40, 216].forEach(function (x) { g.fillRect(x, 0, 3, 192); });
+      for (var y = 10; y < 192; y += 34) { g.fillRect(0, y, 40, 3); g.fillRect(216, y, 40, 3); }
+      g.fillStyle = '#5b6a3a'; g.fillRect(0, 0, 18, 192); g.fillRect(238, 0, 18, 192);
+      return c.toDataURL('image/jpeg', 0.7);
+    })();
+    var n = 0;
+    setInterval(function () {
+      var s = performance.now() / 1000;
+      var objs = [
+        { t: 'car', x: -2.9, z: 0.3, w: 1.8, h: 4.4, c: 0.62 },
+        { t: 'car', x: 2.8, z: Math.sin(s * 0.5) * 6, w: 1.8, h: 4.4, c: 0.55 },
+        { t: 'ped', x: Math.sin(s * 0.35) * 4, z: 4.0, w: 0.5, h: 0.5, c: 0.7 },
+        { t: 'moto', x: 1.6 + Math.sin(s) * 0.3, z: -4.6, w: 0.6, h: 1.6, c: 0.5 }
+      ];
+      window.setFrame({ objs: objs, wm: 8, hm: 6, flip: false, ground: (n++ % 10 === 0) ? demoGround : null,
+        stat: { eng: 'GPU', res: 320, inf: 48, e2e: 66, fps: 9.6 } });
+    }, 150);
+  }
+})();
+</script>
+</body>
+</html>
