@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>車身訊號示範</title>
+<style>
+  /* 與 index.html 同一套車機夜間 HUD；系統字型（車機離線） */
+  :root{
+    --bg:#090d13; --panel:rgba(14,20,28,.8); --line:rgba(120,160,200,.18);
+    --fg:#e8f1f8; --muted:#8ba1b4;
+    --cyan:#38e1ff; --amber:#ffc24b; --green:#5ef08a; --violet:#b58cff; --red:#ff5a4d;
+    color-scheme:dark;
+  }
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);overflow:hidden;
+    font-family:system-ui,-apple-system,"Noto Sans TC","PingFang TC","Microsoft JhengHei",sans-serif;
+    -webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}
+  #app{position:relative;width:100%;height:100%}
+  canvas{display:block}
+  .hud{position:absolute;z-index:5}
+  .panel{top:10px;left:10px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:9px 12px;pointer-events:none;min-width:150px}
+  .panel h1{margin:0 0 6px;font-size:12px;letter-spacing:.14em;font-weight:700}
+  .rows{display:grid;grid-template-columns:auto 1fr;gap:4px 10px;font-size:13px}
+  .rows dt{color:var(--muted)}
+  .rows dd{margin:0;font-weight:700;font-variant-numeric:tabular-nums;text-align:right}
+  .bar{margin-top:8px;height:3px;border-radius:2px;background:var(--line);overflow:hidden}
+  .bar i{display:block;height:100%;width:0;background:var(--cyan)}
+  .dock{left:50%;bottom:10px;transform:translateX(-50%);display:flex;gap:4px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:5px;max-width:calc(100% - 32px);overflow-x:auto}
+  .dock .sep{flex:none;width:1px;margin:6px 3px;background:var(--line)}
+  button{font:inherit;font-size:12px;font-weight:600;color:var(--muted);background:transparent;border:0;border-radius:8px;padding:8px 11px;white-space:nowrap;cursor:pointer}
+  button:focus-visible{outline:2px solid var(--cyan);outline-offset:1px}
+  .dock button[aria-pressed="true"]{background:rgba(56,225,255,.16);color:var(--cyan)}
+  .dock button.ph[aria-pressed="true"]{background:rgba(255,194,75,.14);color:var(--amber)}
+  @media (max-width:560px){ .panel{min-width:0} .rows{font-size:12px} }
+</style>
+</head>
+<body>
+<div id="app">
+  <div class="hud panel" role="status" aria-label="模擬車身訊號">
+    <h1>車身訊號 · 模擬</h1>
+    <dl class="rows">
+      <dt>情境</dt><dd id="vPhase">—</dd>
+      <dt>檔位</dt><dd id="vGear">—</dd>
+      <dt>方向盤</dt><dd id="vSteer">—</dd>
+      <dt>車速</dt><dd id="vSpeed">—</dd>
+      <dt>方向燈</dt><dd id="vTurn">—</dd>
+      <dt>輔助線</dt><dd id="vGuide">—</dd>
+    </dl>
+    <div class="bar" aria-hidden="true"><i id="vBar"></i></div>
+  </div>
+  <div class="hud dock" id="dock">
+    <button data-view="top">俯視</button>
+    <button data-view="chase" aria-pressed="true">3D 跟車</button>
+    <button data-view="orbit">繞行</button>
+    <span class="sep" aria-hidden="true"></span>
+    <button class="ph" data-t="0">前進</button>
+    <button class="ph" data-t="9">倒車</button>
+    <button class="ph" data-t="25">雙黃燈</button>
+    <button class="ph" data-t="31">右轉</button>
+    <button class="ph" data-t="37">中斷</button>
+    <span class="sep" aria-hidden="true"></span>
+    <button id="pause" aria-pressed="false">暫停</button>
+  </div>
+</div>
+
+<script src="lib/three.min.js"></script>
+<script src="lib/OrbitControls.js"></script>
+<script src="vehicle3d.js"></script>
+<script>
+(function () {
+  'use strict';
+  // 座標同 index.html：自車在原點、車頭朝 -Z；車身座標 z（前方）進場景取負號
+  var app = document.getElementById('app');
+  var CAR_L = 4.841, CAR_W = 1.846;
+  var COL = { asphalt: 0x11171f, ego: 0xeaf7ff, glass: 0x0c161d, cyan: 0x38e1ff };
+
+  var renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'low-power' });
+  renderer.setPixelRatio(1);
+  renderer.outputEncoding = THREE.sRGBEncoding;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.05;
+  app.insertBefore(renderer.domElement, app.firstChild);
+
+  var scene = new THREE.Scene();
+  scene.background = new THREE.Color(COL.asphalt);
+  scene.fog = new THREE.Fog(COL.asphalt, 24, 70);
+  var camera = new THREE.PerspectiveCamera(50, 1, 0.1, 200);
+  var controls = new THREE.OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.1;
+  controls.minDistance = 4;
+  controls.maxDistance = 45;
+  controls.maxPolarAngle = Math.PI * 0.49;
+  scene.add(new THREE.HemisphereLight(0x9fc4ff, 0x0a0f16, 0.9));
+  var key = new THREE.DirectionalLight(0xffffff, 1.3);
+  key.position.set(6, 14, 4);
+  scene.add(key);
+
+  var base = new THREE.Mesh(new THREE.PlaneGeometry(140, 140), new THREE.MeshBasicMaterial({ color: COL.asphalt }));
+  base.rotation.x = -Math.PI / 2;
+  scene.add(base);
+  var grid = new THREE.PolarGridHelper(16, 8, 4, 64, 0x2a3c50, 0x1b2a3a);
+  grid.position.y = 0.01;
+  scene.add(grid);
+
+  // ---------- 自車（簡化版，尺寸用 E60 實車） ----------
+  function std(color, metal, rough) {
+    var m = new THREE.MeshStandardMaterial({ color: color, metalness: metal, roughness: rough });
+    m.envMapIntensity = 0.5;
+    return m;
+  }
+  function box(w, h, l, mat, x, y, z) {
+    var m = new THREE.Mesh(new THREE.BoxGeometry(w, h, l), mat);
+    m.position.set(x, y, z);
+    return m;
+  }
+  function makeEgo() {
+    var g = new THREE.Group(), L = CAR_L, W = CAR_W;
+    var paint = std(COL.ego, 0.35, 0.4), glass = std(COL.glass, 0.5, 0.08);
+    paint.emissive = new THREE.Color(COL.cyan); paint.emissiveIntensity = 0.12;
+    g.add(box(W, 0.5, L, paint, 0, 0.55, 0));
+    g.add(box(W - 0.1, 0.42, L * 0.92, paint, 0, 0.9, 0));
+    g.add(box(W - 0.26, 0.52, 2.1, glass, 0, 1.26, -0.15));
+    g.add(box(W - 0.32, 0.14, 2.0, paint, 0, 1.53, -0.15));
+    var head = new THREE.MeshStandardMaterial({ color: 0xfff6d6, emissive: 0xfff2cf, emissiveIntensity: 1.2 });
+    var tail = new THREE.MeshStandardMaterial({ color: 0xff3b30, emissive: 0xff2a20, emissiveIntensity: 0.9 });
+    [-0.6, 0.6].forEach(function (sx) {
+      g.add(box(0.4, 0.16, 0.07, head, sx, 0.62, L / 2 - 0.02));
+      g.add(box(0.42, 0.16, 0.07, tail, sx, 0.66, -L / 2 + 0.02));
+    });
+    var tire = std(0x0a0d11, 0, 0.85), r = 0.33, tg = new THREE.CylinderGeometry(r, r, 0.26, 18);
+    var zf = L / 2 - 0.833, zr = -L / 2 + 1.12;   // 前後軸（前懸 0.83、後懸 1.12）
+    [W / 2 - 0.12, -W / 2 + 0.12].forEach(function (x) {
+      [zf, zr].forEach(function (z) {
+        var t = new THREE.Mesh(tg, tire); t.position.set(x, r, z); t.rotation.z = Math.PI / 2; g.add(t);
+      });
+    });
+    return g;
+  }
+  var ego = makeEgo();
+  ego.rotation.y = Math.PI;   // 模型車頭在 +Z，轉成朝 -Z
+  scene.add(ego);
+
+  // ---------- 障礙物（倒車段：後方斜牆、右前方柱子；跟模擬的雷達距離一致） ----------
+  var wallMat = std(0x6b7785, 0.1, 0.8), poleMat = std(0xff8a3d, 0.2, 0.6);
+  wallMat.transparent = true; wallMat.opacity = 0.45; wallMat.depthWrite = false;   // 跟車視角不要擋住地上的雷達扇區
+  var wall = box(3.2, 0.9, 0.2, wallMat, 0, 0.45, 0);
+  var pole = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 1.0, 14), poleMat);
+  wall.visible = pole.visible = false;
+  scene.add(wall); scene.add(pole);
+
+  AVM_VEH.init(scene, THREE, app, ego);
+
+  // ---------- 模擬劇本（與 SimulatedSource.kt 同一份；這裡直接產生 Android 端送來的 veh，方向燈已是保持後的值） ----------
+  var CYCLE = 40, SENSOR_X = [-0.75, -0.3, 0.3, 0.75], SLOPE = 0.2;
+  var PHASES = [[0, '前進左轉'], [7, '換檔'], [9, '倒車入庫'], [25, '雙黃燈'], [31, '右轉'], [37, '訊號中斷']];
+  function phaseOf(s) { var n = PHASES[0][1]; for (var i = 0; i < PHASES.length; i++) if (s >= PHASES[i][0]) n = PHASES[i][1]; return n; }
+  function wallDist(s) { return 2.2 - 2.05 * (s - 9) / 16; }
+  function simAt(s) {        // s = 劇本秒數；回傳 { veh, wall: b|null }
+    var CLR = 99;
+    if (s < 7) return { veh: { turn: 'L', gear: 'D', steer: -240 * Math.sin(Math.PI * s / 7), speed: 8, pdc: { f: null, r: null } } };
+    if (s < 9) return { veh: { turn: null, gear: 'N', steer: 0, speed: 0, pdc: { f: null, r: null } } };
+    if (s < 25) {
+      var b = wallDist(s), r = SENSOR_X.map(function (x) { var d = b + SLOPE * x; return d >= 2 ? CLR : Math.max(d, 0.05); });
+      return { wall: b, veh: { turn: null, gear: 'R', steer: 480 * Math.sin(2 * Math.PI * (s - 9) / 8), speed: 4,
+        pdc: { f: [CLR, CLR, CLR, 1.05], r: r } } };
+    }
+    if (s < 31) return { veh: { turn: 'H', gear: 'P', steer: 0, speed: 0, pdc: { f: null, r: null } } };
+    if (s < 37) return { veh: { turn: 'R', gear: 'D', steer: 120, speed: s < 34 ? 22 : 10, pdc: { f: null, r: null } } };
+    return { veh: null };     // 訊號中斷：不再送新資料 → vehicle3d.js 過期後全部隱藏
+  }
+  function r2(v) { return Math.round(v * 100) / 100; }
+
+  var hashT = /t=([\d.]+)/.exec(location.hash);
+  var simT = hashT ? (+hashT[1]) % CYCLE : 0, paused = /pause/.test(location.hash), lastTick = performance.now();
+  var veh = null, cur = null, dirty = true;
+  function tick() {           // 模擬 Android 每 100 ms 推一幀 payload
+    var now = performance.now();
+    if (!paused) simT = (simT + (now - lastTick) / 1000) % CYCLE;
+    lastTick = now;
+    cur = simAt(simT);
+    if (cur.veh) {
+      var v = cur.veh;
+      veh = { turn: v.turn, gear: v.gear, steer: Math.round(v.steer * 10) / 10, speed: v.speed,
+        pdc: { f: v.pdc.f && v.pdc.f.map(r2), r: v.pdc.r && v.pdc.r.map(r2) } };   // 每次都是新物件，跟 setFrame 一樣
+    }
+    wall.visible = cur.wall != null;
+    pole.visible = cur.wall != null;
+    if (cur.wall != null) {
+      var th = -Math.atan(SLOPE);
+      wall.rotation.y = th;
+      wall.position.set(0.1 * Math.sin(th), 0.45, CAR_L / 2 + cur.wall + 0.1 * Math.cos(th));
+      pole.position.set(0.75, 0.5, -(CAR_L / 2 + 1.05 + 0.08));
+    }
+    dirty = true;
+  }
+  setInterval(tick, 100);
+
+  // ---------- 面板 ----------
+  var el = function (id) { return document.getElementById(id); };
+  var vPhase = el('vPhase'), vGear = el('vGear'), vSteer = el('vSteer'), vSpeed = el('vSpeed'), vTurn = el('vTurn'), vGuide = el('vGuide'), vBar = el('vBar');
+  var GEAR = { P: 'P 停車', R: 'R 倒車', N: 'N 空檔', D: 'D 前進' }, TURN = { L: '左', R: '右', H: '雙黃燈' };
+  function showPanel() {
+    var st = AVM_VEH.state(), v = st.live ? veh : null;
+    vPhase.textContent = phaseOf(simT);
+    vGear.textContent = v && v.gear ? GEAR[v.gear] : '—';
+    vSteer.textContent = v && v.steer != null ? (v.steer > 0 ? '右 ' : v.steer < 0 ? '左 ' : '') + Math.abs(v.steer).toFixed(0) + '°' : '—';
+    vSpeed.textContent = v && v.speed != null ? v.speed + ' km/h' : '—';
+    vTurn.textContent = v && v.turn ? TURN[v.turn] : '—';
+    vGuide.textContent = st.guide === 'rev' ? '倒車' : st.guide === 'fwd' ? '前進' : '—';
+    vBar.style.width = (simT / CYCLE * 100).toFixed(1) + '%';
+    var bs = document.querySelectorAll('#dock button.ph'), ph = phaseOf(simT);
+    for (var i = 0; i < bs.length; i++) {
+      var t0 = +bs[i].getAttribute('data-t');
+      bs[i].setAttribute('aria-pressed', String(phaseOf(t0) === ph));
+    }
+  }
+
+  // ---------- 視角 / 控制 ----------
+  var VIEWS = {
+    top: { pos: [0, 17, 0.01], tgt: [0, 0, 0], rot: false },
+    chase: { pos: [0, 7.5, 10.5], tgt: [0, 0, -1.5], rot: false },
+    orbit: { pos: [9, 7, 9], tgt: [0, 0, 0], rot: true },
+    rear: { pos: [0, 7.5, 3.0], tgt: [0, 0, 2.9], rot: false },     // 只能從網址進：#view=rear / #view=front（近看雷達）
+    front: { pos: [0, 7.5, -3.0], tgt: [0, 0, -2.9], rot: false }
+  };
+  function setView(name) {
+    var v = VIEWS[name];
+    if (!v) return;
+    camera.position.set(v.pos[0], v.pos[1], v.pos[2]);
+    controls.target.set(v.tgt[0], v.tgt[1], v.tgt[2]);
+    controls.autoRotate = v.rot;
+    controls.autoRotateSpeed = 0.8;
+    controls.update();
+    var bs = document.querySelectorAll('#dock button[data-view]');
+    for (var i = 0; i < bs.length; i++) bs[i].setAttribute('aria-pressed', String(bs[i].getAttribute('data-view') === name));
+  }
+  el('dock').addEventListener('click', function (e) {
+    var b = e.target.closest('button');
+    if (!b) return;
+    if (b.hasAttribute('data-view')) setView(b.getAttribute('data-view'));
+    else if (b.hasAttribute('data-t')) { simT = +b.getAttribute('data-t') + 0.01; tick(); }
+    else if (b.id === 'pause') { paused = !paused; b.setAttribute('aria-pressed', String(paused)); b.textContent = paused ? '繼續' : '暫停'; }
+  });
+  var hashV = /view=(\w+)/.exec(location.hash);
+  setView(hashV ? hashV[1] : 'chase');
+  if (paused) { el('pause').setAttribute('aria-pressed', 'true'); el('pause').textContent = '繼續'; }
+
+  function resize() {
+    var w = app.clientWidth || window.innerWidth, h = app.clientHeight || window.innerHeight;
+    renderer.setSize(w, h);
+    camera.aspect = w / h;
+    camera.updateProjectionMatrix();
+  }
+  window.addEventListener('resize', resize);
+  resize();
+  tick();
+
+  // ---------- loop（限 30 fps） ----------
+  var lastT = 0;
+  function loop(t) {
+    requestAnimationFrame(loop);
+    if (t - lastT < 32) return;
+    lastT = t;
+    AVM_VEH.update(veh, performance.now());
+    if (dirty) { showPanel(); dirty = false; }   // 面板跟著 vehicle3d.js 的顯示狀態（過期就清空）
+    controls.update();
+    renderer.render(scene, camera);
+  }
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
