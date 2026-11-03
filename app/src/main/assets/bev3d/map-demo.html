@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<link rel="icon" href="data:,">
+<title>地圖輔助示範</title>
+<style>
+  /* 與 index.html 同一套夜間 HUD 色彩 */
+  :root{
+    --bg:#090d13; --panel:rgba(14,20,28,.8); --line:rgba(120,160,200,.18);
+    --fg:#e8f1f8; --muted:#8ba1b4;
+    --cyan:#38e1ff; --amber:#ffc24b; --green:#5ef08a; --violet:#b58cff; --red:#ff5a4d;
+    color-scheme:dark;
+  }
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);overflow:hidden;
+    font-family:system-ui,-apple-system,"Noto Sans TC","PingFang TC","Microsoft JhengHei",sans-serif;
+    -webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}
+  #app{position:relative;width:100%;height:100%}
+  canvas{display:block}
+  .hud{position:absolute;z-index:5}
+  .ctl{top:10px;left:10px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:9px 11px;max-width:calc(100% - 42px)}
+  .ctl h1{margin:0 0 6px;font-size:12px;letter-spacing:.14em;font-weight:700}
+  .ctl .row{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px}
+  .ctl .info{margin-top:7px;font-size:11px;color:var(--muted);line-height:1.55;font-variant-numeric:tabular-nums}
+  button{font:inherit;font-size:12px;font-weight:600;color:var(--muted);background:rgba(255,255,255,.04);border:1px solid var(--line);border-radius:8px;padding:6px 9px;white-space:nowrap}
+  button[aria-pressed="true"]{background:rgba(56,225,255,.16);color:var(--cyan);border-color:rgba(56,225,255,.4)}
+  button:focus-visible{outline:2px solid var(--cyan);outline-offset:1px}
+  .maphud{left:10px;bottom:10px}
+  .err{top:50%;left:50%;transform:translate(-50%,-50%);background:var(--panel);border:1px solid rgba(255,90,77,.6);color:#ff8278;padding:10px 14px;border-radius:10px;font-size:13px}
+  [hidden]{display:none!important}
+</style>
+</head>
+<body>
+<div id="app">
+  <div class="hud ctl">
+    <h1>地圖輔助示範</h1>
+    <div class="row" id="scn"></div>
+    <div class="row">
+      <button id="play" aria-pressed="true">播放</button>
+      <button id="spd">1×</button>
+      <button id="cut" aria-pressed="false">GPS 斷訊</button>
+      <button id="near" aria-pressed="true">近場道路</button>
+      <button id="view">俯視</button>
+    </div>
+    <div class="info" id="info">載入中…</div>
+  </div>
+  <div class="hud maphud" id="mapHud"></div>
+  <div class="hud err" id="err" hidden></div>
+</div>
+
+<script src="lib/three.min.js"></script>
+<script src="lib/OrbitControls.js"></script>
+<script src="map3d.js"></script>
+<script>
+(function () {
+  'use strict';
+  // 重播 MapAssist 的實際輸出（map-demo.json），驗證 map3d.js 的推算、平滑、淡出。網址加 #yangde 可直接選場景。
+  var app = document.getElementById('app');
+  var renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'low-power' });
+  renderer.setPixelRatio(1);
+  renderer.outputEncoding = THREE.sRGBEncoding;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.05;
+  app.insertBefore(renderer.domElement, app.firstChild);
+
+  var ASPHALT = 0x11171f;
+  var scene = new THREE.Scene();
+  scene.background = new THREE.Color(ASPHALT);
+  scene.fog = new THREE.Fog(ASPHALT, 24, 70);
+  var camera = new THREE.PerspectiveCamera(50, 1, 0.1, 300);
+  var controls = new THREE.OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true;
+  controls.maxPolarAngle = Math.PI * 0.49;
+  scene.add(new THREE.HemisphereLight(0x9fc4ff, 0x0a0f16, 0.6));
+  var key = new THREE.DirectionalLight(0xffffff, 1.3);
+  key.position.set(6, 14, 4);
+  scene.add(key);
+  var grid = new THREE.PolarGridHelper(16, 8, 4, 64, 0x2a3c50, 0x1b2a3a);
+  grid.position.y = 0.01;
+  scene.add(grid);
+
+  // 近場虛擬道路（模擬 index.html 的鏡頭車道：±40 m 直帶，路面 y = 0.006）
+  function srgb(h) { return new THREE.Color(h).convertSRGBToLinear(); }
+  var nearRoad = new THREE.Mesh(new THREE.PlaneGeometry(10.5, 80),
+    new THREE.MeshBasicMaterial({ color: srgb(0x262d36), toneMapped: false, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 }));
+  nearRoad.rotation.x = -Math.PI / 2;
+  nearRoad.position.y = 0.006;
+  scene.add(nearRoad);
+
+  // 自車（簡化）
+  var ego = new THREE.Group();
+  var paint = new THREE.MeshStandardMaterial({ color: 0xeaf7ff, metalness: 0.35, roughness: 0.4, emissive: 0x38e1ff, emissiveIntensity: 0.15 });
+  var glass = new THREE.MeshStandardMaterial({ color: 0x0c161d, metalness: 0.5, roughness: 0.1 });
+  var b1 = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.55, 4.6), paint); b1.position.y = 0.6; ego.add(b1);
+  var b2 = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.5, 2.1), glass); b2.position.set(0, 1.12, 0.15); ego.add(b2);
+  scene.add(ego);
+
+  var VIEWS = { chase: { pos: [0, 7.5, 10.5], tgt: [0, 0, -1.5] }, top: { pos: [0, 60, 0.01], tgt: [0, 0, -20] } };
+  var view = 'chase';
+  function setView(v) {
+    view = v;
+    var d = VIEWS[v];
+    camera.position.set(d.pos[0], d.pos[1], d.pos[2]);
+    controls.target.set(d.tgt[0], d.tgt[1], d.tgt[2]);
+    controls.update();
+    document.getElementById('view').textContent = v === 'chase' ? '俯視' : '跟車';
+  }
+  setView('chase');
+
+  AVM_MAP.init(scene, THREE, document.getElementById('mapHud'));
+
+  // ---------- 重播 ----------
+  var data = null, scnKey = '', frames = [], idx = 0, simT = 0, playing = true, rate = 1, cut = false;
+  var info = document.getElementById('info'), lastSent = null;
+  function pick(k) {
+    if (!data || !data[k]) return;
+    scnKey = k; frames = data[k].frames; idx = 0; simT = frames.length ? frames[0].t : 0; lastSent = null;
+    var bs = document.querySelectorAll('#scn button');
+    for (var i = 0; i < bs.length; i++) bs[i].setAttribute('aria-pressed', String(bs[i].getAttribute('data-k') === k));
+  }
+  function load() {
+    var x = new XMLHttpRequest();
+    x.open('GET', 'map-demo.json');
+    x.onload = function () {
+      try { data = JSON.parse(x.responseText); } catch (e) { fail('示範資料格式錯誤'); return; }
+      var scn = document.getElementById('scn');
+      ['taipei', 'yangde'].forEach(function (k) {
+        if (!data[k]) return;
+        var b = document.createElement('button');
+        b.textContent = data[k].title;
+        b.setAttribute('data-k', k);
+        b.addEventListener('click', function () { pick(k); });
+        scn.appendChild(b);
+      });
+      pick(location.hash.indexOf('yangde') >= 0 ? 'yangde' : 'taipei');
+    };
+    x.onerror = function () { fail('讀不到 map-demo.json（要用 http 伺服器開）'); };
+    x.send();
+  }
+  function fail(t) { var e = document.getElementById('err'); e.textContent = t; e.hidden = false; }
+  load();
+
+  document.getElementById('play').addEventListener('click', function () {
+    playing = !playing;
+    this.setAttribute('aria-pressed', String(playing));
+    this.textContent = playing ? '播放' : '暫停';
+  });
+  document.getElementById('spd').addEventListener('click', function () {
+    rate = rate === 1 ? 2 : rate === 2 ? 4 : 1;
+    this.textContent = rate + '×';
+  });
+  document.getElementById('cut').addEventListener('click', function () {
+    cut = !cut;
+    this.setAttribute('aria-pressed', String(cut));
+  });
+  document.getElementById('near').addEventListener('click', function () {
+    nearRoad.visible = !nearRoad.visible;
+    this.setAttribute('aria-pressed', String(nearRoad.visible));
+  });
+  document.getElementById('view').addEventListener('click', function () { setView(view === 'chase' ? 'top' : 'chase'); });
+
+  function resize() {
+    var w = app.clientWidth || window.innerWidth, h = app.clientHeight || window.innerHeight;
+    renderer.setSize(w, h);
+    camera.aspect = w / h;
+    camera.updateProjectionMatrix();
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  // 模擬時鐘：map3d 只看時間差，倍速播放時一起加速
+  var lastReal = performance.now(), simNow = 0, lastFrame = 0;
+  function tick(dt, draw) {
+    if (playing) { simNow += dt * 1000 * rate; simT += dt * 1000 * rate; }
+    var sent = null;
+    if (frames.length) {
+      while (idx < frames.length && frames[idx].t <= simT) { sent = frames[idx]; idx++; }
+      if (idx >= frames.length && simT > frames[frames.length - 1].t + 3000) { idx = 0; simT = frames[0].t; }
+    }
+    if (sent && !cut) { AVM_MAP.update(sent, simNow); lastSent = sent; }
+    else AVM_MAP.update(null, simNow);
+    if (!draw) return;
+    if (lastSent) {
+      info.textContent = 't = ' + Math.round(lastSent.t / 1000) + ' s · ' + (lastSent.name || '—') + ' · ' +
+        Math.round(lastSent.spd) + ' km/h · ' + (lastSent.matched ? '已配對' : '未配對') + (cut ? ' · 斷訊中' : '');
+    }
+    controls.update();
+    renderer.render(scene, camera);
+  }
+  function loop(t) {
+    requestAnimationFrame(loop);
+    if (t - lastFrame < 32) return;   // 30 fps，同 index.html
+    lastFrame = t;
+    var dt = Math.min(0.1, (t - lastReal) / 1000);
+    lastReal = t;
+    tick(dt, true);
+  }
+  requestAnimationFrame(loop);
+
+  // 測試用：分頁在背景時 rAF 會停，直接快轉（每 1/30 s 一步）
+  window.mapDemo = {
+    step: function (sec) {
+      var n = Math.max(1, Math.round(sec * 30)), r = rate;
+      rate = 1;
+      for (var i = 0; i < n; i++) tick(1 / 30, i === n - 1);
+      rate = r;
+      return lastSent ? lastSent.t : null;
+    },
+    pick: function (k) { pick(k); return frames.length; },
+    view: function (v) { setView(v); renderer.render(scene, camera); },
+    cut: function (on) { cut = !!on; }
+  };
+})();
+</script>
+</body>
+</html>
