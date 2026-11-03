@@ -5,6 +5,7 @@ import org.json.JSONObject
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.math.PI
 import kotlin.math.abs
+import kotlin.math.atan
 import kotlin.math.ceil
 import kotlin.math.cos
 import kotlin.math.max
@@ -24,7 +25,9 @@ import kotlin.math.tan
 
 /**
  * 某一刻的車身訊號；null = 沒有資料（來源沒給或已過期）。
- * pdcFront / pdcRear：4 顆感測器由左到右，公尺；Float.POSITIVE_INFINITY = 無障礙；整個 null = 雷達未啟動。
+ * pdcFront / pdcRear：4 顆感測器由左到右，公尺；Float.POSITIVE_INFINITY = 無障礙；
+ * NaN = 該顆感測器故障；整個 null = 雷達未啟動。
+ * turnLit：方向燈這一刻是亮（true）還是暗（false）；只有來源會回報燈的暗期時才知道，否則 null。
  */
 data class VehicleState(
     val turn: Char? = null,          // 'L' 'R' 'H'（雙黃燈）
@@ -33,18 +36,23 @@ data class VehicleState(
     val speedKmh: Float? = null,
     val pdcFront: FloatArray? = null,
     val pdcRear: FloatArray? = null,
-    val atMs: Long = 0L              // 這份狀態的時間（snapshot 的當下）
+    val atMs: Long = 0L,             // 這份狀態的時間（snapshot 的當下）
+    val turnLit: Boolean? = null
 ) {
     /** 全部欄位都沒資料 */
     val isEmpty: Boolean
         get() = turn == null && gear == null && steerDeg == null && speedKmh == null &&
             pdcFront == null && pdcRear == null
 
-    /** 前（front = true）或後雷達的最近距離；雷達未啟動或全部無障礙 = null */
+    /** 前（front = true）或後雷達的最近距離（負值當 0）；雷達未啟動、全部無障礙或故障 = null */
     fun pdcMin(front: Boolean): Float? {
         val a = (if (front) pdcFront else pdcRear) ?: return null
         var m = Float.POSITIVE_INFINITY
-        for (d in a) if (d < m) m = d
+        for (d in a) {
+            if (d.isNaN() || d == Float.NEGATIVE_INFINITY) continue   // 故障
+            val v = if (d < 0f) 0f else d
+            if (v < m) m = v
+        }
         return if (m.isFinite()) m else null
     }
 
@@ -52,7 +60,7 @@ data class VehicleState(
         if (this === other) return true
         if (other !is VehicleState) return false
         return turn == other.turn && gear == other.gear && steerDeg == other.steerDeg &&
-            speedKmh == other.speedKmh && atMs == other.atMs &&
+            speedKmh == other.speedKmh && atMs == other.atMs && turnLit == other.turnLit &&
             pdcFront.contentEquals(other.pdcFront) && pdcRear.contentEquals(other.pdcRear)
     }
 
@@ -64,11 +72,12 @@ data class VehicleState(
         h = 31 * h + pdcFront.contentHashCode()
         h = 31 * h + pdcRear.contentHashCode()
         h = 31 * h + atMs.hashCode()
+        h = 31 * h + turnLit.hashCode()
         return h
     }
 
     override fun toString(): String =
-        "VehicleState(turn=$turn, gear=$gear, steerDeg=$steerDeg, speedKmh=$speedKmh, " +
+        "VehicleState(turn=$turn, turnLit=$turnLit, gear=$gear, steerDeg=$steerDeg, speedKmh=$speedKmh, " +
             "pdcFront=${pdcFront?.contentToString()}, pdcRear=${pdcRear?.contentToString()}, atMs=$atMs)"
 }
 
@@ -82,8 +91,31 @@ data class SignalTimeouts(
 )
 
 /**
+ * 方向盤角度校正：CAN 原始值 → 本模組的約定（+ = 向右、置中 = 0）。
+ * 多數 CAN 的方向盤角度採 ISO 8855（+ = 逆時針 = 向左）→ sign = -1；
+ * offsetDeg = 方向盤擺正時讀到的原始值。探測完成前兩者都不確定，預設不轉換。
+ */
+data class SteerCalibration(val sign: Int = 1, val offsetDeg: Float = 0f) {
+    init {
+        require(sign == 1 || sign == -1) { "sign 只能是 +1 或 -1：$sign" }
+    }
+
+    fun apply(raw: Float): Float = sign * (raw - offsetDeg)
+
+    companion object {
+        /** ISO 8855：+ = 向左 */
+        val ISO8855 = SteerCalibration(sign = -1)
+    }
+}
+
+/**
  * 未來的實際資料來源（CAN 盒廣播、序列埠、廠商 App…）實作這個介面，
  * start() 之後在任何執行緒呼叫 sink.reportXxx() 回報解碼結果。
+ *
+ * 時間：回報時省略 atMs（由 sink 自己蓋時間），或傳 sink.now()。
+ * 不可傳其他時間基準的值（CAN 時間戳、System.currentTimeMillis() 等）：
+ * 車機多半沒有 RTC，開機後才用 GPS/NTP 對時，牆鐘會跳。
+ * 方向盤原始值用 sink.reportSteerRaw()，由 sink.steerCal 換成 + = 向右。
  */
 interface VehicleSignalAdapter {
     val name: String
@@ -94,10 +126,13 @@ interface VehicleSignalAdapter {
 /**
  * 執行緒安全的車身訊號狀態。來源回報各欄位，使用端用 snapshot() 取「現在」的狀態
  * （過期欄位為 null）。過期不會主動通知，畫面端每幀 snapshot() 即可。
+ *
+ * clock 必須單調遞增（預設 System.nanoTime；Android 端也可注入 SystemClock::elapsedRealtime）。
+ * 防呆：時間往回跳超過 [CLOCK_SLACK_MS] 時，舊值一律視為過期，新回報照收，不會凍住。
  */
 class VehicleSignals(
     val timeouts: SignalTimeouts = SignalTimeouts(),
-    private val clock: () -> Long = { System.currentTimeMillis() }
+    private val clock: () -> Long = MONOTONIC_MS
 ) {
     fun interface Listener {
         fun onVehicleState(state: VehicleState)
@@ -107,9 +142,9 @@ class VehicleSignals(
         var value: T? = null
         var at: Long = NEVER
 
-        /** 比目前紀錄還舊的回報（亂序）不採用 */
+        /** 比目前紀錄稍舊的回報（亂序）不採用；舊超過 CLOCK_SLACK_MS 視為時間基準往回跳，照收 */
         fun set(v: T?, atMs: Long): Boolean {
-            if (at != NEVER && atMs < at) return false
+            if (at != NEVER && atMs < at && atMs >= at - CLOCK_SLACK_MS) return false
             value = v
             at = atMs
             return true
@@ -117,7 +152,8 @@ class VehicleSignals(
 
         fun get(now: Long, timeoutMs: Long): T? {
             val v = value ?: return null
-            return if (now - at <= timeoutMs) v else null
+            val age = now - at
+            return if (age <= timeoutMs && age >= -CLOCK_SLACK_MS) v else null
         }
 
         fun clear() { value = null; at = NEVER }
@@ -125,6 +161,8 @@ class VehicleSignals(
 
     private val lock = Any()
     private val turn = Field<Char>()
+    private val lit = Field<Boolean>()      // 燈這一刻亮 / 暗
+    private val dark = Field<Boolean>()     // 最後一次回報「燈暗」的時間（有就代表來源會回報暗期）
     private val gear = Field<Char>()
     private val steer = Field<Float>()
     private val speed = Field<Float>()
@@ -132,6 +170,13 @@ class VehicleSignals(
     private val pdcRear = Field<FloatArray>()
     private val listeners = CopyOnWriteArrayList<Listener>()
     private var adapter: VehicleSignalAdapter? = null
+
+    /** reportSteerRaw() 用的方向盤校正 */
+    @Volatile
+    var steerCal: SteerCalibration = SteerCalibration()
+
+    /** sink 的時間（毫秒，單調遞增）；adapter 自己蓋時間時用這個 */
+    fun now(): Long = clock()
 
     /** 目前接上的來源名稱（沒有 = null） */
     val sourceName: String? get() = synchronized(lock) { adapter?.name }
@@ -157,8 +202,7 @@ class VehicleSignals(
      */
     fun reportTurn(turn: Char?, atMs: Long = clock()) {
         require(turn == null || turn == 'L' || turn == 'R' || turn == 'H') { "turn 只能是 L/R/H/null：$turn" }
-        if (turn == null) return
-        change(atMs) { this.turn.set(turn, atMs) }
+        change(atMs) { lamp(turn, atMs) }
     }
 
     /** 左右燈分開讀到時用：兩邊同時亮 = 雙黃燈。 */
@@ -174,14 +218,18 @@ class VehicleSignals(
         change(atMs) { this.gear.set(gear, atMs) }
     }
 
-    /** 方向盤角度（度，+ = 向右）；null 或 NaN = 不明 */
+    /** 方向盤角度（度，+ = 向右、置中 = 0）；null 或 NaN = 不明 */
     fun reportSteer(deg: Float?, atMs: Long = clock()) =
         change(atMs) { steer.set(deg?.takeIf { !it.isNaN() }, atMs) }
+
+    /** CAN 原始方向盤值：先經 steerCal 轉成 + = 向右 */
+    fun reportSteerRaw(raw: Float?, atMs: Long = clock()) =
+        reportSteer(raw?.takeIf { !it.isNaN() }?.let { steerCal.apply(it) }, atMs)
 
     fun reportSpeed(kmh: Float?, atMs: Long = clock()) =
         change(atMs) { speed.set(kmh?.takeIf { !it.isNaN() }, atMs) }
 
-    /** 前雷達 4 顆（左→右，公尺，POSITIVE_INFINITY = 無障礙）；null = 雷達未啟動 */
+    /** 前雷達 4 顆（左→右，公尺，POSITIVE_INFINITY = 無障礙，NaN = 故障）；null = 雷達未啟動 */
     fun reportPdcFront(d: FloatArray?, atMs: Long = clock()) =
         change(atMs) { pdcFront.set(d?.copyOf(), atMs) }
 
@@ -189,49 +237,65 @@ class VehicleSignals(
         change(atMs) { pdcRear.set(d?.copyOf(), atMs) }
 
     fun reportPdc(front: FloatArray?, rear: FloatArray?, atMs: Long = clock()) = change(atMs) {
-        pdcFront.set(front?.copyOf(), atMs)
-        pdcRear.set(rear?.copyOf(), atMs)
+        pdcFront.set(front?.copyOf(), atMs) or pdcRear.set(rear?.copyOf(), atMs)
     }
 
     /**
-     * 來源一次給完整狀態（模擬、或一包就有全部欄位的協定）。時間用 s.atMs。
-     * turn = null 當作燈暗（照樣保持）；其他欄位 null = 不明 / 雷達未啟動。
+     * 來源一次給完整狀態（模擬、或一包就有全部欄位的協定）。時間用 s.atMs（要用 sink.now() 的時間基準）。
+     * turn = null 當作燈暗（照樣保持）；其他欄位 null = 不明 / 雷達未啟動。s.turnLit 不採用（由 turn 推得）。
      */
     fun reportAll(s: VehicleState) {
         val t = s.atMs
         require(s.turn == null || s.turn == 'L' || s.turn == 'R' || s.turn == 'H') { "turn 只能是 L/R/H/null：${s.turn}" }
         require(s.gear == null || s.gear in "PRND") { "gear 只能是 P/R/N/D/null：${s.gear}" }
         change(t) {
-            if (s.turn != null) turn.set(s.turn, t)
-            gear.set(s.gear, t)
-            steer.set(s.steerDeg?.takeIf { !it.isNaN() }, t)
-            speed.set(s.speedKmh?.takeIf { !it.isNaN() }, t)
-            pdcFront.set(s.pdcFront?.copyOf(), t)
-            pdcRear.set(s.pdcRear?.copyOf(), t)
+            var ch = lamp(s.turn, t)
+            ch = gear.set(s.gear, t) or ch
+            ch = steer.set(s.steerDeg?.takeIf { !it.isNaN() }, t) or ch
+            ch = speed.set(s.speedKmh?.takeIf { !it.isNaN() }, t) or ch
+            ch = pdcFront.set(s.pdcFront?.copyOf(), t) or ch
+            pdcRear.set(s.pdcRear?.copyOf(), t) or ch
         }
     }
 
-    /** 取 nowMs 當下的狀態，過期欄位為 null。陣列是複本，可以隨意改。 */
+    /**
+     * 取 nowMs 當下的狀態，過期欄位為 null。陣列是複本，可以隨意改。
+     * nowMs 要跟 clock 同一個時間基準（通常直接用預設值）。
+     */
     fun snapshot(nowMs: Long = clock()): VehicleState = synchronized(lock) { snap(nowMs) }
 
     fun reset() = synchronized(lock) {
-        turn.clear(); gear.clear(); steer.clear(); speed.clear(); pdcFront.clear(); pdcRear.clear()
+        turn.clear(); lit.clear(); dark.clear(); gear.clear(); steer.clear(); speed.clear()
+        pdcFront.clear(); pdcRear.clear()
     }
 
-    private fun snap(now: Long) = VehicleState(
-        turn = turn.get(now, timeouts.turnMs),
-        gear = gear.get(now, timeouts.gearMs),
-        steerDeg = steer.get(now, timeouts.steerMs),
-        speedKmh = speed.get(now, timeouts.speedMs),
-        pdcFront = pdcFront.get(now, timeouts.pdcMs)?.copyOf(),
-        pdcRear = pdcRear.get(now, timeouts.pdcMs)?.copyOf(),
-        atMs = now
-    )
+    /** 燈的亮暗（呼叫端已持有 lock） */
+    private fun lamp(t: Char?, atMs: Long): Boolean {
+        val ch = lit.set(t != null, atMs)
+        return if (t != null) turn.set(t, atMs) or ch else dark.set(true, atMs) or ch
+    }
 
-    private inline fun change(atMs: Long, block: () -> Unit) {
+    private fun snap(now: Long): VehicleState {
+        val t = turn.get(now, timeouts.turnMs)
+        // 來源最近有回報過暗期，亮/暗才可信；否則交給畫面端自己閃
+        val litNow = if (t != null && dark.get(now, timeouts.turnMs) != null) lit.get(now, timeouts.turnMs) else null
+        return VehicleState(
+            turn = t,
+            gear = gear.get(now, timeouts.gearMs),
+            steerDeg = steer.get(now, timeouts.steerMs),
+            speedKmh = speed.get(now, timeouts.speedMs),
+            pdcFront = pdcFront.get(now, timeouts.pdcMs)?.copyOf(),
+            pdcRear = pdcRear.get(now, timeouts.pdcMs)?.copyOf(),
+            atMs = now,
+            turnLit = litNow
+        )
+    }
+
+    /** block 回傳是否有欄位被採用；有才通知 listener（亂序被拒的回報不通知） */
+    private inline fun change(atMs: Long, block: () -> Boolean) {
         val s = synchronized(lock) {
-            block()
-            if (listeners.isEmpty()) null else snap(max(atMs, latestAt()))
+            val changed = block()
+            if (!changed || listeners.isEmpty()) null else snap(atMs)
         } ?: return
         for (l in listeners) {
             try {
@@ -242,18 +306,29 @@ class VehicleSignals(
         }
     }
 
-    private fun latestAt(): Long =
-        maxOf(turn.at, gear.at, steer.at, speed.at, max(pdcFront.at, pdcRear.at))
-
     companion object {
         private const val NEVER = Long.MIN_VALUE / 4
+
+        /**
+         * 時鐘容許的倒退量（毫秒）：回報比現有紀錄早超過這麼多 → 視為時間基準往回跳而照收；
+         * 查詢時間比紀錄早超過這麼多 → 該欄位視為過期。
+         */
+        const val CLOCK_SLACK_MS = 1000L
+
+        /** 預設時鐘：單調遞增的毫秒，不受 GPS/NTP 對時影響 */
+        val MONOTONIC_MS: () -> Long = { System.nanoTime() / 1_000_000 }
 
         /** JSON 裡雷達「無障礙」用 99 表示 */
         const val PDC_CLEAR = 99.0
 
-        /** 3D 面板 payload 的 veh 欄位：{ turn, gear, steer, speed, pdc: { f: [..]|null, r: [..]|null } } */
+        /**
+         * 3D 面板 payload 的 veh 欄位：
+         * { turn, lit, gear, steer, speed, pdc: { f: [..]|null, r: [..]|null } }
+         * 雷達每顆：公尺、99 = 無障礙、null = 故障。lit = 燈此刻亮/暗（不明 = null）。
+         */
         fun toJson(s: VehicleState): JSONObject = JSONObject()
             .put("turn", s.turn?.toString() ?: JSONObject.NULL)
+            .put("lit", s.turnLit ?: JSONObject.NULL)
             .put("gear", s.gear?.toString() ?: JSONObject.NULL)
             .put("steer", s.steerDeg?.let { r(it.toDouble(), 10.0) } ?: JSONObject.NULL)
             .put("speed", s.speedKmh?.let { r(it.toDouble(), 10.0) } ?: JSONObject.NULL)
@@ -262,7 +337,13 @@ class VehicleSignals(
         private fun pdcJson(a: FloatArray?): Any {
             if (a == null) return JSONObject.NULL
             val arr = JSONArray()
-            for (d in a) arr.put(if (!d.isFinite() || d >= PDC_CLEAR) PDC_CLEAR else r(max(d.toDouble(), 0.0), 100.0))
+            for (d in a) arr.put(
+                when {
+                    d.isNaN() || d == Float.NEGATIVE_INFINITY -> JSONObject.NULL   // 故障
+                    d >= PDC_CLEAR -> PDC_CLEAR                                     // 含 +∞
+                    else -> r(max(d.toDouble(), 0.0), 100.0)
+                }
+            )
             return arr
         }
 
@@ -271,13 +352,14 @@ class VehicleSignals(
 }
 
 /**
- * 模擬來源：40 秒循環的劇本（前進左轉 → 換檔 → 倒車入庫：方向盤來回打、後方牆面接近 → 雙黃燈 →
- * 右轉（先高速、再低速）→ 訊號中斷）。方向燈照真實情況一亮一暗，靠 VehicleSignals 撐過暗的那段。
- * vehicle-demo.html 用同一份劇本。
+ * 模擬來源：40 秒循環的劇本（前進左轉 → 換檔 → 倒車入庫：方向盤來回打、後方牆面接近、
+ * 後段前左雷達故障 → 雙黃燈 → 右轉（先高速、再低速）→ 訊號中斷）。
+ * 方向燈照真實情況一亮一暗，靠 VehicleSignals 撐過暗的那段。vehicle-demo.html 用同一份劇本。
+ * clock 只用來算劇本進度；送進 sink 的時間一律是 sink.now()。
  */
 class SimulatedSource(
     private val periodMs: Long = 50L,
-    private val clock: () -> Long = { System.currentTimeMillis() }
+    private val clock: () -> Long = VehicleSignals.MONOTONIC_MS
 ) : VehicleSignalAdapter {
     override val name: String = "模擬"
     private var worker: Thread? = null
@@ -288,8 +370,7 @@ class SimulatedSource(
         worker = Thread({
             try {
                 while (!Thread.currentThread().isInterrupted) {
-                    val now = clock()
-                    stateAt(now - t0)?.let { sink.reportAll(it.copy(atMs = now)) }
+                    stateAt(clock() - t0)?.let { sink.reportAll(it.copy(atMs = sink.now())) }
                     Thread.sleep(periodMs)
                 }
             } catch (_: InterruptedException) {
@@ -306,6 +387,7 @@ class SimulatedSource(
         const val CYCLE_MS = 40_000L
         const val BLINK_MS = 667L                                 // 1.5 Hz
         val SENSOR_X = floatArrayOf(-0.75f, -0.3f, 0.3f, 0.75f)    // 感測器大約的橫向位置（m）
+        const val FAULT_FROM_MS = 17_000L                          // 倒車後段：前左雷達故障（NaN）
 
         /** 不開執行緒，直接把劇本 tMs 時的狀態以 atMs 送進 sink（測試用） */
         fun pump(sink: VehicleSignals, tMs: Long, atMs: Long = tMs) {
@@ -341,8 +423,9 @@ class SimulatedSource(
                         if (d >= 2.0) Float.POSITIVE_INFINITY else max(d, 0.05).toFloat()
                     }
                     val inf = Float.POSITIVE_INFINITY
+                    val fl = if (t >= FAULT_FROM_MS) Float.NaN else inf
                     VehicleState(gear = 'R', steerDeg = (480.0 * sin(2.0 * PI * (s - 9.0) / 8.0)).toFloat(),
-                        speedKmh = 4f, pdcFront = floatArrayOf(inf, inf, inf, 1.05f), pdcRear = rear)
+                        speedKmh = 4f, pdcFront = floatArrayOf(fl, inf, inf, 1.05f), pdcRear = rear)
                 }
                 t < 31_000 -> VehicleState(turn = blink('H', 25_000), gear = 'P', steerDeg = 0f, speedKmh = 0f)
                 t < 37_000 -> VehicleState(turn = blink('R', 31_000), gear = 'D', steerDeg = 120f,
@@ -360,19 +443,36 @@ data class VehicleGeometry(
     val wheelbase: Double = 2.888,
     val rearOverhang: Double = 1.12,
     val track: Double = 1.56,
-    val steerRatio: Double = 15.0,     // 方向盤角 / 前輪角（2.9 圈 lock-to-lock ≈ 15:1）
-    val maxSteerDeg: Double = 522.0    // 單邊打到底的方向盤角（2.9 圈的一半）
+    val steerRatio: Double = 15.0,     // 方向盤角 / 前輪角（2.9 圈 lock-to-lock ≈ 15:1，假設值）
+    val maxSteerDeg: Double = 522.0    // 單邊打到底的方向盤角（2.9 圈的一半，假設值）
 ) {
     val frontOverhang: Double get() = length - wheelbase - rearOverhang
     val rearAxleZ: Double get() = -length / 2 + rearOverhang
     val maxWheelDeg: Double get() = maxSteerDeg / steerRatio
+
+    /**
+     * 用實測值校正：方向盤單邊打到底的角度 lockSteerDeg（度）+ 打到底時的迴轉直徑 turningCircleM（外側前輪，m）
+     * → 反推 steerRatio，maxSteerDeg = lockSteerDeg。
+     */
+    fun calibratedToLock(lockSteerDeg: Double, turningCircleM: Double): VehicleGeometry {
+        val wheel = BicycleModel.wheelAngleForTurningCircle(turningCircleM, this)
+        require(lockSteerDeg > 0) { "lockSteerDeg 要 > 0：$lockSteerDeg" }
+        return copy(steerRatio = lockSteerDeg / wheel, maxSteerDeg = lockSteerDeg)
+    }
+
+    /** AVM_VEH.init() 的 opts（幾何部分），讓 vehicle3d.js 跟這裡用同一組數值 */
+    fun jsOpts(): JSONObject = JSONObject()
+        .put("length", length).put("width", width).put("wheelbase", wheelbase)
+        .put("rearOverhang", rearOverhang).put("track", track)
+        .put("steerRatio", steerRatio).put("maxSteerDeg", maxSteerDeg)
 }
 
-/** 輔助線取樣設定：沿弧線 0..lengthM，每 stepM 一點；markersM = 距離標記。 */
+/** 輔助線取樣設定：沿弧線 0..lengthM，每 stepM 一點；markersM = 距離標記；swingM = 倒車時車頭甩出弧的長度（0 = 不算）。 */
 data class GuideConfig(
     val lengthM: Double = 5.0,
     val stepM: Double = 0.1,
-    val markersM: List<Double> = listOf(0.5, 1.0, 2.0, 3.0)
+    val markersM: List<Double> = listOf(0.5, 1.0, 2.0, 3.0),
+    val swingM: Double = 2.5
 )
 
 data class PointXZ(val x: Double, val z: Double)
@@ -380,18 +480,27 @@ data class PointXZ(val x: Double, val z: Double)
 /** 保險桿中心沿路徑走 distM 時，左右車身邊緣的位置 */
 data class GuideMarker(val distM: Double, val left: PointXZ, val right: PointXZ)
 
-/** dist[i] = 保險桿中心沿弧線走的距離；left/right[i] = 當時左右保險桿角的位置（車身座標）。 */
+/**
+ * dist[i] = 保險桿中心沿弧線走的距離；left/right[i] = 當時左右保險桿角的位置（車身座標）。
+ * inner[i] = 當時內側車身在後軸處（整台車離轉彎中心最近的點，內輪差的邊界）的位置；
+ *   innerSide = +1 右 / -1 左；直行時 inner = null、innerSide = 0。
+ * swing = 倒車時外側前保險桿角的甩出弧（dist ≤ swingM 那幾點）；前進或直行 = null。
+ */
 data class GuideLines(
     val reverse: Boolean,
     val dist: List<Double>,
     val left: List<PointXZ>,
     val right: List<PointXZ>,
-    val markers: List<GuideMarker>
+    val markers: List<GuideMarker>,
+    val innerSide: Int = 0,
+    val inner: List<PointXZ>? = null,
+    val swing: List<PointXZ>? = null
 )
 
 /**
  * 單車模型（後軸中心為參考點，前輪角 = 方向盤角 / 轉向比，夾在打到底的角度內）。
- * 輔助線：前進從前保險桿、倒車從後保險桿的左右兩角出發，以「保險桿中心沿弧線走的距離」取樣。
+ * 輔助線：前進從前保險桿、倒車從後保險桿的左右兩角出發，以「保險桿中心沿弧線走的距離」取樣；
+ * 另外算內側車身（後軸處）的軌跡與倒車時的車頭甩出弧，參數同一個。
  * vehicle3d.js 的 guides() 是同一套算式（含運算順序），兩邊一致性由 VehicleSignalsTest 檢查。
  */
 object BicycleModel {
@@ -422,6 +531,15 @@ object BicycleModel {
         return 2.0 * sqrt(a * a + g.wheelbase * g.wheelbase)
     }
 
+    /** turningCircle 的反函數：迴轉直徑 D → 前輪角（度）。δ = atan(wb / (√((D/2)² − wb²) − track/2)) */
+    fun wheelAngleForTurningCircle(turningCircleM: Double, g: VehicleGeometry = VehicleGeometry()): Double {
+        val h = turningCircleM / 2
+        require(h > g.wheelbase) { "迴轉直徑太小：$turningCircleM" }
+        val r = sqrt(h * h - g.wheelbase * g.wheelbase) - g.track / 2
+        require(r > 0) { "迴轉直徑太小：$turningCircleM" }
+        return atan(g.wheelbase / r) * 180.0 / PI
+    }
+
     fun guideLines(
         steerDeg: Double?,
         reverse: Boolean,
@@ -432,54 +550,63 @@ object BicycleModel {
         val dir = if (reverse) -1.0 else 1.0
         val zra = g.rearAxleZ
         val bz = (if (reverse) -g.length / 2 else g.length / 2) - zra   // 保險桿相對後軸
+        val fz = g.length / 2 - zra                                      // 前保險桿相對後軸
         val hw = g.width / 2
+        val side = if (abs(k) < STRAIGHT_K) 0 else if (k > 0) 1 else -1  // 轉彎中心在哪一側 = 內側
         val len = max(cfg.lengthM, 0.0)
         val n = max(1, ceil(len / cfg.stepM - 1e-9).toInt())
         val dist = ArrayList<Double>(n + 1)
         val left = ArrayList<PointXZ>(n + 1)
         val right = ArrayList<PointXZ>(n + 1)
-        val tmp = DoubleArray(4)
+        val inner = if (side != 0) ArrayList<PointXZ>(n + 1) else null
+        val swing = if (side != 0 && reverse && cfg.swingM > 0) ArrayList<PointXZ>() else null
+        val p = DoubleArray(4)
+        val tmp = DoubleArray(2)
         for (i in 0..n) {
             val s = len * i / n
-            corners(s, k, dir, bz, zra, hw, tmp)
+            pose(s, k, dir, bz, p)
             dist.add(s)
-            left.add(PointXZ(tmp[0], tmp[1]))
-            right.add(PointXZ(tmp[2], tmp[3]))
+            bodyPoint(p, zra, -hw, bz, tmp); left.add(PointXZ(tmp[0], tmp[1]))
+            bodyPoint(p, zra, hw, bz, tmp); right.add(PointXZ(tmp[0], tmp[1]))
+            if (inner != null) { bodyPoint(p, zra, side * hw, 0.0, tmp); inner.add(PointXZ(tmp[0], tmp[1])) }
+            if (swing != null && s <= cfg.swingM + 1e-9) {
+                bodyPoint(p, zra, -side * hw, fz, tmp); swing.add(PointXZ(tmp[0], tmp[1]))
+            }
         }
         val markers = ArrayList<GuideMarker>()
         for (m in cfg.markersM) {
             if (m < 0 || m > len + 1e-9) continue
-            corners(m, k, dir, bz, zra, hw, tmp)
-            markers.add(GuideMarker(m, PointXZ(tmp[0], tmp[1]), PointXZ(tmp[2], tmp[3])))
+            pose(m, k, dir, bz, p)
+            bodyPoint(p, zra, -hw, bz, tmp); val l = PointXZ(tmp[0], tmp[1])
+            bodyPoint(p, zra, hw, bz, tmp)
+            markers.add(GuideMarker(m, l, PointXZ(tmp[0], tmp[1])))
         }
-        return GuideLines(reverse, dist, left, right, markers)
+        return GuideLines(reverse, dist, left, right, markers, side, inner, swing)
     }
 
     /**
-     * 保險桿中心沿弧線走 s 後，左右保險桿角的位置 → out = [lx, lz, rx, rz]。
-     * 後軸中心走 sA = s / √(1 + (bz·k)²)（帶方向），航向 ψ = k·sA，
-     * 後軸位移 (2 sin²(ψ/2) / k, sin ψ / k)，車身點 (bx, bz) 轉 ψ 後疊上去。
+     * 保險桿中心（相對後軸 z = bz）沿弧線走 s 後的車身姿態 → out = [ax, az, cos ψ, sin ψ]：
+     * 後軸中心走 sA = s / √(1 + (bz·k)²)（帶方向），航向 ψ = k·sA，後軸位移 (2 sin²(ψ/2) / k, sin ψ / k)。
      */
-    internal fun corners(s: Double, k: Double, dir: Double, bz: Double, zra: Double, hw: Double, out: DoubleArray) {
+    internal fun pose(s: Double, k: Double, dir: Double, bz: Double, out: DoubleArray) {
         val q = bz * k
         val sA = dir * s / sqrt(1 + q * q)
         val psi = k * sA
-        val ax: Double
-        val az: Double
         if (abs(k) < STRAIGHT_K) {
-            ax = 0.0
-            az = sA
+            out[0] = 0.0
+            out[1] = sA
         } else {
             val h = sin(psi / 2)
-            ax = 2 * h * h / k
-            az = sin(psi) / k
+            out[0] = 2 * h * h / k
+            out[1] = sin(psi) / k
         }
-        val c = cos(psi)
-        val sn = sin(psi)
-        val lx = -hw
-        out[0] = ax + lx * c + bz * sn
-        out[1] = zra + az - lx * sn + bz * c
-        out[2] = ax + hw * c + bz * sn
-        out[3] = zra + az - hw * sn + bz * c
+        out[2] = cos(psi)
+        out[3] = sin(psi)
+    }
+
+    /** 車身點（px 右、pz 相對後軸往前）在姿態 p 下的位置 → out = [x, z]（車身座標） */
+    internal fun bodyPoint(p: DoubleArray, zra: Double, px: Double, pz: Double, out: DoubleArray) {
+        out[0] = p[0] + px * p[2] + pz * p[3]
+        out[1] = zra + p[1] - px * p[3] + pz * p[2]
     }
 }

@@ -65,6 +65,38 @@ class VehicleSignalsTest {
         assertEquals(0.833, g.frontOverhang, 0.005)
     }
 
+    @Test
+    fun steerRatioFromMeasuredLock() {
+        // turningCircle 的反函數：來回一趟回到同一個前輪角 / 轉向比
+        val d = BicycleModel.turningCircle(g.maxSteerDeg, g)
+        assertEquals(g.maxWheelDeg, BicycleModel.wheelAngleForTurningCircle(d, g), 1e-9)
+        val back = g.calibratedToLock(g.maxSteerDeg, d)
+        assertEquals(15.0, back.steerRatio, 1e-9)
+        assertEquals(522.0, back.maxSteerDeg, 0.0)
+        // 實測：打到底 522°、迴轉直徑 11.4 m → δmax ≈ 34.93°、轉向比 ≈ 14.94
+        val cal = g.calibratedToLock(522.0, 11.4)
+        assertEquals(34.93, cal.maxWheelDeg, 0.01)
+        assertEquals(14.94, cal.steerRatio, 0.01)
+        assertEquals(11.4, BicycleModel.turningCircle(522.0, cal), 1e-9)
+        // 打到底 480° 但迴轉直徑一樣 → 轉向比變小
+        assertTrue(g.calibratedToLock(480.0, 11.4).steerRatio < cal.steerRatio)
+        assertThrows(IllegalArgumentException::class.java) { BicycleModel.wheelAngleForTurningCircle(5.0, g) }
+    }
+
+    @Test
+    fun steerCalibration() {
+        assertEquals(30f, SteerCalibration().apply(30f), 0f)
+        assertEquals(-30f, SteerCalibration.ISO8855.apply(30f), 0f)          // ISO 8855：+ = 向左
+        assertEquals(-88f, SteerCalibration(-1, 12f).apply(100f), 1e-6f)     // 置中時讀到 12°
+        assertThrows(IllegalArgumentException::class.java) { SteerCalibration(sign = 2) }
+        val vs = VehicleSignals(clock = { 0L })
+        vs.steerCal = SteerCalibration(-1, 5f)
+        vs.reportSteerRaw(95f)
+        assertEquals(-90f, vs.snapshot().steerDeg)
+        vs.reportSteerRaw(Float.NaN, 10)
+        assertNull(vs.snapshot(10).steerDeg)
+    }
+
     // ---------- 輔助線 ----------
 
     @Test
@@ -142,6 +174,69 @@ class VehicleSignalsTest {
     }
 
     @Test
+    fun innerTraceShowsOfftracking() {
+        for (steer in listOf(150.0, -300.0, 522.0, -522.0)) for (rev in listOf(false, true)) {
+            val gl = BicycleModel.guideLines(steer, rev, g)
+            val r = BicycleModel.turningRadius(steer, g)
+            val side = if (r > 0) 1 else -1
+            assertEquals(side, gl.innerSide)
+            val inner = gl.inner!!
+            assertEquals(gl.dist.size, inner.size)
+            // 起點：內側車身、後軸處
+            assertEquals(side * g.width / 2, inner[0].x, 1e-12)
+            assertEquals(g.rearAxleZ, inner[0].z, 1e-12)
+            // 整條都在半徑 |R| − W/2 上（整台車離轉彎中心最近的點）
+            for (p in inner) assertEquals(abs(r) - g.width / 2, hypot(p.x - r, p.z - g.rearAxleZ), 1e-9)
+            // 內側保險桿角線比真正的內側邊界外面多少（前進 = 內輪差被藏住的量）
+            val innerCorner = if (side > 0) gl.right[0] else gl.left[0]
+            val hidden = hypot(innerCorner.x - r, innerCorner.z - g.rearAxleZ) - (abs(r) - g.width / 2)
+            val exp = when (abs(steer)) {
+                522.0 -> if (rev) 0.19 else 1.70
+                300.0 -> if (rev) 0.09 else 0.93
+                else -> if (rev) 0.04 else 0.44
+            }
+            assertEquals("steer=$steer rev=$rev", exp, hidden, 0.01)
+            // 同一個弧長參數：第 i 點跟保險桿角線同一個姿態（相對位置固定）
+            val c0 = if (side > 0) gl.right else gl.left
+            for (i in gl.dist.indices) {
+                assertEquals(hypot(c0[0].x - inner[0].x, c0[0].z - inner[0].z),
+                    hypot(c0[i].x - inner[i].x, c0[i].z - inner[i].z), 1e-9)
+            }
+        }
+        // 直行沒有內側
+        for (steer in listOf(null, 0.0)) for (rev in listOf(false, true)) {
+            val gl = BicycleModel.guideLines(steer, rev, g)
+            assertEquals(0, gl.innerSide)
+            assertNull(gl.inner)
+            assertNull(gl.swing)
+        }
+    }
+
+    @Test
+    fun reverseFrontSwing() {
+        // 倒車向右打到底：外側（左）前角甩出，比外側後角線多約 1.10 m
+        val gl = BicycleModel.guideLines(522.0, true, g)
+        val r = BicycleModel.turningRadius(522.0, g)
+        val sw = gl.swing!!
+        assertEquals(26, sw.size)                                    // 0..2.5 m，每 0.1 m
+        assertEquals(-g.width / 2, sw[0].x, 1e-12)
+        assertEquals(g.length / 2, sw[0].z, 1e-12)
+        val rs = hypot(sw[0].x - r, sw[0].z - g.rearAxleZ)
+        for (p in sw) assertEquals(rs, hypot(p.x - r, p.z - g.rearAxleZ), 1e-9)
+        val rOuterRear = hypot(gl.left[0].x - r, gl.left[0].z - g.rearAxleZ)
+        assertEquals(1.10, rs - rOuterRear, 0.01)
+        // 車頭往外（左）甩
+        assertTrue(sw.last().x < -g.width / 2 - 0.3)
+        // 向左打：甩向右；前進不算；swingM = 0 不算
+        val gl2 = BicycleModel.guideLines(-300.0, true, g)
+        assertEquals(g.width / 2, gl2.swing!![0].x, 1e-12)
+        assertTrue(gl2.swing!!.last().x > g.width / 2)
+        assertNull(BicycleModel.guideLines(300.0, false, g).swing)
+        assertNull(BicycleModel.guideLines(300.0, true, g, GuideConfig(swingM = 0.0)).swing)
+        assertEquals(11, BicycleModel.guideLines(300.0, true, g, GuideConfig(swingM = 1.0)).swing!!.size)
+    }
+
+    @Test
     fun guideConfigLengthAndStep() {
         val gl = BicycleModel.guideLines(300.0, true, g, GuideConfig(lengthM = 3.5, stepM = 0.25))
         assertEquals(15, gl.left.size)
@@ -195,6 +290,69 @@ class VehicleSignalsTest {
         // 最後一次亮在 4440 → 保持到 4440 + 1500
         assertEquals('L', vs.snapshot(5940).turn)
         assertNull(vs.snapshot(5941).turn)
+    }
+
+    @Test
+    fun turnLitFollowsLampPhase() {
+        val vs = VehicleSignals()
+        // 只回報「亮」的來源（撥桿層級）：不知道亮暗 → null，畫面端自己閃
+        vs.reportTurn('R', 0)
+        vs.reportTurn('R', 200)
+        assertEquals('R', vs.snapshot(300).turn)
+        assertNull(vs.snapshot(300).turnLit)
+        // 會回報暗期的來源（燈層級）：亮 0.33 s、暗 0.33 s
+        val ws = VehicleSignals()
+        for (t in 0L..3000L step 10) {
+            val lit = t < 2000 && t % 667 < 333
+            ws.reportTurn(if (lit) 'L' else null, t)
+            val s = ws.snapshot(t)
+            assertEquals("t=$t", 'L', s.turn)
+            if (t >= 400) assertEquals("t=$t", lit, s.turnLit)    // 第一次暗期之後才知道亮暗
+        }
+        // 撥桿回正後：方向還保持（作用中），但燈是暗的
+        assertEquals(false, ws.snapshot(3000).turnLit)
+        assertNull(ws.snapshot(3500).turn)
+        assertNull(ws.snapshot(3500).turnLit)
+    }
+
+    @Test
+    fun clockJumpBackDoesNotFreeze() {
+        // 車機沒有 RTC：開機後 GPS/NTP 對時，牆鐘可能往回跳
+        var now = 1_000_000L
+        val vs = VehicleSignals(clock = { now })
+        vs.reportGear('R')
+        vs.reportPdcRear(floatArrayOf(0.4f, 0.5f, inf, inf))
+        vs.reportTurn('L')
+        assertEquals('R', vs.snapshot().gear)
+        now -= 60_000                                   // 往回跳 60 s
+        var s = vs.snapshot()
+        assertNull("舊值不能凍住", s.gear)
+        assertNull(s.pdcRear)
+        assertNull(s.turn)
+        vs.reportGear('D')                              // 新回報照收
+        vs.reportPdcRear(floatArrayOf(1.5f, inf, inf, inf))
+        s = vs.snapshot()
+        assertEquals('D', s.gear)
+        assertEquals(1.5f, s.pdcMin(false))
+        now += 30_000
+        assertNull("新值照常過期", vs.snapshot().gear)
+        // 小幅倒退（< 1 s）仍當成亂序：拒收、舊值照常有效
+        vs.reportGear('N')
+        vs.reportGear('R', now - 300)
+        assertEquals('N', vs.snapshot().gear)
+        assertEquals('N', vs.snapshot(now - 500).gear)
+        assertNull(vs.snapshot(now - 1001).gear)
+    }
+
+    @Test
+    fun defaultClockIsMonotonic() {
+        val vs = VehicleSignals()
+        val a = vs.now()
+        assertTrue(abs(a - System.nanoTime() / 1_000_000) < 1000)
+        vs.reportGear('D')                               // 預設時間 = sink 的時鐘
+        assertEquals('D', vs.snapshot().gear)
+        assertEquals('D', vs.snapshot(a + 1500).gear)
+        assertNull(vs.snapshot(vs.now() + 2500).gear)
     }
 
     @Test
@@ -264,9 +422,11 @@ class VehicleSignalsTest {
 
     @Test
     fun jsonPayload() {
-        val s = VehicleState('L', 'R', 123.456f, 4.04f, floatArrayOf(inf, 1.234f, 0.3f, 120f), null, 0)
+        val s = VehicleState('L', 'R', 123.456f, 4.04f, floatArrayOf(inf, 1.234f, 0.3f, 120f),
+            floatArrayOf(Float.NaN, -0.2f, Float.NEGATIVE_INFINITY, 0.456f), 0, turnLit = true)
         val j = JSONObject(VehicleSignals.toJson(s).toString())
         assertEquals("L", j.getString("turn"))
+        assertTrue(j.getBoolean("lit"))
         assertEquals("R", j.getString("gear"))
         assertEquals(123.5, j.getDouble("steer"), 1e-12)
         assertEquals(4.0, j.getDouble("speed"), 1e-12)
@@ -276,12 +436,20 @@ class VehicleSignalsTest {
         assertEquals(1.23, f.getDouble(1), 1e-12)
         assertEquals(0.3, f.getDouble(2), 1e-12)
         assertEquals(99.0, f.getDouble(3), 0.0)
-        assertTrue(j.getJSONObject("pdc").isNull("r"))
+        val r = j.getJSONObject("pdc").getJSONArray("r")
+        assertTrue("NaN = 故障 → null", r.isNull(0))
+        assertEquals(0.0, r.getDouble(1), 0.0)
+        assertTrue(r.isNull(2))
+        assertEquals(0.46, r.getDouble(3), 1e-12)
+        assertEquals(0f, s.pdcMin(false))                 // 負值當 0、故障略過
+        assertEquals(0.456f, VehicleState(pdcRear = floatArrayOf(Float.NaN, 0.8f, inf, 0.456f)).pdcMin(false))
+        assertNull(VehicleState(pdcRear = floatArrayOf(Float.NaN, inf, inf, Float.NaN)).pdcMin(false))
 
         val e = JSONObject(VehicleSignals.toJson(VehicleState()).toString())
-        for (k in listOf("turn", "gear", "steer", "speed")) assertTrue(k, e.has(k) && e.isNull(k))
+        for (k in listOf("turn", "lit", "gear", "steer", "speed")) assertTrue(k, e.has(k) && e.isNull(k))
         assertTrue(e.getJSONObject("pdc").isNull("f"))
         assertTrue(e.getJSONObject("pdc").isNull("r"))
+        assertEquals(false, JSONObject(VehicleSignals.toJson(VehicleState(turn = 'H', turnLit = false)).toString()).get("lit"))
     }
 
     // ---------- 模擬來源 ----------
@@ -293,12 +461,19 @@ class VehicleSignalsTest {
             SimulatedSource.pump(vs, t)
             val s = vs.snapshot(t)
             when (SimulatedSource.phaseName(t)) {
-                "前進左轉" -> { assertEquals("t=$t", 'L', s.turn); assertEquals('D', s.gear) }
-                // 最後一次亮在 6950 → 保持到 8450
-                "換檔" -> { assertEquals('N', s.gear); if (t > 8_450) assertNull("t=$t", s.turn) else assertEquals('L', s.turn) }
+                "前進左轉" -> {
+                    assertEquals("t=$t", 'L', s.turn); assertEquals('D', s.gear)
+                    if (t >= 400) assertEquals("t=$t", SimulatedSource.stateAt(t)!!.turn != null, s.turnLit)
+                }
+                // 最後一次亮在 6950 → 保持到 8450（保持期間燈是暗的）
+                "換檔" -> {
+                    assertEquals('N', s.gear)
+                    if (t > 8_450) assertNull("t=$t", s.turn) else { assertEquals('L', s.turn); assertEquals(false, s.turnLit) }
+                }
                 "倒車入庫" -> {
                     assertEquals('R', s.gear); assertNull(s.turn)
                     assertNotNull(s.pdcRear); assertNotNull(s.pdcFront); assertNotNull(s.steerDeg)
+                    assertEquals("t=$t", t >= SimulatedSource.FAULT_FROM_MS, s.pdcFront!![0].isNaN())
                 }
                 "雙黃燈" -> { assertEquals("t=$t", 'H', s.turn); assertEquals('P', s.gear) }
                 "右轉" -> { assertEquals("t=$t", 'R', s.turn); assertEquals(120f, s.steerDeg) }
@@ -351,10 +526,12 @@ class VehicleSignalsTest {
         }
         val g2 = d.copy(steerRatio = 16.5, maxSteerDeg = 540.0)
         for (steer in listOf(300.0, -480.0)) for (rev in listOf(false, true)) {
-            out.add(Case(steer, rev, g2, GuideConfig(lengthM = 3.5, stepM = 0.25)))
+            out.add(Case(steer, rev, g2, GuideConfig(lengthM = 3.5, stepM = 0.25, swingM = 1.2)))
         }
         out.add(Case(200.0, true, VehicleGeometry(length = 4.5, width = 1.8, wheelbase = 2.7, rearOverhang = 1.0),
             GuideConfig(lengthM = 2.0)))
+        out.add(Case(-350.0, true, d, GuideConfig(swingM = 0.0)))
+        out.add(Case(150.0, true, d.calibratedToLock(500.0, 11.4), GuideConfig(swingM = 4.0)))
         return out
     }
 
@@ -364,12 +541,11 @@ class VehicleSignalsTest {
     private fun buildFixture(): String {
         val lines = fixtureCases().map { c ->
             val gl = BicycleModel.guideLines(c.steer, c.reverse, c.g, c.cfg)
-            val opts = JSONObject()
-                .put("length", c.g.length).put("width", c.g.width).put("wheelbase", c.g.wheelbase)
-                .put("rearOverhang", c.g.rearOverhang).put("steerRatio", c.g.steerRatio)
-                .put("maxSteerDeg", c.g.maxSteerDeg).put("guideLen", c.cfg.lengthM)
-                .put("guideStep", c.cfg.stepM).put("markers", JSONArray(c.cfg.markersM))
-            fun pts(p: List<PointXZ>) = JSONArray().also { a -> p.forEach { a.put(JSONArray().put(it.x).put(it.z)) } }
+            val opts = c.g.jsOpts()
+                .put("guideLen", c.cfg.lengthM).put("guideStep", c.cfg.stepM)
+                .put("markers", JSONArray(c.cfg.markersM)).put("swingM", c.cfg.swingM)
+            fun pts(p: List<PointXZ>?): Any =
+                if (p == null) JSONObject.NULL else JSONArray().also { a -> p.forEach { a.put(JSONArray().put(it.x).put(it.z)) } }
             val mk = JSONArray().also { a ->
                 gl.markers.forEach { a.put(JSONArray().put(it.distM).put(it.left.x).put(it.left.z).put(it.right.x).put(it.right.z)) }
             }
@@ -378,6 +554,7 @@ class VehicleSignalsTest {
                 .put("radius", num(BicycleModel.turningRadius(c.steer, c.g)))
                 .put("dist", JSONArray(gl.dist)).put("left", pts(gl.left)).put("right", pts(gl.right))
                 .put("markers", mk)
+                .put("innerSide", gl.innerSide).put("inner", pts(gl.inner)).put("swing", pts(gl.swing))
                 .toString()
         }
         return "{\n\"note\": \"VehicleSignalsTest 由 BicycleModel 產生；vehicle3d.js 的 guides() 要對得上（src/test/js/vehicle_guides_check.js）。\",\n" +
@@ -411,11 +588,17 @@ class VehicleSignalsTest {
 
     @Test
     fun jsGuidesMatchKotlin() {
-        val node = listOf("/opt/homebrew/bin/node", "/usr/local/bin/node", "/usr/bin/node").firstOrNull { File(it).canExecute() }
+        val node = System.getenv("NODE")?.takeIf { File(it).canExecute() }
+            ?: listOf("/opt/homebrew/bin/node", "/usr/local/bin/node", "/usr/bin/node").firstOrNull { File(it).canExecute() }
             ?: System.getenv("PATH")?.split(File.pathSeparator)?.map { File(it, "node") }?.firstOrNull { it.canExecute() }?.path
-        assumeTrue("找不到 node，略過 JS 一致性檢查", node != null)
         val script = File("src/test/js/vehicle_guides_check.js")
-        assumeTrue("找不到 ${script.absolutePath}", script.exists())
+        assertTrue("找不到 ${script.absolutePath}", script.exists())
+        if (node == null) {
+            // CI 上一定要跑：沒有 node 就失敗，不然 JS 跟 Kotlin 走鐘也不會發現
+            if (System.getenv("CI") != null) fail("CI 環境找不到 node（可用 NODE 環境變數指定路徑），無法檢查 vehicle3d.js 與 Kotlin 的一致性")
+            System.err.println("警告：找不到 node，略過 vehicle3d.js 與 Kotlin 的一致性檢查")
+            assumeTrue("找不到 node，略過 JS 一致性檢查", false)
+        }
         val p = ProcessBuilder(node!!, script.path).redirectErrorStream(true).start()
         val out = p.inputStream.bufferedReader().use { it.readText() }
         assertTrue("node 逾時", p.waitFor(60, TimeUnit.SECONDS))

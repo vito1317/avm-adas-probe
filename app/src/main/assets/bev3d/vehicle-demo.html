@@ -20,13 +20,14 @@
   .hud{position:absolute;z-index:5}
   .panel{top:10px;left:10px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:9px 12px;pointer-events:none;min-width:150px}
   .panel h1{margin:0 0 6px;font-size:12px;letter-spacing:.14em;font-weight:700}
-  .rows{display:grid;grid-template-columns:auto 1fr;gap:4px 10px;font-size:13px}
+  .rows{display:grid;grid-template-columns:auto 1fr;grid-gap:4px 10px;gap:4px 10px;font-size:13px}
   .rows dt{color:var(--muted)}
   .rows dd{margin:0;font-weight:700;font-variant-numeric:tabular-nums;text-align:right}
   .bar{margin-top:8px;height:3px;border-radius:2px;background:var(--line);overflow:hidden}
   .bar i{display:block;height:100%;width:0;background:var(--cyan)}
-  .dock{left:50%;bottom:10px;transform:translateX(-50%);display:flex;gap:4px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:5px;max-width:calc(100% - 32px);overflow-x:auto}
-  .dock .sep{flex:none;width:1px;margin:6px 3px;background:var(--line)}
+  .dock{left:50%;bottom:10px;transform:translateX(-50%);display:flex;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:5px;max-width:calc(100% - 32px);overflow-x:auto}
+  .dock>*+*{margin-left:4px}   /* 不用 flex gap：舊車機 WebView 不支援 */
+  .dock .sep{flex:none;width:1px;margin:6px 3px 6px 7px;background:var(--line)}
   button{font:inherit;font-size:12px;font-weight:600;color:var(--muted);background:transparent;border:0;border-radius:8px;padding:8px 11px;white-space:nowrap;cursor:pointer}
   button:focus-visible{outline:2px solid var(--cyan);outline-offset:1px}
   .dock button[aria-pressed="true"]{background:rgba(56,225,255,.16);color:var(--cyan)}
@@ -45,6 +46,7 @@
       <dt>車速</dt><dd id="vSpeed">—</dd>
       <dt>方向燈</dt><dd id="vTurn">—</dd>
       <dt>輔助線</dt><dd id="vGuide">—</dd>
+      <dt>視角</dt><dd id="vView">—</dd>
     </dl>
     <div class="bar" aria-hidden="true"><i id="vBar"></i></div>
   </div>
@@ -52,6 +54,7 @@
     <button data-view="top">俯視</button>
     <button data-view="chase" aria-pressed="true">3D 跟車</button>
     <button data-view="orbit">繞行</button>
+    <button data-view="auto" title="倒車朝後看、前方雷達 < 1.2 m 俯視，其他跟車">自動</button>
     <span class="sep" aria-hidden="true"></span>
     <button class="ph" data-t="0">前進</button>
     <button class="ph" data-t="9">倒車</button>
@@ -151,25 +154,27 @@
 
   AVM_VEH.init(scene, THREE, app, ego);
 
-  // ---------- 模擬劇本（與 SimulatedSource.kt 同一份；這裡直接產生 Android 端送來的 veh，方向燈已是保持後的值） ----------
-  var CYCLE = 40, SENSOR_X = [-0.75, -0.3, 0.3, 0.75], SLOPE = 0.2;
+  // ---------- 模擬劇本（與 SimulatedSource.kt 同一份；這裡直接產生 Android 端送來的 veh：
+  //            方向燈已是保持後的值，lit = 燈此刻亮/暗；撥桿回正後方向再保持 1.5 s，燈是暗的） ----------
+  var CYCLE = 40, SENSOR_X = [-0.75, -0.3, 0.3, 0.75], SLOPE = 0.2, BLINK = 0.667, FAULT_FROM = 17;
   var PHASES = [[0, '前進左轉'], [7, '換檔'], [9, '倒車入庫'], [25, '雙黃燈'], [31, '右轉'], [37, '訊號中斷']];
   function phaseOf(s) { var n = PHASES[0][1]; for (var i = 0; i < PHASES.length; i++) if (s >= PHASES[i][0]) n = PHASES[i][1]; return n; }
   function wallDist(s) { return 2.2 - 2.05 * (s - 9) / 16; }
+  function lit(s, start) { return ((s - start) % BLINK) < BLINK / 2; }
   function simAt(s) {        // s = 劇本秒數；回傳 { veh, wall: b|null }
     var CLR = 99;
-    if (s < 7) return { veh: { turn: 'L', gear: 'D', steer: -240 * Math.sin(Math.PI * s / 7), speed: 8, pdc: { f: null, r: null } } };
-    if (s < 9) return { veh: { turn: null, gear: 'N', steer: 0, speed: 0, pdc: { f: null, r: null } } };
+    if (s < 7) return { veh: { turn: 'L', lit: lit(s, 0), gear: 'D', steer: -240 * Math.sin(Math.PI * s / 7), speed: 8, pdc: { f: null, r: null } } };
+    if (s < 9) return { veh: { turn: s < 8.45 ? 'L' : null, lit: s < 8.45 ? false : null, gear: 'N', steer: 0, speed: 0, pdc: { f: null, r: null } } };
     if (s < 25) {
       var b = wallDist(s), r = SENSOR_X.map(function (x) { var d = b + SLOPE * x; return d >= 2 ? CLR : Math.max(d, 0.05); });
-      return { wall: b, veh: { turn: null, gear: 'R', steer: 480 * Math.sin(2 * Math.PI * (s - 9) / 8), speed: 4,
-        pdc: { f: [CLR, CLR, CLR, 1.05], r: r } } };
+      return { wall: b, veh: { turn: null, lit: null, gear: 'R', steer: 480 * Math.sin(2 * Math.PI * (s - 9) / 8), speed: 4,
+        pdc: { f: [s >= FAULT_FROM ? null : CLR, CLR, CLR, 1.05], r: r } } };   // 後段前左雷達故障（null）
     }
-    if (s < 31) return { veh: { turn: 'H', gear: 'P', steer: 0, speed: 0, pdc: { f: null, r: null } } };
-    if (s < 37) return { veh: { turn: 'R', gear: 'D', steer: 120, speed: s < 34 ? 22 : 10, pdc: { f: null, r: null } } };
+    if (s < 31) return { veh: { turn: 'H', lit: lit(s, 25), gear: 'P', steer: 0, speed: 0, pdc: { f: null, r: null } } };
+    if (s < 37) return { veh: { turn: 'R', lit: lit(s, 31), gear: 'D', steer: 120, speed: s < 34 ? 22 : 10, pdc: { f: null, r: null } } };
     return { veh: null };     // 訊號中斷：不再送新資料 → vehicle3d.js 過期後全部隱藏
   }
-  function r2(v) { return Math.round(v * 100) / 100; }
+  function r2(v) { return v == null ? null : Math.round(v * 100) / 100; }   // null = 故障，要保留
 
   var hashT = /t=([\d.]+)/.exec(location.hash);
   var simT = hashT ? (+hashT[1]) % CYCLE : 0, paused = /pause/.test(location.hash), lastTick = performance.now();
@@ -181,7 +186,7 @@
     cur = simAt(simT);
     if (cur.veh) {
       var v = cur.veh;
-      veh = { turn: v.turn, gear: v.gear, steer: Math.round(v.steer * 10) / 10, speed: v.speed,
+      veh = { turn: v.turn, lit: v.lit, gear: v.gear, steer: Math.round(v.steer * 10) / 10, speed: v.speed,
         pdc: { f: v.pdc.f && v.pdc.f.map(r2), r: v.pdc.r && v.pdc.r.map(r2) } };   // 每次都是新物件，跟 setFrame 一樣
     }
     wall.visible = cur.wall != null;
@@ -198,7 +203,8 @@
 
   // ---------- 面板 ----------
   var el = function (id) { return document.getElementById(id); };
-  var vPhase = el('vPhase'), vGear = el('vGear'), vSteer = el('vSteer'), vSpeed = el('vSpeed'), vTurn = el('vTurn'), vGuide = el('vGuide'), vBar = el('vBar');
+  var vPhase = el('vPhase'), vGear = el('vGear'), vSteer = el('vSteer'), vSpeed = el('vSpeed'), vTurn = el('vTurn'), vGuide = el('vGuide'), vView = el('vView'), vBar = el('vBar');
+  var VIEW_NAME = { top: '俯視', chase: '跟車', orbit: '繞行', rear: '朝後', front: '朝前' };
   var GEAR = { P: 'P 停車', R: 'R 倒車', N: 'N 空檔', D: 'D 前進' }, TURN = { L: '左', R: '右', H: '雙黃燈' };
   function showPanel() {
     var st = AVM_VEH.state(), v = st.live ? veh : null;
@@ -207,7 +213,9 @@
     vSteer.textContent = v && v.steer != null ? (v.steer > 0 ? '右 ' : v.steer < 0 ? '左 ' : '') + Math.abs(v.steer).toFixed(0) + '°' : '—';
     vSpeed.textContent = v && v.speed != null ? v.speed + ' km/h' : '—';
     vTurn.textContent = v && v.turn ? TURN[v.turn] : '—';
-    vGuide.textContent = st.guide === 'rev' ? '倒車' : st.guide === 'fwd' ? '前進' : '—';
+    vGuide.textContent = (st.guide === 'rev' ? '倒車' : st.guide === 'fwd' ? '前進' : '—') +
+      (st.inner ? ' · 內輪差' : '') + (st.swing ? ' · 車頭甩出' : '');
+    vView.textContent = (viewMode === 'auto' ? '自動 · ' : '') + (VIEW_NAME[curView] || '—');
     vBar.style.width = (simT / CYCLE * 100).toFixed(1) + '%';
     var bs = document.querySelectorAll('#dock button.ph'), ph = phaseOf(simT);
     for (var i = 0; i < bs.length; i++) {
@@ -218,13 +226,14 @@
 
   // ---------- 視角 / 控制 ----------
   var VIEWS = {
-    top: { pos: [0, 17, 0.01], tgt: [0, 0, 0], rot: false },
+    top: { pos: [0, 22, 0.01], tgt: [0, 0, 0], rot: false },        // 同 index.html 的俯視高度（約 30 px/m）
     chase: { pos: [0, 7.5, 10.5], tgt: [0, 0, -1.5], rot: false },
     orbit: { pos: [9, 7, 9], tgt: [0, 0, 0], rot: true },
-    rear: { pos: [0, 7.5, 3.0], tgt: [0, 0, 2.9], rot: false },     // 只能從網址進：#view=rear / #view=front（近看雷達）
+    rear: { pos: [0, 7.5, 3.0], tgt: [0, 0, 2.9], rot: false },     // 自動視角倒車時用；也可從網址進：#view=rear / #view=front
     front: { pos: [0, 7.5, -3.0], tgt: [0, 0, -2.9], rot: false }
   };
-  function setView(name) {
+  var viewMode = 'chase', curView = null;
+  function applyView(name) {
     var v = VIEWS[name];
     if (!v) return;
     camera.position.set(v.pos[0], v.pos[1], v.pos[2]);
@@ -232,6 +241,18 @@
     controls.autoRotate = v.rot;
     controls.autoRotateSpeed = 0.8;
     controls.update();
+    curView = name;
+    dirty = true;
+  }
+  // 自動：倒車朝後看、前方雷達 < 1.2 m 俯視，其他跟車（整合端可照這個用 AVM_VEH.suggestView()）
+  function autoView() {
+    var want = AVM_VEH.suggestView() || 'chase';
+    if (want !== curView) applyView(want);
+  }
+  function setView(name) {
+    if (name !== 'auto' && !VIEWS[name]) return;
+    viewMode = name;
+    if (name === 'auto') { curView = null; autoView(); } else applyView(name);
     var bs = document.querySelectorAll('#dock button[data-view]');
     for (var i = 0; i < bs.length; i++) bs[i].setAttribute('aria-pressed', String(bs[i].getAttribute('data-view') === name));
   }
@@ -263,6 +284,7 @@
     if (t - lastT < 32) return;
     lastT = t;
     AVM_VEH.update(veh, performance.now());
+    if (viewMode === 'auto') autoView();
     if (dirty) { showPanel(); dirty = false; }   // 面板跟著 vehicle3d.js 的顯示狀態（過期就清空）
     controls.update();
     renderer.render(scene, camera);
