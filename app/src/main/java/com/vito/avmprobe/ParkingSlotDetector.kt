@@ -16,7 +16,7 @@ import kotlin.math.sqrt
 /**
  * 停車格（車身座標，公尺；x 右、z 前）。
  * p = x1,z1,x2,z2,x3,z3,x4,z4：p1→p2 是入口邊，p3、p4 是遠端兩角，四點逆時針。
- * kind：'p' 垂直、'l' 平行（路邊）、'a' 斜角。occupied：與車輛框（或車身大小的排除區，例如自車）重疊 > 30 % 面積。
+ * kind：'p' 垂直、'l' 平行（路邊）、'a' 斜角。occupied：與車輛框或自車（含原點的排除區）重疊 > 30 % 面積。
  */
 data class ParkingSlot(val p: FloatArray, val kind: Char, val occupied: Boolean, val conf: Float) {
     override fun equals(other: Any?): Boolean =
@@ -27,7 +27,8 @@ data class ParkingSlot(val p: FloatArray, val kind: Char, val occupied: Boolean,
 
 /**
  * 公制俯視圖（BEV）上的停車格偵測。演算法與 tools/parking_proto.py 逐步一致（該檔有完整說明與合成資料評估）：
- * 標線脊線遮罩 → Hough 線段 → 平行線對 + 橫邊 / 開口端圍成格子 → 支持度、格內乾淨度驗證 → 類型 / 入口 → NMS。
+ * 標線脊線遮罩 → Hough 線段 → 平行線對 + 橫邊 / 開口端圍成格子（橫邊與長邊線寬要相近，停止線不算）→
+ * 支持度、格內乾淨度（機車格 T 字線頭、斜紋）、外圍紋理（植草磚）驗證 → 類型 / 入口 → NMS。
  * 純 Kotlin（無 android.*）；大陣列在呼叫之間重複使用，不是執行緒安全的（一個執行緒一個實例）。
  */
 class ParkingSlotDetector {
@@ -66,6 +67,15 @@ class ParkingSlotDetector {
         private const val NMS_IOU = 0.30
         private const val MAX_SLOTS = 16
         private const val OPEN_WMAX = 2.75
+        private const val WIDE_MIN = 0.24       // 橫邊 / 長邊線寬差很多（停止線、斑馬線邊線）→ 不是格子的邊
+        private const val WIDE_RATIO = 1.6
+        private const val WSTEP = 0.25          // 線寬取樣間距（每條線算一次之後查表）
+        private const val STUB_IN = 0.45        // 格內短分隔線頭（機車格 T 字）探針長度
+        private const val INNER_PAR = 1.2       // 格內平行線看得到的長度上限
+        private const val SEP_MIN_A = 1.0       // 單側斜角格：兩條分隔線伸進格內的最短長度
+        private const val RING = 1.0            // 格子外圍一圈的寬度
+        private const val RING_MAX = 0.25       // 外圍雜線比例上限（植草磚、連鎖磚）
+        private const val TEXTURE_MAX = 0.2     // 整張圖地面的標線遮罩比例上限（一般停車場 ≤ 0.13）
         private const val NEG = -(1 shl 28)
         private const val SENT = 1 shl 24
 
@@ -83,7 +93,11 @@ class ParkingSlotDetector {
     }
 
     // ---------------------------------------------------------------- 內部資料
-    private class Line(val cx: Double, val cz: Double, val ux: Double, val uz: Double, var pieces: DoubleArray, val n: Int)
+    private class Line(val cx: Double, val cz: Double, val ux: Double, val uz: Double, var pieces: DoubleArray, val n: Int) {
+        var wT: DoubleArray? = null  // 線寬取樣（每條線算一次）：參數與半高寬
+        var wW = DoubleArray(0)
+        var wN = 0
+    }
 
     /** 長邊對的共同座標：原點 o，方向 u。 */
     private class Frame(val ox: Double, val oz: Double, val ux: Double, val uz: Double) {
@@ -158,6 +172,7 @@ class ParkingSlotDetector {
     private var tmpB = BooleanArray(0)
     private var mlist = IntArray(0)
     private var nM = 0
+    private var kOf = IntArray(0)
     private var bucketStart = IntArray(181)
     private var bucketIdx = IntArray(0)
     private var seeds = IntArray(1024)
@@ -186,7 +201,8 @@ class ParkingSlotDetector {
     /**
      * @param argb 0xAARRGGBB，列優先，第 0 列 = 前方；R+G+B < 24 視為無覆蓋
      * @param mpp 每像素公尺數；(cx, cy) 是車身原點的像素位置
-     * @param exclude 不看的矩形 [xMin, zMin, xMax, zMax]（車身公尺；自車框等）。兩邊都 ≥ 1.2 m 的也當佔用物
+     * @param exclude 不看的矩形 [xMin, zMin, xMax, zMax]（車身公尺；自車框、原廠導引線等）。含原點的那個（自車框）也當佔用物，
+     *   其他排除區（例如倒車時原廠導引線的整塊區域）只是看不到，不會讓格子變成 occupied
      * @param vehicles 偵測到的車輛框（同上格式）：框內沒看到線當作被車擋住；格子被佔 > 30 % 面積 → occupied
      * @return 依信心排序的停車格（最多 16 格）；時間上的穩定化由呼叫端處理
      */
@@ -205,6 +221,10 @@ class ParkingSlotDetector {
         var t0 = if (prof != null) System.nanoTime() else 0L
         buildMask(argb, exclude, vehicles)
         if (prof != null) { val t = System.nanoTime(); prof[0] += t - t0; t0 = t }
+        // 整片紋理（植草磚、連鎖磚）：看得到的地面 ≥ TEXTURE_MAX 是標線遮罩 → 格子外圍雜線幾乎一定過高，直接結束
+        var nVis = 0; var nMask = 0
+        for (p in 0 until w * h) if (state[p].toInt() == 1) { nVis++; if (mask[p]) nMask++ }
+        if (nVis >= 1000 && nMask >= TEXTURE_MAX * nVis) return emptyList()
         buildLines()
         for (l in lines) extend(l)
         if (prof != null) { val t = System.nanoTime(); prof[1] += t - t0; t0 = t }
@@ -230,7 +250,8 @@ class ParkingSlotDetector {
         val occ = ArrayList<DoubleArray>()
         for (r in vehicles) occ.add(doubleArrayOf(r[0].toDouble(), r[1].toDouble(), r[2].toDouble(), r[3].toDouble()))
         for (r in exclude) {
-            if (r[2].toDouble() - r[0].toDouble() >= 1.2 && r[3].toDouble() - r[1].toDouble() >= 1.2)
+            // 只有自車（含原點的排除區）算佔用物；原廠倒車導引線等其他排除區不算
+            if (r[0] <= 0f && 0f <= r[2] && r[1] <= 0f && 0f <= r[3])
                 occ.add(doubleArrayOf(r[0].toDouble(), r[1].toDouble(), r[2].toDouble(), r[3].toDouble()))
         }
         val out = ArrayList<ParkingSlot>(keep.size)
@@ -254,6 +275,7 @@ class ParkingSlotDetector {
             paint = IntArray(n); sum3 = IntArray(n); rowSum = IntArray(n); rowCnt = IntArray(n)
             best = IntArray(n); theta = IntArray(n); kn = ByteArray(n)
             mask = BooleanArray(n); dil = BooleanArray(n); cen = BooleanArray(n); tmpB = BooleanArray(n); mlist = IntArray(n)
+            kOf = IntArray(n)
         }
         if (rowPre.size < w + 1) rowPre = IntArray(w + 1)
         if (colPre.size < w) colPre = IntArray(w)
@@ -430,6 +452,8 @@ class ParkingSlotDetector {
         for (p in 0 until w * h) if (cen[p]) cnt++
         ensureN(max(cnt, 1))
         nC = 0
+        // kOf：像素 → 中心線像素索引（-1 = 不是）；收集像素時只走直線附近的帶狀區域
+        java.util.Arrays.fill(kOf, 0, w * h, -1)
         for (j in 0 until h) for (i in 0 until w) {
             val p = j * w + i
             if (!cen[p]) continue
@@ -437,9 +461,10 @@ class ParkingSlotDetector {
             py[nC] = j + 0.5 - h / 2.0
             pth[nC] = theta[p]
             used[nC] = false
+            kOf[p] = nC
             nC++
         }
-        // 依法線角分桶（桶內索引遞增），收集像素時只掃相容角度的桶
+        // 依法線角分桶（桶內索引遞增）：角度相容的像素少時直接掃桶，多時（植草磚等整片紋理）改走帶狀區域
         java.util.Arrays.fill(bucketStart, 0)
         for (k in 0 until nC) bucketStart[pth[k] + 1]++
         for (b in 0 until 180) bucketStart[b + 1] += bucketStart[b]
@@ -508,12 +533,11 @@ class ParkingSlotDetector {
                 if (raw.size >= MAX_LINES) break
                 var n = 0
                 val ct = COS_T[t]; val sn = SIN_T[t]
-                for (db in -(SECTOR + 1)..(SECTOR + 1)) {
-                    val b = ((t + db) % 180 + 180) % 180
-                    for (bq in bucketStart[b] until bucketStart[b + 1]) {
-                        val k = bucketIdx[bq]
-                        if (used[k] || abs(px[k] * ct + py[k] * sn - rho0) > GATHER_TOL0) continue
-                        idxA[n++] = k
+                // 法線角在 t ± (SECTOR+1) 內、離峰值直線 ≤ GATHER_TOL0 的未用像素
+                forNear(ct, sn, rho0, GATHER_TOL0, t - (SECTOR + 1), t + (SECTOR + 1)) { k ->
+                    if (!used[k] && abs(px[k] * ct + py[k] * sn - rho0) <= GATHER_TOL0) {
+                        val dl = abs(pth[k] - t)
+                        if (min(dl, 180 - dl) <= SECTOR + 1) idxA[n++] = k
                     }
                 }
                 java.util.Arrays.sort(idxA, 0, n)
@@ -540,12 +564,10 @@ class ParkingSlotDetector {
                     val nrm = (f[2] * (180.0 / PI) + 90.0) % 180.0
                     var n2 = 0
                     val b0 = ceil(nrm - (SECTOR + 1)).toInt(); val b1 = floor(nrm + (SECTOR + 1)).toInt()
-                    for (bb in b0..b1) {
-                        val b = (bb % 180 + 180) % 180
-                        for (bq in bucketStart[b] until bucketStart[b + 1]) {
-                            val k = bucketIdx[bq]
-                            if (used[k] || abs((px[k] - f[0]) * (-s) + (py[k] - f[1]) * c) > tolF) continue
-                            if (!secOk(pth[k], nrm)) continue
+                    val f0 = f[0]; val f1 = f[1]
+                    forNear(-s, c, f0 * (-s) + f1 * c, tolF, b0, b1) { k ->
+                        if (!used[k] && abs((px[k] - f0) * (-s) + (py[k] - f1) * c) <= tolF &&
+                            ((pth[k] - b0) % 180 + 180) % 180 <= b1 - b0 && secOk(pth[k], nrm)) {
                             val sp = px[k] * d0x + py[k] * d0y
                             if (sp >= s0 - 0.5 * lineGap && sp <= s1 + 0.5 * lineGap) idxB[n2++] = k
                         }
@@ -615,6 +637,50 @@ class ParkingSlotDetector {
             }
             sortPairs(pcs)
             lines.add(Line(mxm, mzm, ux, uz, pcs, kept.size))
+        }
+    }
+
+    /**
+     * 可能落在直線附近、法線角在桶 [b0, b1]（mod 180）的中心線像素索引 → body（呼叫端再做完整判斷）。
+     * 桶裡的像素少就直接掃桶，否則只走直線附近的帶狀區域；兩種走法經過完整判斷後得到同一組像素。
+     */
+    private inline fun forNear(nX: Double, nY: Double, rho: Double, tol: Double, b0: Int, b1: Int, body: (Int) -> Unit) {
+        var cntB = 0
+        for (bb in b0..b1) { val b = (bb % 180 + 180) % 180; cntB += bucketStart[b + 1] - bucketStart[b] }
+        val cntS = (if (abs(nY) >= abs(nX)) w else h) * (2 * tol / max(abs(nX), abs(nY)) + 3)
+        if (cntB <= cntS) {
+            for (bb in b0..b1) {
+                val b = (bb % 180 + 180) % 180
+                for (bq in bucketStart[b] until bucketStart[b + 1]) body(bucketIdx[bq])
+            }
+        } else forStrip(nX, nY, rho, tol, body)
+    }
+
+    /**
+     * 直線 |x·nX + y·nY − rho| ≤ tol（像素中心座標 x = i+0.5−w/2、y = j+0.5−h/2）附近每個中心線像素的索引 → body。
+     * 逐行（或逐列）只走帶狀區域（多留 1 px），呼叫端再做精確判斷，所以結果與掃全部像素相同。
+     */
+    private inline fun forStrip(nX: Double, nY: Double, rho: Double, tol: Double, body: (Int) -> Unit) {
+        val hw = w / 2.0; val hh = h / 2.0
+        if (abs(nY) >= abs(nX)) {
+            for (i in 0 until w) {
+                val x = i + 0.5 - hw
+                val ya = (rho - x * nX - tol) / nY; val yb = (rho - x * nX + tol) / nY
+                val j0 = max(0, floor(min(ya, yb) + hh - 0.5).toInt() - 1)
+                val j1 = min(h - 1, ceil(max(ya, yb) + hh - 0.5).toInt() + 1)
+                var j = j0
+                while (j <= j1) { val k = kOf[j * w + i]; if (k >= 0) body(k); j++ }
+            }
+        } else {
+            for (j in 0 until h) {
+                val y = j + 0.5 - hh
+                val xa = (rho - y * nY - tol) / nX; val xb = (rho - y * nY + tol) / nX
+                val i0 = max(0, floor(min(xa, xb) + hw - 0.5).toInt() - 1)
+                val i1 = min(w - 1, ceil(max(xa, xb) + hw - 0.5).toInt() + 1)
+                val o = j * w
+                var i = i0
+                while (i <= i1) { val k = kOf[o + i]; if (k >= 0) body(k); i++ }
+            }
         }
     }
 
@@ -776,6 +842,118 @@ class ParkingSlotDetector {
     private fun ratioOn(f: Frame, l: Line, ta: Double, tb: Double, strict: Boolean = false): Double =
         ratio(f.onX(l, ta), f.onZ(l, ta), f.onX(l, tb), f.onZ(l, tb), strict)
 
+    // ---------------------------------------------------------------- 線寬（停止線、斑馬線邊線比停車格線寬很多）
+    private var pbuf = IntArray(0)
+    private var pbufL = IntArray(0)
+    private var pbufR = IntArray(0)
+
+    /** (x0, z0) 沿法線 (nx, nz) 的漆通道剖面半高寬（m），步長 mpp/2、±0.45 m；看不到或對比太低回傳 NaN。 */
+    private fun widthAt(x0: Double, z0: Double, nx: Double, nz: Double): Double {
+        val hs = 0.5 * mpp
+        val kK = ceil(0.45 / hs).toInt()
+        val ko = ceil(0.3 / hs).toInt()
+        val kc = (0.12 / hs).toInt()
+        val n = 2 * kK + 1
+        if (pbuf.size < n) { pbuf = IntArray(n); pbufL = IntArray(n); pbufR = IntArray(n) }
+        for (k in -kK..kK) {
+            val o = k * hs
+            val i = floor((x0 + o * nx) / mpp + ocx).toInt()
+            val j = floor(ocy - (z0 + o * nz) / mpp).toInt()
+            if (i < 0 || i >= w || j < 0 || j >= h || state[j * w + i].toInt() != 1) return Double.NaN
+            pbuf[k + kK] = paint[j * w + i]
+        }
+        var pk = kK - kc
+        for (k in kK - kc..kK + kc) if (pbuf[k] > pbuf[pk]) pk = k
+        val nl = kK - ko + 1
+        System.arraycopy(pbuf, 0, pbufL, 0, nl)
+        java.util.Arrays.sort(pbufL, 0, nl)
+        val nr = n - (kK + ko)
+        System.arraycopy(pbuf, kK + ko, pbufR, 0, nr)
+        java.util.Arrays.sort(pbufR, 0, nr)
+        val bg = max(pbufL[nl / 2], pbufR[nr / 2])
+        if (pbuf[pk] - bg < 20) return Double.NaN
+        val thr2 = pbuf[pk] + bg          // 半高門檻 ×2（整數比較）
+        var a = pk
+        while (a > 0 && 2 * pbuf[a - 1] >= thr2) a--
+        var b = pk
+        while (b < 2 * kK && 2 * pbuf[b + 1] >= thr2) b++
+        return (b - a + 1) * hs
+    }
+
+    /**
+     * 線 l 沿各線段每 WSTEP 一點（只取遮罩上的點；離段端 < 0.3 m 的不取，交會處量到的是別條線）的半高寬，
+     * 每條線算一次，存在 l.wT / l.wW。
+     */
+    private fun widthSamples(l: Line) {
+        if (l.wT != null) return
+        val nx = -l.uz; val nz = l.ux
+        var cnt = 0
+        for (k in 0 until l.pieces.size / 2) cnt += max(0, ((l.pieces[2 * k + 1] - l.pieces[2 * k]) / WSTEP).toInt()) + 2
+        val ts = DoubleArray(cnt); val ws = DoubleArray(cnt)
+        var m = 0
+        for (k in 0 until l.pieces.size / 2) {
+            val a = l.pieces[2 * k]; val b = l.pieces[2 * k + 1]
+            var q = 0
+            while (true) {
+                val t = a + 0.3 + WSTEP * q
+                if (t > b - 0.3) break
+                q++
+                val x = l.cx + t * l.ux; val z = l.cz + t * l.uz
+                val i = floor(x / mpp + ocx).toInt()
+                val j = floor(ocy - z / mpp).toInt()
+                if (i < 0 || i >= w || j < 0 || j >= h || !dil[j * w + i]) continue
+                val v = widthAt(x, z, nx, nz)
+                if (!v.isNaN()) { ts[m] = t; ws[m] = v; m++ }
+            }
+        }
+        l.wT = ts; l.wW = ws; l.wN = m
+    }
+
+    private var wmed = DoubleArray(64)
+
+    /** 線 l 在參數 [lo, hi] 內（且 |t - t0| ≥ gap）的半高寬（下）中位數；不到 nmin 點回傳 NaN。 */
+    private fun widthMed(l: Line, lo: Double, hi: Double, gap: Double = -1.0, t0: Double = 0.0, nmin: Int = 2): Double {
+        widthSamples(l)
+        val ts = l.wT!!
+        if (wmed.size < l.wN) wmed = DoubleArray(l.wN + 16)
+        var m = 0
+        for (q in 0 until l.wN) {
+            val t = ts[q]
+            if (lo <= t && t <= hi && abs(t - t0) >= gap) wmed[m++] = l.wW[q]
+        }
+        if (m < nmin) return Double.NaN
+        java.util.Arrays.sort(wmed, 0, m)
+        return wmed[(m - 1) / 2]
+    }
+
+    /** 橫邊與長邊的線寬差很多（停止線、機車停等區、斑馬線邊線 0.3 m 以上，停車格線 0.10–0.15 m）→ true。 */
+    private fun wideCross(la: Line, lb: Line, cl: Line, pA: DoubleArray, pB: DoubleArray): Boolean {
+        val ta = (pA[0] - cl.cx) * cl.ux + (pA[1] - cl.cz) * cl.uz
+        val tb = (pB[0] - cl.cx) * cl.ux + (pB[1] - cl.cz) * cl.uz
+        if (abs(tb - ta) < 0.9) return false
+        // 橫邊寬度：兩條長邊之間的局部值與整條線的值取大（磨損的停止線局部可能只剩細細一條；被自車擋住時量不到）
+        val wl = widthMed(cl, min(ta, tb) + 0.25, max(ta, tb) - 0.25)
+        val wa = widthMed(cl, -1e9, 1e9, nmin = 3)
+        if (wl.isNaN() && wa.isNaN()) return false
+        val wc = max(if (wl.isNaN()) -1.0 else wl, if (wa.isNaN()) -1.0 else wa)
+        var ws = -1.0
+        for (which in 0..1) {                       // 長邊：交點前後 0.3–1.5 m
+            val x = if (which == 0) la else lb
+            val p = if (which == 0) pA else pB
+            val t0 = (p[0] - x.cx) * x.ux + (p[1] - x.cz) * x.uz
+            val v = widthMed(x, t0 - 1.5, t0 + 1.5, 0.3, t0)
+            if (!v.isNaN()) ws = max(ws, v)
+        }
+        if (ws < 0) {
+            for (which in 0..1) {
+                val v = widthMed(if (which == 0) la else lb, -1e9, 1e9, nmin = 3)
+                if (!v.isNaN()) ws = max(ws, v)
+            }
+        }
+        if (ws < 0) return false
+        return (wc >= WIDE_MIN && wc >= WIDE_RATIO * ws) || (ws >= WIDE_MIN && ws >= WIDE_RATIO * wc)
+    }
+
     // ---------------------------------------------------------------- 3. 長邊對 → 橫邊 → 格子
     private fun pair(a: Int, b: Int, cells: ArrayList<Cell>) {
         val la = lines[a]; val lb = lines[b]
@@ -889,7 +1067,8 @@ class ParkingSlotDetector {
                 val sb = StringBuilder()
                 // 垂直 / 斜角格：橫邊是長邊對的終點（另一側沒有線），長邊不能太長（車道線）
                 val term = !(ga > 0.3 || gb > 0.3)
-                if (term && max(lA, lB) <= LANE_LEN &&
+                // 斜角格兩條分隔線都要真的伸進格內：斜紋、網狀線、字的筆畫湊出的斜格常常只有一條
+                if (term && max(lA, lB) <= LANE_LEN && (c.perp || min(lA, lB) >= SEP_MIN_A) &&
                     !(1.4 <= max(lA, lB) && max(lA, lB) <= 4.2 && realEnd(la, f, eA, s) && realEnd(lb, f, eB, s))) {
                     sb.append(if (c.perp) 'p' else 'a')
                 }
@@ -941,6 +1120,7 @@ class ParkingSlotDetector {
         val okA = rAp >= 0.4 || rAm >= 0.4 || (rAp.isNaN() && rAm.isNaN())
         val okB = rBp >= 0.4 || rBm >= 0.4 || (rBp.isNaN() && rBm.isNaN())
         if (!(okA && okB)) return null
+        if (wideCross(la, lb, lines[ci], pA, pB)) return null
         val km = if (!cA.isNaN() && !cB.isNaN()) (cA + cB) / 2.0 else if (!cA.isNaN()) cA else if (!cB.isNaN()) cB else 0.0
         val ev = max(if (rc.isNaN()) 0.0 else rc, km)
         val cosang = abs(vx * f.ux + vz * f.uz)
@@ -1014,7 +1194,7 @@ class ParkingSlotDetector {
             if (rA.isNaN() || rB.isNaN() || rA < 0.6 || rB < 0.6 || w > OPEN_WMAX) return null
         }
         // 格內不得有平行線 / 橫線
-        if (interior(f, c.a, c.b, tA0, tA1, tB0, tB1)) return null
+        if (interior(f, c.a, c.b, tA0, tA1, tB0, tB1, c0, c1)) return null
         val rsep = if (!rA.isNaN() && !rB.isNaN()) (rA + rB) / 2.0 else if (!rA.isNaN()) rA else if (!rB.isNaN()) rB else 0.3
         val cfrac = if (cornersN > 0) cornersOk.toDouble() / cornersN else 0.5
         var endsEv = 0.0
@@ -1025,7 +1205,41 @@ class ParkingSlotDetector {
         val score = 0.35 * min(1.0, rsep / 0.8) + 0.15 * endsEv + 0.25 * cfrac + 0.1 * (if (c1 != null) 1.0 else 0.0)
         if (score < 0.40) return null
         if (clutter(ak, bk, bm, am) > CLUTTER_MAX) return null
+        if (ring(ak, bk, am) > RING_MAX) return null
         return Cand(c, kinds.toString(), ak, bk, am, bm, score, row)
+    }
+
+    /**
+     * 格子外圍 RING 寬的一圈（o→pa、o→pb 張成的平行四邊形往外擴）看得到的像素中標線遮罩的比例。
+     * 植草磚、連鎖磚這類整片紋理會很高；停車場裡格子旁邊多半是空的地面。每 2 px 取樣。
+     */
+    private fun ring(o: DoubleArray, pa: DoubleArray, pb: DoubleArray): Double {
+        val ax = pa[0] - o[0]; val az = pa[1] - o[1]
+        val bx = pb[0] - o[0]; val bz = pb[1] - o[1]
+        val la = hypot(ax, az); val lb = hypot(bx, bz)
+        if (la < 1e-6 || lb < 1e-6) return 0.0
+        val ea = RING / la; val eb = RING / lb
+        val na = ceil((la + 2 * RING) / (2 * mpp)).toInt()
+        val nb = ceil((lb + 2 * RING) / (2 * mpp)).toInt()
+        var n = 0; var m = 0
+        for (q in 0..nb) {
+            val fb = -eb + (1 + 2 * eb) * q / nb
+            val inb = 0.0 <= fb && fb <= 1.0
+            for (k in 0..na) {
+                val fa = -ea + (1 + 2 * ea) * k / na
+                if (inb && 0.0 <= fa && fa <= 1.0) continue
+                val x = o[0] + fa * ax + fb * bx
+                val z = o[1] + fa * az + fb * bz
+                val i = floor(x / mpp + ocx).toInt()
+                val j = floor(ocy - z / mpp).toInt()
+                if (i < 0 || i >= w || j < 0 || j >= h) continue
+                val p = j * w + i
+                if (state[p].toInt() != 1) continue
+                n++
+                if (mask[p]) m++
+            }
+        }
+        return if (n >= 30) m.toDouble() / n else 0.0
     }
 
     /** 格內（往中心縮 15 %）看得到的像素中標線遮罩的比例；草叢、樹影拖曳的雜線會很高。每 2 px 取樣。 */
@@ -1068,11 +1282,41 @@ class ParkingSlotDetector {
         return if (n >= 20) m.toDouble() / n else 0.0
     }
 
+    private var stubR = DoubleArray(0)
+
     /** 格內有與長邊平行的線（機車格、兩格合成一格）或橫過的線 → true。車框內不算。 */
-    private fun interior(f: Frame, ia: Int, ib: Int, tA0: Double, tA1: Double, tB0: Double, tB1: Double): Boolean {
+    private fun interior(
+        f: Frame, ia: Int, ib: Int, tA0: Double, tA1: Double, tB0: Double, tB1: Double, c0: Crossing, c1: Crossing?
+    ): Boolean {
         val la = lines[ia]; val lb = lines[ib]
         val sA = if (tA1 >= tA0) 1.0 else -1.0
         val sB = if (tB1 >= tB0) 1.0 else -1.0
+        // 從真的橫邊伸進格內的短分隔線頭（機車格的 T 字、每 1 m 一格）→ 不是汽車格。
+        // 沿橫邊在寬度 20–80 % 處逐點往格內探 STUB_IN（直接看遮罩，短線頭常常抽不成 Hough 線）；
+        // 線頭是細的：該點命中、左右各 0.2 m 的探針都沒命中（橫向的東西會讓三支都命中）。
+        for (side in 0..1) {
+            val cr = (if (side == 0) c0 else c1) ?: continue
+            if (cr.open) continue
+            val sg = if (side == 0) sA else -sA
+            val ax = cr.pAx; val az = cr.pAz; val bx = cr.pBx; val bz = cr.pBz
+            val wd = hypot(bx - ax, bz - az)
+            val sn = abs(f.ux * (bz - az) - f.uz * (bx - ax)) / max(wd, 1e-9)
+            val e0 = 0.1 / max(sn, 0.5)
+            val m = ceil(0.6 * wd / mpp).toInt()
+            val dl = Math.rint(0.2 / (0.6 * wd / m)).toInt()
+            val nr = m + 2 * dl + 1
+            if (stubR.size < nr) stubR = DoubleArray(nr + 16)
+            for (k in -dl..m + dl) {
+                val fr = 0.2 + 0.6 * k / m
+                val px = ax + (bx - ax) * fr; val pz = az + (bz - az) * fr
+                seg(px + sg * e0 * f.ux, pz + sg * e0 * f.uz, px + sg * (e0 + STUB_IN) * f.ux, pz + sg * (e0 + STUB_IN) * f.uz, true)
+                stubR[k + dl] = if (segVis >= 0.8 * segN) segHit.toDouble() / segVis else -1.0   // 被擋住 / 看不到 → 不判斷
+            }
+            for (k in 0..m) {
+                val l0 = stubR[k]; val l2 = stubR[k + 2 * dl]
+                if (stubR[k + dl] >= 0.7 && 0.0 <= l0 && l0 < 0.4 && 0.0 <= l2 && l2 < 0.4) return true
+            }
+        }
         val a0x = f.onX(la, tA0 + sA * 0.5); val a0z = f.onZ(la, tA0 + sA * 0.5)
         val a1x = f.onX(la, tA1 - sA * 0.5); val a1z = f.onZ(la, tA1 - sA * 0.5)
         val b0x = f.onX(lb, tB0 + sB * 0.5); val b0z = f.onZ(lb, tB0 + sB * 0.5)
@@ -1103,8 +1347,9 @@ class ParkingSlotDetector {
             if (abs(x.ux * uz - x.uz * ux) <= SIN_PAR) {
                 val off = ((x.cx - pAx) * nx + (x.cz - pAz) * nz) / wB
                 if (off <= 0.15 || off >= 0.85 || hi - lo < 0.6) continue
+                // 命中比例高，或看得到的線夠長（斜紋禁停區的斜線常常只有一段在格內）
                 val r = ratioOn(f, x, lo, hi, true)
-                if (r >= 0.45) return true
+                if (!r.isNaN() && (r >= 0.45 || segHit * (hi - lo) / segN >= INNER_PAR)) return true
             } else if (abs(x.ux * ux + x.uz * uz) <= COS_CROSS) {
                 val pA = intersect(la, x) ?: continue
                 val pB = intersect(lb, x) ?: continue
@@ -1124,10 +1369,20 @@ class ParkingSlotDetector {
         return false
     }
 
-    /** 只有分隔線的單側格：成排（與別格共用分隔線），或分隔線明顯斜於車頭方向（車道線多半與車身平行）。 */
+    /**
+     * 只有分隔線的單側格：成排（與別格共用分隔線），或分隔線明顯斜於車頭方向（車道線多半與車身平行）。
+     * 成排時鄰格的入口邊（開口端或入口線）方向要一致；不一致是被柱子 / 磨損截短的分隔線湊出的鋸齒，不算。
+     */
     private fun rowOk(c: Cand, all: List<Cand>): Boolean {
-        for (d in all) if (d !== c && longNeighbors(c.cell, d.cell)) return true
-        return abs(c.cell.f.uz) < COS_CROSS
+        val a = c.cell.c0
+        var zig = false
+        for (d in all) {
+            if (d === c || !longNeighbors(c.cell, d.cell)) continue
+            val b = d.cell.c0
+            if (abs(a.vx * b.vz - a.vz * b.vx) > SIN_12) { zig = true; continue }
+            return true
+        }
+        return !zig && abs(c.cell.f.uz) < COS_CROSS
     }
 
     private fun cellRange(cell: Cell, which: Int): DoubleArray {
