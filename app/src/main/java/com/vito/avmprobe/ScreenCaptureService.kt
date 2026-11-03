@@ -336,6 +336,8 @@ class ScreenCaptureService : Service() {
                 groundUrl?.let { payload.put("ground", it) }
                 road?.let { payload.put("road", it) }
                 slotsArr?.let { payload.put("slots", it) }
+                val vs = VehicleBus.signals.snapshot()
+                if (!vs.isEmpty) payload.put("veh", VehicleSignals.toJson(vs))
                 tl?.let { payload.put("tl", it) }
                 p.push(payload.toString())
             }

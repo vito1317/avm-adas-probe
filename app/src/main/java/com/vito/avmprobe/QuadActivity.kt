@@ -535,6 +535,8 @@ class QuadActivity : AppCompatActivity(), CameraQuadSource.Listener {
                 .put("er", rd.edgeR?.let { r2(it) } ?: JSONObject.NULL))
         }
         if (now - slotsAt < BEV_TTL_MS && slots.isNotEmpty()) p.put("slots", slotsJson(slots, false))
+        val vs = VehicleBus.signals.snapshot()
+        if (!vs.isEmpty) p.put("veh", VehicleSignals.toJson(vs))
         val t = tl
         if (t != null && now - t.at < TL_TTL_MS) {
             p.put("tl", JSONObject().put("s", t.s).put("c", r2(t.c)).put("ax", r2(t.ax)))
