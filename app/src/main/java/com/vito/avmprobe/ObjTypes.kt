@@ -35,6 +35,13 @@ object ObjTypes {
         else -> 0.5f
     }
 
+    /** NMS 分群：四輪車互相抑制、兩輪車互相抑制，其他各自一群。 */
+    fun group(t: String): String = when (t) {
+        "car", "van", "truck", "bus" -> "veh"
+        "moto", "bigbike", "bike" -> "two"
+        else -> t
+    }
+
     /**
      * hasScooter：模型自己分得出速克達時，motorcycle 才算「重機」；
      * COCO 的 motorcycle 涵蓋台灣的機車，就當機車。
@@ -42,9 +49,9 @@ object ObjTypes {
     fun typeOf(label: String, hasScooter: Boolean): String? = when (label.trim().lowercase()) {
         "person", "pedestrian" -> "ped"
         "bicycle" -> "bike"
-        "car", "sedan", "suv", "taxi", "sports car", "sedan car" -> "car"
-        "van", "minibus", "minivan" -> "van"
-        "truck", "heavy truck", "pickup truck", "pickup" -> "truck"
+        "car", "sedan", "suv", "taxi", "sports car", "sedan car", "race car" -> "car"
+        "van", "minibus", "minivan", "ambulance" -> "van"
+        "truck", "heavy truck", "pickup truck", "pickup", "fire truck", "machinery vehicle" -> "truck"
         "bus" -> "bus"
         "scooter", "moped" -> "moto"
         "motorcycle", "motorbike", "heavy motorcycle" -> if (hasScooter) "bigbike" else "moto"

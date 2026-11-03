@@ -1,0 +1,16 @@
+person
+car
+suv
+sports car
+race car
+van
+ambulance
+truck
+pickup truck
+fire truck
+machinery vehicle
+bus
+motorcycle
+bicycle
+traffic cone
+traffic light

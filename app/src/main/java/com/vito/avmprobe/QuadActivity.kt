@@ -341,10 +341,17 @@ class QuadActivity : AppCompatActivity(), CameraQuadSource.Listener {
         pushPayload(g, det, now)
     }
 
-    /** 偵測順序：左右兩側優先（行車時主要看旁車），前後各一次，紅綠燈再插一輪。 */
+    /**
+     * 偵測順序（鏡頭:區塊）：左右兩側優先（行車時主要看旁車），前後各一次，紅綠燈再插一輪。
+     * 整個魚眼象限縮到模型輸入會讓車小到抓不到（實車畫面 0/8），所以只送正方形裁切：
+     * 側鏡頭分前後兩塊（a、b，重疊 12%），前後鏡頭取中央一塊（c）。
+     */
     private fun slots(): List<String> {
         val en = prefs.camDetect.mapNotNull { LETTER[it] }.toSet()
-        val out = listOf("left", "right", "front", "left", "right", "rear").filter { it in en }.toMutableList()
+        val out = listOf(
+            "left:a", "right:a", "left:b", "right:b", "front:c",
+            "left:a", "right:a", "left:b", "right:b", "rear:c"
+        ).filter { it.substringBefore(':') in en }.toMutableList()
         if (prefs.camTrafficLight) out.add(SLOT_TL)
         return out
     }
@@ -360,12 +367,20 @@ class QuadActivity : AppCompatActivity(), CameraQuadSource.Listener {
         }
     }
 
-    private fun runCamera(det: Yolo, g: AvmGeometry, name: String, qw: Int, qh: Int) {
+    private fun runCamera(det: Yolo, g: AvmGeometry, slot: String, qw: Int, qh: Int) {
+        val name = slot.substringBefore(':')
         val cam = g.cam(name) ?: return
         val qx0 = (cam.quad % 2) * qw
         val qy0 = (cam.quad / 2) * qh
-        val (dets, inf) = det.detectWith(qw, qh, qx0.toFloat(), qy0.toFloat()) { buf, nchw, size, lb ->
-            frame.fillModelInput(qx0, qy0, qw, qh, buf, nchw, size, lb)
+        // 正方形裁切（邊長 = 象限高度）：a 靠左、b 靠右、c 置中
+        val side = qh.coerceAtMost(qw)
+        val rx0 = qx0 + when (slot.substringAfter(':')) {
+            "a" -> 0
+            "b" -> qw - side
+            else -> (qw - side) / 2
+        }
+        val (dets, inf) = det.detectWith(side, qh, rx0.toFloat(), qy0.toFloat()) { buf, nchw, size, lb ->
+            frame.fillModelInput(rx0, qy0, side, qh, buf, nchw, size, lb)
         }
         emaInfer = ema(emaInfer, inf.toFloat())
         val now = SystemClock.elapsedRealtime()
@@ -378,14 +393,14 @@ class QuadActivity : AppCompatActivity(), CameraQuadSource.Listener {
             }
             val u = d.rect.centerX() - qx0
             val v = d.rect.bottom - qy0
-            // 框貼著畫面底邊又很寬：拍到自己的車身（引擎蓋、車門、保險桿）
-            if (v > qh * 0.97f && d.rect.width() > qw * 0.55f) continue
+            // 框貼著畫面底邊又幾乎跟裁切一樣寬：拍到自己的車身（引擎蓋、車門、保險桿）
+            if (v > qh * 0.97f && d.rect.width() > side * 0.85f) continue
             val w = toWorld(g, cam, u.toDouble(), v.toDouble(), qw, qh, d.type) ?: continue
             objs.add(WObj(d.type, w[0], w[1], d.score, w[2]))
             boxes.add(QuadOverlayView.Box(
                 RectF(d.rect), "${NAMES[d.type] ?: d.label} ${"%.1f".format(w[2])}m", w[2] < 1.2f))
         }
-        camResults[name] = CamResult(now, objs, boxes)
+        camResults[slot] = CamResult(now, objs, boxes)
     }
 
     private fun runTrafficLightPass(det: Yolo, g: AvmGeometry, qw: Int, qh: Int) {

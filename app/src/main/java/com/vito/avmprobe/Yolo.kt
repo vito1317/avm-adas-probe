@@ -259,7 +259,8 @@ class Yolo(
             val it = sorted.iterator()
             while (it.hasNext()) {
                 val d = it.next()
-                if (d.classId == best.classId && iou(best.rect, d.rect) > iouThreshold) {
+                // 同一群（四輪車 / 兩輪車 / 其他各自）互相抑制：同一台車常同時被標成 car 和 truck
+                if (ObjTypes.group(d.type) == ObjTypes.group(best.type) && iou(best.rect, d.rect) > iouThreshold) {
                     it.remove()
                 }
             }

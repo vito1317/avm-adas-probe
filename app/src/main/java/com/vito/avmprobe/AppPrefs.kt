@@ -14,12 +14,24 @@ class AppPrefs(context: Context) {
         context.getSharedPreferences("avm_probe", Context.MODE_PRIVATE)
 
     companion object {
-        /** 列出 assets 裡所有 model_*.tflite（顯示名稱, 檔名），小的在前。 */
+        /** 列出 assets 裡所有 model_*.tflite（顯示名稱, 檔名）：一般 COCO 模型小的在前，車種細分放最後。 */
         fun models(context: Context): List<Pair<String, String>> =
             (context.assets.list("")?.toList() ?: emptyList())
                 .filter { it.startsWith("model_") && it.endsWith(".tflite") }
-                .sortedWith(compareBy({ it.filter(Char::isDigit).take(3).toIntOrNull() ?: 0 }, { it }))
-                .map { it.removePrefix("model_").removeSuffix(".tflite") to it }
+                .sortedWith(compareBy({ it.contains("o365") }, { inputSizeOf(it) }, { it }))
+                .map { displayName(it) to it }
+
+        private fun inputSizeOf(file: String): Int =
+            Regex("_(\\d{3})(_int8)?\\.tflite$").find(file)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+
+        private fun displayName(file: String): String {
+            val size = inputSizeOf(file)
+            return when {
+                file.contains("o365") -> "車種細分 $size"          // Objects365：多箱型車、三角錐，較慢
+                file.contains("int8") -> "$size int8"
+                else -> file.removePrefix("model_").removeSuffix(".tflite")
+            }
+        }
 
         const val PANEL_RIGHT = "right"
         const val PANEL_LEFT = "left"
