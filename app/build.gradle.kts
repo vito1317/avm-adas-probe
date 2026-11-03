@@ -20,8 +20,12 @@ android {
         applicationId = "com.vito.avmprobe"
         minSdk = 26
         targetSdk = 34
-        versionCode = 3
-        versionName = "0.3"
+        versionCode = 4
+        versionName = "0.3.1"
+    }
+
+    buildFeatures {
+        aidl = true   // com.ts.tsspeechlib.car.ITsSpeechCar（車機車身訊號服務）
     }
 
     signingConfigs {

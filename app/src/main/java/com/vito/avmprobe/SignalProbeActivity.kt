@@ -95,6 +95,14 @@ class SignalProbeActivity : AppCompatActivity() {
             setOnClickListener { exportAvm() }
         }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         col.addView(row)
+        col.addView(Button(this).apply {
+            text = "車身訊號 20 秒（方向燈／倒車／方向盤／雷達）"; isAllCaps = false
+            setOnClickListener { watchSignals() }
+        })
+        col.addView(Button(this).apply {
+            text = "匯出環景校正檔（calibinfo / lens / sensor）"; isAllCaps = false
+            setOnClickListener { exportCalib() }
+        })
         logView = TextView(this).apply {
             textSize = 12f
             typeface = Typeface.MONOSPACE
@@ -105,6 +113,56 @@ class SignalProbeActivity : AppCompatActivity() {
 
         append("掃描中（讀廠商 App，約 10–60 秒）…")
         thread(name = "signal-scan") { scan() }
+    }
+
+    /**
+     * 直接看 HeadUnitSignalAdapter 的現況：AIDL 有沒有 bind 上、收到哪些廣播、
+     * 以及 20 秒內讀到的原始值（方向盤 eps、雷達等級、IsCameraMode）。
+     * 原始值才是關鍵：正負號、索引順序、語意都要靠實車數值才能定下來。
+     */
+    private fun watchSignals() {
+        val ad = AvmApp.headUnit
+        if (ad == null) { append("\n== 車身訊號：adapter 沒啟動（AvmApp 沒跑到？）"); return }
+        append(
+            "\n== 車身訊號 20 秒開始。請依序做：左燈 3 秒 → 右燈 3 秒 → 雙閃 3 秒 →" +
+                "（停好）排 R → 方向盤左打到底 → 右打到底 → 回正 → 讓車尾 1 m 內有東西"
+        )
+        thread(name = "signal-watch") {
+            val t0 = SystemClock.elapsedRealtime()
+            var last = ""
+            while (SystemClock.elapsedRealtime() - t0 < 20_000L) {
+                val st = ad.status()
+                val s = VehicleBus.signals.snapshot()
+                val line = buildString {
+                    append("bind=").append(if (st.bound) "OK" else "NO")
+                    st.bindError?.let { append('(').append(it).append(')') }
+                    append(" poll=").append(st.polls).append('/').append(st.pollErrors)
+                    append(" | turn=").append(s.turn ?: '-')
+                    append(" gear=").append(s.gear ?: '-')
+                    append(" steer=").append(s.steerDeg?.let { "%.0f".format(it) } ?: "-")
+                    append(" spd=").append(s.speedKmh?.let { "%.0f".format(it) } ?: "-")
+                    append(" eps=").append(st.lastEps ?: "-")
+                    append(" cam=").append(st.lastCameraMode ?: "-")
+                    append("\n  fr=").append(st.lastFrRadar ?: "-")
+                    append("\n  lr=").append(st.lastLrRadar ?: "-")
+                    append("\n  pdcF=").append(s.pdcFront?.joinToString { fmtD(it) } ?: "-")
+                    append(" pdcR=").append(s.pdcRear?.joinToString { fmtD(it) } ?: "-")
+                }
+                if (line != last) { append(line); last = line }
+                Thread.sleep(200)
+            }
+            val st = ad.status()
+            append("\n== 車身訊號結束。收到的廣播（${st.actionsSeen.size}）：")
+            if (st.actionsSeen.isEmpty()) append("  （一個都沒收到）")
+            else st.actionsSeen.forEach { append("  $it") }
+            append("按「存檔」把結果傳回來。")
+        }
+    }
+
+    private fun fmtD(d: Float): String = when {
+        d.isNaN() -> "故障"
+        d.isInfinite() || d >= VehicleSignals.PDC_CLEAR -> "空"
+        else -> "%.2f".format(d)
     }
 
     private fun append(s: String) = main.post {
@@ -402,6 +460,61 @@ class SignalProbeActivity : AppCompatActivity() {
             }
         }
     }
+
+    /**
+     * 全景360 的校正結果是純文字 Lua（calibinfo.lua），鏡頭畸變表在 lens.lua。
+     * 路徑依平台而定（見 docs/head-unit-signals.md），所以候選全試一遍，讀得到就匯出。
+     * /sdcard 下的 .Baios360/birdview/res 一般第三方讀得到；/cache、/lsecfs 多半要 root。
+     */
+    private fun exportCalib() {
+        val romRes = "/storage/emulated/0/.Baios360/birdview/res"
+        val candidates = listOf(
+            "/cache/config/calibinfo.lua",
+            "/lsecfs/calibinfo.lua",
+            "/data/zq_factory/calibinfo.lua",
+            "/storage/emulated/0/.Baios360/birdview/cali/calibinfo.lua",
+            "$romRes/lens.lua",
+            "$romRes/sensor.lua",
+            "$romRes/cartype.lua",
+            "$romRes/camera_module.lua",
+        )
+        append("\n== 匯出環景校正檔")
+        thread(name = "calib-export") {
+            var got = 0
+            for (p in candidates) {
+                val f = java.io.File(p)
+                when {
+                    !f.exists() -> append("  －  $p（不存在）")
+                    !f.canRead() -> append("  ×  $p（存在但讀不到，需要 root）")
+                    else -> try {
+                        val out = MediaSaver.saveFile(this, f.name, "text/plain", f)
+                        append("  ✓  $p  ${f.length()} bytes → $out")
+                        got++
+                    } catch (t: Throwable) {
+                        append("  ×  $p 匯出失敗：${t.message}")
+                    }
+                }
+            }
+            // 平台判定用的屬性：決定 calibinfo.lua 到底在哪個目錄
+            append("  平台屬性：")
+            for (k in listOf("persist.vendor.reversing.type", "ro.fyt.platform", "car.hw_name",
+                    "persist.xy.platform", "ro.forfan.avm.chiptype", "persist.avm.type")) {
+                append("    $k = ${getProp(k)}")
+            }
+            // 列目錄，路徑猜錯時才知道該往哪找
+            for (d in listOf(romRes, "/storage/emulated/0/.Baios360", "/storage/emulated/0/.Baios360/birdview")) {
+                val dir = java.io.File(d)
+                val ls = runCatching { dir.list()?.joinToString(" ") }.getOrNull()
+                append("  目錄 $d → ${ls ?: if (dir.exists()) "（讀不到）" else "（不存在）"}")
+            }
+            append(if (got > 0) "  匯出 $got 個檔，請一起傳回來。" else "  一個都讀不到——把上面的目錄列表傳回來，我再找。")
+        }
+    }
+
+    private fun getProp(key: String): String = try {
+        Runtime.getRuntime().exec(arrayOf("getprop", key)).inputStream
+            .bufferedReader().readText().trim().ifEmpty { "(空)" }
+    } catch (t: Throwable) { "讀取失敗：${t.message}" }
 
     private fun save() {
         val ts = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
