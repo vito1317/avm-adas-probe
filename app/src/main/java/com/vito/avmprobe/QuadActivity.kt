@@ -54,7 +54,7 @@ import kotlin.math.sin
 class QuadActivity : AppCompatActivity(), CameraQuadSource.Listener {
 
     companion object {
-        private const val OBJ_TTL_MS = 1000L
+        private const val OBJ_TTL_MS = 1300L   // > 鏡頭重訪週期（FPS 掉到 10 時一輪 1.3 s）
         private const val TL_TTL_MS = 1200L
         private const val BEV_TTL_MS = 1500L
         private const val EGO_HW = 0.925f   // 自車半寬 / 半長（m）
@@ -100,6 +100,13 @@ class QuadActivity : AppCompatActivity(), CameraQuadSource.Listener {
     private var frameNo = 0L
     private val camResults = HashMap<String, CamResult>()
     private var tl: TlResult? = null
+    // 多目標追蹤 + 盲點/變道輔助（只在 frames 執行緒呼叫，不用鎖）
+    // camPos 只給位置不給軸向：一次只送半個 FOV 的裁切，countMisses 的整鏡視野錐會記假 miss（見 runCamera）
+    private val trackMgr = TrackManager(camPos = TrackManager.DEFAULT_CAMS.mapValues { it.value.copyOf(2) })
+    private val lca = LaneChangeAssist()
+    private var tracks: List<Track> = emptyList()
+    private var tracksAt = 0L
+    @Volatile private var lcaState: LcaState? = null
 
     // ---- 俯視圖辨識（道路、三角錐、停車格、地面貼圖）在 ground 執行緒，結果用 volatile 交給 frames ----
     private val groundThread = HandlerThread("ground").apply { start() }
@@ -285,6 +292,12 @@ class QuadActivity : AppCompatActivity(), CameraQuadSource.Listener {
         super.onStop()
         started = false
         source.stop()       // 一定要放掉鏡頭：倒車時全景360 要用
+        source.frames.post {   // 舊軌跡與轉向意圖遲滯不留到鏡頭重啟後
+            trackMgr.reset()
+            lca.reset()
+            tracks = emptyList()
+            lcaState = null
+        }
         mapSrc?.stop()
         mapSrc = null
         web.view.onPause()
@@ -323,12 +336,13 @@ class QuadActivity : AppCompatActivity(), CameraQuadSource.Listener {
 
         val det = yolo ?: initYolo() ?: return overlay.update(emptyList(), statusText())
 
+        val vs = VehicleBus.signals.snapshot()   // 這一幀共用：追蹤、變道輔助、payload 的 veh
         val qw = frame.width / 2
         val qh = frame.height / 2
         val slots = slots()
         if (slots.isNotEmpty()) {
             val s = slots[(slotIdx++) % slots.size]
-            if (s == SLOT_TL) runTrafficLightPass(det, g, qw, qh) else runCamera(det, g, s, qw, qh)
+            if (s == SLOT_TL) runTrafficLightPass(det, g, qw, qh) else runCamera(det, g, s, qw, qh, vs, t0)
         }
         val now = SystemClock.elapsedRealtime()
         if (prefs.camBev && !groundBusy) runBev(g, now)
@@ -338,19 +352,21 @@ class QuadActivity : AppCompatActivity(), CameraQuadSource.Listener {
         if (lastFrameAt != 0L) emaFps = ema(emaFps, 1000f / max(1L, t0 - lastFrameAt))
         lastFrameAt = t0
 
-        pushPayload(g, det, now)
+        pushPayload(g, det, now, vs)
     }
 
     /**
-     * 偵測順序（鏡頭:區塊）：左右兩側優先（行車時主要看旁車），前後各一次，紅綠燈再插一輪。
+     * 偵測順序（鏡頭:區塊）：左右兩側優先（行車時主要看旁車），前後鏡頭每輪各兩次、兩次之間
+     * 等距——候選軌跡 1 s 內要第二次命中（TrackManager.TENTATIVE_MS），重訪週期必須壓在 1 s 內，
+     * 後方來車預警也要更高的更新率。紅綠燈再插一輪。
      * 整個魚眼象限縮到模型輸入會讓車小到抓不到（實車畫面 0/8），所以只送正方形裁切：
      * 側鏡頭分前後兩塊（a、b，重疊 12%），前後鏡頭取中央一塊（c）。
      */
     private fun slots(): List<String> {
         val en = prefs.camDetect.mapNotNull { LETTER[it] }.toSet()
         val out = listOf(
-            "left:a", "right:a", "left:b", "right:b", "front:c",
-            "left:a", "right:a", "left:b", "right:b", "rear:c"
+            "left:a", "right:a", "rear:c", "left:b", "right:b", "front:c",
+            "left:a", "right:a", "rear:c", "left:b", "right:b", "front:c"
         ).filter { it.substringBefore(':') in en }.toMutableList()
         if (prefs.camTrafficLight) out.add(SLOT_TL)
         return out
@@ -367,7 +383,8 @@ class QuadActivity : AppCompatActivity(), CameraQuadSource.Listener {
         }
     }
 
-    private fun runCamera(det: Yolo, g: AvmGeometry, slot: String, qw: Int, qh: Int) {
+    /** atMs：這一幀的擷取時間（onFrame 的 t0），給追蹤補償推論延遲。 */
+    private fun runCamera(det: Yolo, g: AvmGeometry, slot: String, qw: Int, qh: Int, vs: VehicleState, atMs: Long) {
         val name = slot.substringBefore(':')
         val cam = g.cam(name) ?: return
         val qx0 = (cam.quad % 2) * qw
@@ -386,6 +403,7 @@ class QuadActivity : AppCompatActivity(), CameraQuadSource.Listener {
         val now = SystemClock.elapsedRealtime()
         val objs = ArrayList<WObj>()
         val boxes = ArrayList<QuadOverlayView.Box>()
+        val tDets = ArrayList<Det>()
         for (d in dets) {
             if (d.type == ObjTypes.LIGHT) {
                 if (name == "front") considerTrafficLight(g, cam, d, qx0, qy0, qw, qh, now)
@@ -397,10 +415,53 @@ class QuadActivity : AppCompatActivity(), CameraQuadSource.Listener {
             if (v > qh * 0.97f && d.rect.width() > side * 0.85f) continue
             val w = toWorld(g, cam, u.toDouble(), v.toDouble(), qw, qh, d.type) ?: continue
             objs.add(WObj(d.type, w[0], w[1], d.score, w[2]))
+            // 只收真實地面命中：地平線 fallback 的假距離會變假速度 → 假的後方來車警告
+            if (w[3] > 0f) tDets.add(Det(d.type, w[0], w[1], d.score, cam = name, atMs = atMs))
             boxes.add(QuadOverlayView.Box(
                 RectF(d.rect), "${NAMES[d.type] ?: d.label} ${"%.1f".format(w[2])}m", w[2] < 1.2f))
         }
         camResults[slot] = CamResult(now, objs, boxes)
+
+        // 追蹤 + 變道輔助。cam 傳 null：一次只送半個 FOV 的裁切，傳鏡頭名稱會讓 countMisses
+        // 對不在本次裁切內的軌跡記假 miss、在確認前殺掉盲點軌跡；假軌跡改由 TENTATIVE_MS / COAST_MS 逾時清除。
+        // 車速：排檔 R 時為負（GPS/CAN 只有速率）
+        val ego = vs.speedKmh?.div(3.6f)?.let { if (vs.gear == 'R') -it else it }
+        tracks = trackMgr.update(tDets, now, ego, egoYawRate = null, cam = null)
+        tracksAt = now
+        val rd = road
+        val lane = if (prefs.groundMode == AppPrefs.GROUND_VIRTUAL && rd != null && now - roadAt < BEV_TTL_MS)
+            laneAt0(rd) else null
+        lcaState = lca.update(
+            tracks, now,
+            lane?.get(0)?.takeIf { !it.isNaN() }, lane?.get(1)?.takeIf { !it.isNaN() },
+            vs.turn, vs.steerDeg, ego,
+            lane?.get(2)?.takeIf { !it.isNaN() }, reverse = vs.gear == 'R'
+        )
+    }
+
+    /** 近縱向（±30°）的標線在 z=0 內插出 x：左取 x<0 最大、右取 x>0 最小。回傳 [左x, 右x, 車道角]，沒有為 NaN。 */
+    private fun laneAt0(rd: RoadResult): FloatArray {
+        var lx = Float.NaN
+        var rx = Float.NaN
+        var la = Float.NaN
+        var ra = Float.NaN
+        for (l in rd.lines) {
+            var dx = l.x2 - l.x1
+            var dz = l.z2 - l.z1
+            if (dz < 0f) { dx = -dx; dz = -dz }   // 一律朝前
+            if (dz < 1f) continue                  // 太短或橫向（停止線）
+            val ang = Math.toDegrees(atan2(dx.toDouble(), dz.toDouble())).toFloat()
+            if (abs(ang) > 30f) continue
+            val x0 = l.x1 - l.z1 * dx / dz
+            if (x0 < 0f && (lx.isNaN() || x0 > lx)) { lx = x0; la = ang }
+            if (x0 > 0f && (rx.isNaN() || x0 < rx)) { rx = x0; ra = ang }
+        }
+        val ang = when {
+            !la.isNaN() && !ra.isNaN() -> (la + ra) / 2f
+            !la.isNaN() -> la
+            else -> ra
+        }
+        return floatArrayOf(lx, rx, ang)
     }
 
     private fun runTrafficLightPass(det: Yolo, g: AvmGeometry, qw: Int, qh: Int) {
@@ -439,20 +500,23 @@ class QuadActivity : AppCompatActivity(), CameraQuadSource.Listener {
 
     /**
      * 框底邊中點（物件最靠近鏡頭、貼地的那一點）→ 地面公尺座標；物件中心再沿鏡頭視線往外推半寬。
-     * 回傳 (x, z, 離車身距離)；落在自車車身上（拍到自己）回傳 null。
+     * 回傳 (x, z, 離車身距離, 真實落地 1/0)；落在自車車身上（拍到自己）回傳 null。
+     * 第 4 欄 0 = 地平線 fallback（捏造的 15 m 點）：只能顯示，不可餵追蹤（假距離 → 假速度）。
      */
     private fun toWorld(g: AvmGeometry, cam: CamParams, u: Double, v: Double, qw: Int, qh: Int, t: String): FloatArray? {
         val p = g.pixelToGround(cam, u, v, qw, qh)
         val nx: Double
         val nz: Double
+        val real: Float
         if (p != null && hypot(p[0] - cam.px, p[1] - cam.pz) < 20.0) {
-            nx = p[0]; nz = p[1]
+            nx = p[0]; nz = p[1]; real = 1f
         } else {
             // 框底在地平線以上（幾何還沒校正或物件很遠）：放在該方位 15 m
             val ray = g.pixelToRay(cam, u, v, qw, qh)
             val az = atan2(ray[0], ray[2])
             nx = cam.px + sin(az) * 15.0
             nz = cam.pz + cos(az) * 15.0
+            real = 0f
         }
         if (abs(nx) < EGO_HW + 0.05 && abs(nz) < EGO_HL + 0.05) return null
         val dx = nx - cam.px
@@ -460,7 +524,7 @@ class QuadActivity : AppCompatActivity(), CameraQuadSource.Listener {
         val d = max(hypot(dx, dz), 1e-3)
         val rad = ObjTypes.radius(t)
         val clr = hypot(max(abs(nx) - EGO_HW, 0.0), max(abs(nz) - EGO_HL, 0.0)).toFloat()
-        return floatArrayOf((nx + dx / d * rad).toFloat(), (nz + dz / d * rad).toFloat(), clr)
+        return floatArrayOf((nx + dx / d * rad).toFloat(), (nz + dz / d * rad).toFloat(), clr, real)
     }
 
     /** 跨鏡頭合併：同種類 1.5 m 內只留信心高的（前鏡頭和側鏡頭會看到同一台）。 */
@@ -537,16 +601,26 @@ class QuadActivity : AppCompatActivity(), CameraQuadSource.Listener {
         }
     }
 
-    private fun pushPayload(g: AvmGeometry, det: Yolo, now: Long) {
+    private fun pushPayload(g: AvmGeometry, det: Yolo, now: Long, vs: VehicleState) {
         val objs = JSONArray()
         val boxes = ArrayList<QuadOverlayView.Box>()
         for (r in camResults.values) if (now - r.at < OBJ_TTL_MS) boxes.addAll(r.boxes)
-        for (o in currentObjects(now)) {
-            objs.put(JSONObject().put("t", o.t).put("x", r2(o.x)).put("z", r2(o.z))
-                .put("c", r2(o.c)).put("yaw", 0))
+        // 已確認的軌跡（id 跟 lca 的 threat.id 同一套）；c 用命中次數近似
+        val coneTr = ArrayList<Track>()
+        if (now - tracksAt < OBJ_TTL_MS) for (tr in tracks) {
+            if (!tr.confirmed) continue
+            if (tr.t == "cone") coneTr.add(tr)
+            objs.put(JSONObject().put("t", tr.t).put("x", r2(tr.x)).put("z", r2(tr.z))
+                .put("c", r2((tr.hits * 0.25f).coerceAtMost(1f))).put("yaw", 0)
+                .put("id", tr.id).put("vx", r2(tr.vx)).put("vz", r2(tr.vz)))
         }
         if (now - conesAt < BEV_TTL_MS) {
-            for (c in cones) objs.put(JSONObject().put("t", "cone").put("x", r2(c.x)).put("z", r2(c.z)).put("c", r2(c.conf)))
+            for (c in cones) {
+                // 同一顆實體錐軌跡已輸出過就跳過 BEV 錐，面板才不會畫成一對。
+                // 留軌跡捨 BEV：id 要給前端關聯用；代價是錐的位置更新慢一點、消失多滑行 1.2 s
+                if (coneTr.any { hypot(it.x - c.x, it.z - c.z) < 1f }) continue
+                objs.put(JSONObject().put("t", "cone").put("x", r2(c.x)).put("z", r2(c.z)).put("c", r2(c.conf)))
+            }
         }
         val bev = g.bev
         val p = JSONObject()
@@ -571,8 +645,8 @@ class QuadActivity : AppCompatActivity(), CameraQuadSource.Listener {
                 .put("er", rd.edgeR?.let { r2(it) } ?: JSONObject.NULL))
         }
         if (now - slotsAt < BEV_TTL_MS && slots.isNotEmpty()) p.put("slots", slotsJson(slots, false))
-        val vs = VehicleBus.signals.snapshot()
         if (!vs.isEmpty) p.put("veh", VehicleSignals.toJson(vs))
+        if (now - tracksAt < OBJ_TTL_MS) lcaState?.let { p.put("lca", lca.toJson(it)) }
         mapSrc?.takeJsonIfNew()?.let { p.put("map", it) }   // 每個 GPS 定位只送一次，3D 自己沿路推算
         val t = tl
         if (t != null && now - t.at < TL_TTL_MS) {

@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>模型檢視</title>
+<link rel="icon" href="data:,">
+<style>
+  /* QA page for models.js: same renderer / lights / background as index.html */
+  :root{
+    --bg:#090d13; --panel:rgba(14,20,28,.82); --line:rgba(120,160,200,.18);
+    --fg:#e8f1f8; --muted:#8ba1b4; --cyan:#38e1ff; --amber:#ffc24b; --green:#5ef08a; --red:#ff5a4d;
+    color-scheme:dark;
+  }
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);overflow:hidden;
+    font-family:system-ui,-apple-system,"Noto Sans TC","PingFang TC","Microsoft JhengHei",sans-serif}
+  #app{position:relative;width:100%;height:100%}
+  canvas{display:block}
+  .panel{position:absolute;z-index:5;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:9px 12px;font-size:12px}
+  #list{top:10px;left:10px;max-height:calc(100% - 80px);overflow:auto}
+  #list h1{margin:0 0 6px;font-size:12px;letter-spacing:.14em}
+  table{border-collapse:collapse;font-variant-numeric:tabular-nums}
+  td,th{padding:2px 6px;text-align:right;white-space:nowrap}
+  th{color:var(--muted);font-weight:600}
+  td:first-child,th:first-child{text-align:left}
+  td a{color:var(--cyan);text-decoration:none}
+  .over{color:var(--red)}
+  #stat{top:10px;right:10px;color:var(--muted);line-height:1.6;font-variant-numeric:tabular-nums}
+  #views{left:50%;bottom:10px;transform:translateX(-50%);display:flex;gap:4px;padding:5px}
+  #views a{font-size:12px;font-weight:600;color:var(--muted);text-decoration:none;padding:7px 10px;border-radius:8px}
+  #views a.on{background:rgba(56,225,255,.16);color:var(--cyan)}
+  .tag{position:absolute;z-index:4;font-size:11px;font-weight:600;padding:2px 7px;border-radius:7px;white-space:nowrap;
+    background:rgba(9,13,19,.82);border:1px solid rgba(56,225,255,.45);color:var(--fg);transform:translate(-50%,-100%);pointer-events:none}
+  .tag b{color:var(--amber);margin-left:4px;font-variant-numeric:tabular-nums}
+  @media (max-width:640px){ #list{max-height:40%} #stat{display:none} }
+</style>
+</head>
+<body>
+<div id="app">
+  <div class="panel" id="list"><h1>模型 · 三角形</h1><table id="tbl"></table></div>
+  <div class="panel" id="stat">—</div>
+  <div class="panel" id="views"></div>
+</div>
+<script src="lib/three.min.js"></script>
+<script src="lib/OrbitControls.js"></script>
+<script src="lib/RoomEnvironment.js"></script>
+<script src="models.js"></script>
+<script>
+(function () {
+  'use strict';
+  var A = window.AVM_MODELS;
+  var Q = {};
+  location.search.replace(/^\?/, '').split('&').forEach(function (kv) {
+    if (!kv) { return; }
+    var p = kv.split('=');
+    Q[decodeURIComponent(p[0])] = p.length > 1 ? decodeURIComponent(p[1]) : '1';
+  });
+  var ONLY = Q.only && A[Q.only] ? Q.only : null;
+  var VIEW = Q.view || (ONLY ? 'orbit' : 'chase');
+  var SPEED = Q.speed !== undefined ? +Q.speed : 1.3;
+  var BUDGET = { makeE60: 8000, makeBus: 4000, makePerson: 2200, makeCone: 1000, makeTrafficLight: 2000 };
+  var app = document.getElementById('app');
+  var COL = { asphalt: 0x11171f };
+
+  // ---------- renderer / scene: identical to index.html ----------
+  var renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'low-power', preserveDrawingBuffer: !!Q.shot });
+  renderer.setPixelRatio(1);
+  renderer.outputEncoding = THREE.sRGBEncoding;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.05;
+  app.appendChild(renderer.domElement);
+  var scene = new THREE.Scene();
+  scene.background = new THREE.Color(COL.asphalt);
+  scene.fog = new THREE.Fog(COL.asphalt, 24, 70);
+  try {
+    var pm = new THREE.PMREMGenerator(renderer);
+    scene.environment = pm.fromScene(new THREE.RoomEnvironment(), 0.04).texture;
+  } catch (e) { /* old WebView: lights only */ }
+  var camera = new THREE.PerspectiveCamera(50, 1, 0.1, 200);
+  var controls = new THREE.OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.1;
+  controls.maxPolarAngle = Math.PI * 0.49;
+  scene.add(new THREE.HemisphereLight(0x9fc4ff, 0x0a0f16, 0.6));
+  var key = new THREE.DirectionalLight(0xffffff, 1.3);
+  key.position.set(6, 14, 4);
+  scene.add(key);
+  var base = new THREE.Mesh(new THREE.PlaneGeometry(140, 140), new THREE.MeshBasicMaterial({ color: COL.asphalt }));
+  base.rotation.x = -Math.PI / 2;
+  scene.add(base);
+  var grid = new THREE.GridHelper(60, 60, 0x2a3c50, 0x1b2a3a);
+  grid.position.y = 0.01;
+  scene.add(grid);
+  var polar = new THREE.PolarGridHelper(16, 8, 4, 64, 0x2a3c50, 0x1b2a3a);
+  polar.position.y = 0.012;
+  scene.add(polar);
+
+  // ---------- models ----------
+  // [factory, x, z, extra yaw, args]: scene convention = objects rotated by PI so their front faces -Z
+  var LAYOUT = [
+    ['makeE60', 0, 0, 0], ['makeSedan', -3.3, -1.2, 0], ['makeVan', 3.5, -2.0, 0],
+    ['makeScooter', 1.5, -6.3, 0], ['makeMotorcycle', -1.6, -7.2, 0], ['makeBicycle', 5.6, -6.8, 0],
+    ['makeTruck', -3.6, -11.5, 0], ['makeBus', 3.9, -14.5, 0],
+    ['makeCone', 1.15, -3.3, 0], ['makeCone', 1.35, -4.1, 0], ['makeCone', 1.55, -4.9, 0],
+    ['makePerson', 7.0, -4, 0, 'walk'], ['makePerson', -6.2, -3.0, 0.6, 'idle'], ['makePerson', -6.8, -4.1, -0.4, 'idle'],
+    ['makePerson', 7.6, -9.5, 0.3, 'idle'], ['makePerson', -6.4, 1.5, 0, 'walk2'],
+    ['makeTrafficLight', 7.6, -19, Math.PI]
+  ];
+  if (ONLY) {
+    LAYOUT = [[ONLY, 0, 0, 0, ONLY === 'makePerson' ? 'inplace' : '']];
+    if (ONLY === 'makePerson' && (Q.crowd || Q.seeds)) {
+      // ?crowd=1 (8 seeded people) or ?seeds=5,12,40 (exact looks), all walking in place (or idle with walk=0)
+      var SEEDS = Q.seeds ? Q.seeds.split(',').map(Number) : [0, 1, 2, 3, 4, 5, 6, 7].map(function (c) { return 1000 + c * 37; });
+      LAYOUT = [];
+      SEEDS.forEach(function (sd, c) { LAYOUT.push(['makePerson', (c - (SEEDS.length - 1) / 2) * 0.75, 0, 0, 'inplace', sd]); });
+    }
+  }
+  var prewarmMs = A.prewarm ? A.prewarm(renderer, scene, camera) : 0;
+  var items = [], stats = {}, t0 = performance.now();
+  LAYOUT.forEach(function (L, i) {
+    var seed = L[5] !== undefined ? L[5] : (Q.seed ? +Q.seed + i : undefined);
+    var color = Q.color ? parseInt(Q.color, 16) : undefined;
+    var g = L[0] === 'makePerson' ? A.makePerson(color, seed) : (L[0] === 'makeCone' || L[0] === 'makeTrafficLight') ? A[L[0]]() : A[L[0]](color, seed);
+    g.position.set(L[1], 0, L[2]);
+    g.rotation.y = Math.PI + L[3];
+    scene.add(g);
+    var tri = A.triangles(g), meshes = 0;
+    g.traverse(function (o) { if (o.isMesh) { meshes++; } });
+    var el = document.createElement('div');
+    el.className = 'tag';
+    el.innerHTML = L[0].replace('make', '') + '<b>' + tri + '</b>';
+    app.appendChild(el);
+    var it = { name: L[0], g: g, el: el, mode: L[4] || '', tri: tri, meshes: meshes, x0: L[1], z0: L[2], seedPh: i * 1.7 };
+    items.push(it);
+    if (!stats[L[0]]) {
+      var bb = new THREE.Box3().setFromObject(g).getSize(new THREE.Vector3());
+      stats[L[0]] = { tri: tri, meshes: meshes, dims: g.userData.dims, labelY: g.userData.labelY, bbox: [+bb.x.toFixed(2), +bb.z.toFixed(2), +bb.y.toFixed(2)] };
+    }
+  });
+  var buildMs = Math.round(performance.now() - t0);
+  if (Q.clean) { ['list', 'stat', 'views'].forEach(function (id) { document.getElementById(id).style.display = 'none'; }); }
+
+  // ---------- table + view links ----------
+  var tbl = document.getElementById('tbl');
+  var rows = '<tr><th>模型</th><th>三角形</th><th>網格</th><th>w×l×h (m)</th></tr>';
+  Object.keys(stats).forEach(function (n) {
+    var s = stats[n], lim = BUDGET[n] || 3000, d = s.dims || {};
+    rows += '<tr><td><a href="?only=' + n + '&view=orbit">' + n.replace('make', '') + '</a></td><td class="' + (s.tri > lim ? 'over' : '') + '">' + s.tri +
+      '</td><td>' + s.meshes + '</td><td>' + [d.w, d.l, d.h].map(function (v) { return (+v).toFixed(2); }).join('×') + '</td></tr>';
+  });
+  tbl.innerHTML = rows;
+  var vEl = document.getElementById('views');
+  ['orbit', 'chase', 'top', 'side', 'front', 'rear'].forEach(function (v) {
+    var a = document.createElement('a');
+    a.textContent = v;
+    a.href = '?' + (ONLY ? 'only=' + ONLY + '&' : '') + 'view=' + v + (Q.crowd ? '&crowd=1' : '') + (Q.seeds ? '&seeds=' + Q.seeds : '');
+    if (v === VIEW) { a.className = 'on'; }
+    vEl.appendChild(a);
+  });
+  if (ONLY) {
+    var back = document.createElement('a'); back.textContent = '全部'; back.href = '?view=chase'; vEl.appendChild(back);
+  }
+
+  // ---------- cameras ----------
+  function setView(v) {
+    var d = ONLY ? stats[ONLY].dims : { w: 2, l: 4.8, h: 1.5 };
+    var R = ONLY ? Math.max(d.l, d.w, d.h * 1.3) : 1;
+    var cy = ONLY ? d.h * 0.45 : 0;
+    var P = ONLY ? {
+      orbit: [R * 1.1, R * 0.75, R * 1.3], chase: [0, R * 0.95, R * 1.45], top: [0, R * 2.2, 0.01],
+      side: [R * 1.7, d.h * 0.55, 0], front: [0.001, d.h * 0.6, -R * 1.7], rear: [0.001, d.h * 0.6, R * 1.7]
+    }[v] : {
+      orbit: [16, 12, 16], chase: [0, 7.5, 10.5], top: [0, 26, 0.01], side: [22, 5, -6], front: [0, 5, -32], rear: [0, 5, 20]
+    }[v];
+    var T = ONLY ? [0, cy, 0] : { chase: [0, 0, -1.5], side: [0, 0, -6], front: [0, 0, -6], rear: [0, 0, -6], top: [0, 0, -4], orbit: [0, 0, -5] }[v];
+    if (!P) { P = [R, R, R]; T = [0, 0, 0]; }
+    camera.position.set(P[0], P[1], P[2]);
+    controls.target.set(T[0], T[1], T[2]);
+    controls.autoRotate = v === 'orbit';
+    controls.autoRotateSpeed = ONLY ? 1.6 : 0.8;
+    controls.minDistance = ONLY ? R * 0.4 : 4;
+    controls.maxDistance = ONLY ? R * 6 : 60;
+    controls.update();
+  }
+  setView(VIEW);
+
+  function resize() {
+    var w = app.clientWidth || window.innerWidth, h = app.clientHeight || window.innerHeight;
+    renderer.setSize(w, h);
+    camera.aspect = w / h;
+    camera.updateProjectionMatrix();
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  // ---------- animation: walkers, wheels, signal cycle ----------
+  var light = null;
+  items.forEach(function (it) { if (it.name === 'makeTrafficLight') { light = it; } });
+  var CYCLE = [['green', 4], ['yellow', 1.5], ['red', 4]], cycLen = 9.5;
+  var v3 = new THREE.Vector3(), statEl = document.getElementById('stat'), frames = 0, fpsT = 0, fps = 0, lastT = 0;
+  function update(t) {
+    items.forEach(function (it) {
+      var g = it.g, sp = 0;
+      if (it.mode === 'walk' || it.mode === 'walk2') {
+        // pace back and forth along a sidewalk, turning at the ends
+        var len = it.mode === 'walk' ? 12 : 2.4, period = 2 * len / SPEED, u = ((t + it.seedPh) % period) / period;
+        var dir = u < 0.5 ? 1 : -1, s = u < 0.5 ? u * 2 : 2 - u * 2;
+        // models face local +Z: walking toward -Z needs yaw PI, toward +X needs +PI/2
+        if (it.mode === 'walk') { g.position.z = 2 - s * len; g.rotation.y = dir > 0 ? Math.PI : 0; }
+        else { g.position.x = -6.4 + s * len; g.rotation.y = dir > 0 ? Math.PI / 2 : -Math.PI / 2; }
+        sp = SPEED;
+      } else if (it.mode === 'inplace') {
+        sp = Q.walk === '0' ? 0 : SPEED;
+      } else if (Q.drive) {
+        sp = 4;
+      }
+      if (g.userData.animate) { g.userData.animate(t, sp); }
+      if (Q.alert !== undefined) {   // same calls as index.html's collision flash
+        var pm = g.userData.paint;
+        pm.emissive.setHex(0xff5a4d);
+        pm.emissiveIntensity = +Q.alert * (0.6 + 0.4 * Math.sin(t * 1000 / 110));
+      }
+      v3.set(0, g.userData.labelY || 2, 0);
+      g.localToWorld(v3);
+      v3.project(camera);
+      var vis = v3.z < 1 && Math.abs(v3.x) < 1.1 && Math.abs(v3.y) < 1.1;
+      it.el.style.display = vis && !Q.nolabel ? '' : 'none';
+      if (vis) {
+        it.el.style.left = ((v3.x + 1) / 2 * app.clientWidth).toFixed(1) + 'px';
+        it.el.style.top = ((1 - v3.y) / 2 * app.clientHeight).toFixed(1) + 'px';
+      }
+    });
+    if (light) {
+      var ct = (t % cycLen), acc = 0, st = 'red', left = 0;
+      for (var i = 0; i < CYCLE.length; i++) { acc += CYCLE[i][1]; if (ct < acc) { st = CYCLE[i][0]; left = acc - ct; break; } }
+      light.g.userData.setState(st, left);
+    }
+  }
+  function loop(ts) {
+    requestAnimationFrame(loop);
+    if (ts - lastT < 32) { return; }   // cap ~30 fps like index.html
+    lastT = ts;
+    var t = Q.t !== undefined ? +Q.t : ts / 1000;
+    update(t);
+    controls.update();
+    renderer.render(scene, camera);
+    frames++;
+    if (ts - fpsT > 1000) {
+      fps = frames * 1000 / (ts - fpsT); frames = 0; fpsT = ts;
+      var inf = renderer.info.render;
+      statEl.innerHTML = '視角 ' + VIEW + (ONLY ? ' · ' + ONLY.replace('make', '') : '') + '<br>三角形 ' + inf.triangles + ' · draw ' + inf.calls +
+        '<br>FPS ' + fps.toFixed(1) + ' · 建模 ' + buildMs + ' ms · 預熱 ' + prewarmMs + ' ms' + (light ? '<br>號誌 ' + light.g.userData.state : '');
+    }
+  }
+  requestAnimationFrame(loop);
+  window.__qa = { stats: stats, items: items, buildMs: buildMs, prewarmMs: prewarmMs, renderer: renderer, scene: scene, camera: camera, controls: controls, update: update };
+})();
+</script>
+</body>
+</html>

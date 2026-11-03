@@ -1,24 +1,63 @@
 # AVM ADAS Probe
 
-把改裝安卓車機（Unisoc UIS7862 / Mali-G52）上的「全景360」環景，做成像特斯拉那樣的**周遭物件 3D 顯示**，全部在原機上跑，不外掛算力。
+把改裝安卓車機（Unisoc UIS7862 / Mali-G52）上的環景鏡頭，做成像特斯拉那樣的**周遭物件 3D 顯示**，全部在原機上跑，不外掛算力。
 
-## v0.2 做了什麼
+車輛：BMW 525i E60（4.841 × 1.846 m，軸距 2.888 m）。螢幕 1920×720。
+
+## v0.3 架構
+
+v0.3 的主路線改成**直接讀鏡頭**，不再依賴「全景360」把俯視圖畫到螢幕上。舊的截螢幕模式保留，兩種模式共用同一套辨識與 3D 顯示。
 
 ```
-全景360 俯視圖（螢幕截圖）
-   │  只裁「俯視區」ROI 餵模型（不再把整個寬螢幕塞進去，較準也較快）
+【鏡頭直讀模式】主要                      【截螢幕模式】舊路線
+Camera2 鏡頭 "2" 1920x1080 @25fps          全景360 的俯視圖（螢幕擷取）
+2x2 四分割原始魚眼                                │
+左上=前 右上=後 左下=左 右下=右                   │
+   │                                              │
+   ├─ 正方形裁切輪流送模型 ──────────┐           │
+   │   （側鏡頭 a/b 兩塊、前後中央 c）  │           │
+   │   整格縮小時實車抓不到，裁切後     │           │
+   │   信心 0.74–0.87                   ▼           ▼
+   │                              YOLO11n / 車種細分（TFLite，GPU 或 CPU 4 核）
+   │                                     │
+   ├─ 魚眼投影到地面（avm_calib.json）   │  俯視圖本身就是 IPM 拼好的地面
+   │   自建俯視圖（LUT，獨立執行緒）     │
+   ▼                                     ▼
+地面辨識：車道線（白/黃/紅）、路緣、三角錐 ── 都換算成車身座標（公尺）
+   │
+   ├─ 跨幀追蹤 TrackManager（ID、vx/vz 速度）
+   ├─ 盲點／變道輔助 LaneChangeAssist（後方來車預警、變道路徑）
+   ├─ 停車格偵測（垂直／平行／斜向，是否有車）
+   ├─ 紅綠燈燈色（前鏡頭 COCO class 9 ＋ 燈色分類）
+   ├─ 車身訊號 VehicleBus（方向燈、檔位、方向盤轉角、車速、PDC 雷達）
+   └─ 地圖輔助 MapAssist（OpenStreetMap + GPS：前方 200 m 道路、車道數、速限、紅綠燈預告）
    ▼
-YOLO11n（TFLite，GPU 或 CPU 4 核；256/320/416、fp32/int8 可切換）
-   │  俯視圖本身就是 IPM 拼好的地面 → 框的位置直接換算成公尺
-   ▼
-3D 面板（WebView + Three.js r128，懸浮在螢幕右半）
-   ├─ 跨幀追蹤：ID 穩定、位置平滑、橫停車輛自動轉向
-   ├─ 每個物件顯示「離車身多少公尺」，< 1.2 m 碰撞預警、< 0.5 m 距離過近
-   ├─ 實景地面：俯視區畫面即時貼成 3D 地面
-   └─ 面板內「校正」：滑桿調俯視區範圍與公尺寬度，馬上生效
+3D 面板（WebView + Three.js r128）
+   ├─ 寫實 3D 模型：自車 E60、轎車、箱型車、卡車、公車、機車、重機、腳踏車、
+   │   會走路的行人、三角錐、紅綠燈（程式建模，合併材質壓 draw call）
+   ├─ 虛擬道路／實景地面可切換
+   ├─ PDC 雷達弧線、隨方向盤彎的前進／倒車軌跡線（含內輪差）、方向燈
+   ├─ 盲點警示與變道路徑、停車格（空格綠、有車灰）
+   └─ 小地圖與速限／紅綠燈預告
 ```
+
+### 座標約定
+
+車身座標原點在車輛footprint 中心的地面點，x 向右、y 向上、z 向前（公尺）。
+3D 場景 x = x、z = −z（前方是 −Z）。JSON 角度用度，payload 的 `yaw` 用弧度。
+詳見 `docs/v03-spec.md`。
 
 ## 使用
+
+### 鏡頭直讀模式（建議）
+
+1. 主畫面選 **鏡頭直讀**，授予相機與定位權限
+2. 進畫面後會輪流偵測四個鏡頭，右側 3D 面板即時顯示
+3. 離開前景會自動釋放鏡頭；鏡頭被別的 App 占用時會自動重連
+
+> 全景360 目前**先不要移除**，它還負責倒車影像。它的設定裡把「轉向聯動」關掉，才不會打方向燈時跳出來搶鏡頭。
+
+### 截螢幕模式（舊路線）
 
 1. 主畫面選 **模型 / 引擎 / 3D 面板位置**（改完要停止再開始）
 2. **① 授予懸浮窗權限** → **② 開始偵測** → 允許螢幕擷取
@@ -26,15 +65,45 @@ YOLO11n（TFLite，GPU 或 CPU 4 核；256/320/416、fp32/int8 可切換）
 4. 右側 3D 面板按 **校正**：拖滑桿讓虛線框剛好框住俯視圖；調「橫向寬度」讓實景地面上的車身跟 3D 自車一樣寬
 5. 用面板底部切 **俯視 / 3D 跟車 / 繞行**
 
-## 硬體測試
+### 車機訊號探測
 
-- **鏡頭直開測試（Camera2）**：360 鏡頭不是 USB 裝置（AHD 解碼晶片多半走 MIPI-CSI），若系統透過標準相機介面公開，就能免 root 直接拿原始畫面。
-- **硬體探測**：列 Camera2 鏡頭、USB 裝置、`/dev/video*`。
-- **UVC 直讀**：USB 鏡頭用（本車沒有）。
+主畫面的**訊號探測**頁會認平台、掃廠商與全景360 的廣播字串、監聽 60 秒的系統屬性變動、試綁 CAN/MCU 服務，並可**匯出全景360 的 APK**。
+用途是找出方向燈、倒車、方向盤轉角、雷達距離的讀取管道，再寫成 adapter 接到 `VehicleBus.signals`。
+
+## 鏡頭校正
+
+`app/src/main/assets/avm_calib.json` 是魚眼鏡頭幾何（內參、外參、俯視圖範圍）。預設值未校正。
+
+要產生真正的校正檔：
+
+1. 車停好不動，鏡頭直讀畫面按**存原始畫面** → `raw_*.jpg` + json
+2. 截螢幕模式 3D 面板按**校正** → **存截圖** → `screen_*.png` + json（含 roi/wm/flip）
+3. 跑擬合工具：
+
+```bash
+# roi / wm / flip 照著存截圖時一併存下的 json 填
+python3 tools/fit_calib.py raw_xxx.jpg screen_xxx.png \
+    --roi 0.0,0.0,0.5,1.0 --wm 8.0 \
+    -o app/src/main/assets/avm_calib.json --debug-dir /tmp/fit
+```
+
+產出的檔案會帶 `"calibrated": true`。合成資料上誤差 < 1 cm；真實資料尚未驗證。
+
+幾何在 Kotlin（`AvmGeometry.kt`）與 Python（`tools/avm_geometry.py`）是逐位元一致的，改動其中一邊要兩邊一起改並跑 `tools/test_fit_calib.py`。
 
 ## 模型
 
-`app/src/main/assets/model_*.tflite`（YOLO11n，COCO）。重新匯出：
+`app/src/main/assets/model_*.tflite`。
+
+| 檔案 | 內容 |
+|---|---|
+| `model_yolo11n_*.tflite` | YOLO11n（COCO 80 類），預設 |
+| `model_yolo26s_o365_fp16w_256.tflite` | 車種細分（Objects365）：多了箱型車、三角錐等類別，Mali-G52 估 100–140 ms |
+
+車種依標籤名稱對應到顯示種類（`ObjTypes.kt`），NMS 依車種群組做，避免「car」和「van」互相壓掉。
+**重機與機車目前沒有模型分得出來**，需要台灣標註資料訓練或另外接裁切分類器。
+
+重新匯出 COCO 模型：
 
 ```bash
 pip install ultralytics
@@ -66,17 +135,47 @@ keyPassword=…
 python3 -m http.server 8811 --directory app/src/main/assets/bev3d
 ```
 
-開 `http://localhost:8811/index.html#demo` 會跑示範資料。
+| 網址 | 內容 |
+|---|---|
+| `http://localhost:8811/index.html#demo` | 主面板，示範資料 |
+| `http://localhost:8811/models.html` | 3D 模型檢視（逐一看每個模型、面數、動畫） |
+| `http://localhost:8811/vehicle-demo.html` | 雷達弧線、軌跡線、方向燈 |
+| `http://localhost:8811/map-demo.html` | 地圖輔助 |
+| `http://localhost:8811/lca-demo.html` | 盲點／變道輔助 |
+
+## 測試
+
+```bash
+export JAVA_HOME=/opt/homebrew/opt/openjdk@17
+./gradlew :app:testDebugUnitTest
+```
+
+幾何與校正擬合另有 Python 測試：
+
+```bash
+python3 tools/test_fit_calib.py --seeds 1,2,3
+```
 
 ## 實測紀錄
 
 | 版本 | 設定 | 推論 | FPS |
 |---|---|---|---|
 | v0.1 | 640 fp32 GPU，全螢幕 | ~180 ms | ~4 |
-| v0.2 | 待測（建議先試 320 GPU、320 int8 CPU） | | |
+| v0.2 | 截螢幕 256 GPU | 51 ms | ~11.8 |
+| v0.3 | 鏡頭直讀，待實測 | | |
 
 ## 已知限制
 
-- 俯視圖上的車是被 IPM 拉長的俯視形狀，COCO 模型信心偏低；下一步換空拍俯視權重（VisDrone）或魚眼去畸變後逐鏡頭偵測。
+- 俯視圖上的車是被 IPM 拉長的俯視形狀，COCO 模型信心偏低；鏡頭直讀改送正方形裁切後明顯改善，但畫面邊緣嚴重變形的車仍會漏抓，之後要做魚眼去畸變後再偵測。
+- 重機與機車分不出來（見上）。
 - 3D 面板與偵測共用 Mali-G52，面板渲染限 30fps。
+- 車身訊號（方向燈／倒車／方向盤／雷達）的讀取管道還沒確定，等訊號探測結果。
+- `avm_calib.json` 尚未用真實資料校正。
 - 正式商用版建議改 NanoDet + NCNN（Apache-2.0）；Ultralytics 權重為 AGPL-3.0。
+
+## 授權與出處
+
+- 偵測模型權重來自 Ultralytics，授權為 **AGPL-3.0**；車種細分模型另外用 **Objects365** 資料集訓練（Objects365 僅限非商業研究使用）。要商用請換成 Apache/BSD 授權的模型。
+- 地圖資料 **© OpenStreetMap 貢獻者**，依 **ODbL** 授權（https://www.openstreetmap.org/copyright）。道路查詢走 Overpass API 並在本機快取。
+- 3D 模型署名見 `app/src/main/assets/bev3d/models/CREDITS.md`（自車 E60 為 CC BY 4.0）。
+- BMW 為 BMW AG 的商標；本專案與 BMW 無關。
