@@ -14,7 +14,14 @@ import java.io.File
 object MediaSaver {
     private const val DIR = "avm-adas"
 
-    fun save(context: Context, name: String, mime: String, bytes: ByteArray): String {
+    fun save(context: Context, name: String, mime: String, bytes: ByteArray): String =
+        saveStream(context, name, mime) { it.write(bytes) }
+
+    /** 大檔（例如 APK）用串流複製，不整個讀進記憶體。 */
+    fun saveFile(context: Context, name: String, mime: String, src: File): String =
+        saveStream(context, name, mime) { out -> src.inputStream().use { it.copyTo(out, 256 * 1024) } }
+
+    private fun saveStream(context: Context, name: String, mime: String, write: (java.io.OutputStream) -> Unit): String {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             val cr = context.contentResolver
             val values = ContentValues().apply {
@@ -25,7 +32,7 @@ object MediaSaver {
             }
             val uri = cr.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
                 ?: throw IllegalStateException("MediaStore 建檔失敗")
-            cr.openOutputStream(uri)?.use { it.write(bytes) }
+            cr.openOutputStream(uri)?.use { write(it) }
                 ?: throw IllegalStateException("MediaStore 開檔失敗")
             values.clear()
             values.put(MediaStore.Downloads.IS_PENDING, 0)
@@ -34,7 +41,7 @@ object MediaSaver {
         }
         val dir = File(context.getExternalFilesDir(null), DIR).apply { mkdirs() }
         val f = File(dir, name)
-        f.writeBytes(bytes)
+        f.outputStream().use { write(it) }
         return f.absolutePath
     }
 }

@@ -87,6 +87,10 @@ class SignalProbeActivity : AppCompatActivity() {
             text = "存檔"; isAllCaps = false
             setOnClickListener { save() }
         }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        row.addView(Button(this).apply {
+            text = "匯出環景 App"; isAllCaps = false
+            setOnClickListener { exportAvm() }
+        }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         col.addView(row)
         logView = TextView(this).apply {
             textSize = 12f
@@ -147,7 +151,21 @@ class SignalProbeActivity : AppCompatActivity() {
             val sys = if ((a.flags and ApplicationInfo.FLAG_SYSTEM) != 0) "" else "（使用者安裝）"
             sb.append("${a.packageName}  「${label(a)}」$sys$mark\n")
         }
-        append(sb.toString())
+        val avm = vendor.filter(isAvm)
+        synchronized(avmApps) { avmApps.clear(); avmApps.addAll(avm) }
+        for (a in avm) {
+            // 用平台金鑰簽的 App 能用系統等級權限，那些管道我們就用不了
+            val platform = try {
+                pm.checkSignatures(a.packageName, "android") == PackageManager.SIGNATURE_MATCH
+            } catch (_: Throwable) { false }
+            val ver = try { pm.getPackageInfo(a.packageName, 0).versionName } catch (_: Throwable) { "?" }
+            val size = (listOf(a.sourceDir) + (a.splitSourceDirs?.toList() ?: emptyList()))
+                .sumOf { java.io.File(it).length() } / 1024 / 1024
+            sb.setLength(0)
+            sb.append("◎ 環景 App：${a.packageName} v$ver  ${size} MB  平台簽名=${if (platform) "是（系統等級）" else "否（一般 App）"}\n")
+            sb.append("   ${a.sourceDir}\n")
+            append(sb.toString())
+        }
 
         // 掃程式碼字串：環景 App 最優先（它自己就在讀方向燈/轉角），再來是名稱有特徵的
         val ordered = vendor.sortedByDescending {
@@ -354,6 +372,32 @@ class SignalProbeActivity : AppCompatActivity() {
         receiver?.let { try { unregisterReceiver(it) } catch (_: Throwable) {} }
         receiver = null
         main.removeCallbacksAndMessages(null)
+    }
+
+    private val avmApps = ArrayList<ApplicationInfo>()
+
+    /** 把環景 App 的 APK（含分割檔）複製到「下載/avm-adas」，給開發者分析它怎麼讀方向燈/轉角/校正。 */
+    private fun exportAvm() {
+        val list = synchronized(avmApps) { avmApps.toList() }
+        if (list.isEmpty()) {
+            append("\n（還沒掃完，或沒找到環景 App）")
+            return
+        }
+        append("\n匯出中…")
+        thread(name = "apk-export") {
+            for (a in list) {
+                val files = listOf(a.sourceDir) + (a.splitSourceDirs?.toList() ?: emptyList())
+                for ((i, path) in files.withIndex()) {
+                    val name = a.packageName + if (i == 0) ".apk" else "-split$i.apk"
+                    try {
+                        val out = MediaSaver.saveFile(this, name, "application/vnd.android.package-archive", java.io.File(path))
+                        append("已匯出：$out")
+                    } catch (t: Throwable) {
+                        append("匯出 $name 失敗：${t.message}")
+                    }
+                }
+            }
+        }
     }
 
     private fun save() {
