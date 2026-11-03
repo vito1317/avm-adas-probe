@@ -1,0 +1,324 @@
+{
+ "items": [
+  {
+   "x": 0,
+   "y": 0,
+   "w": 8,
+   "h": 21,
+   "state": "red",
+   "vertical": true,
+   "py": "red",
+   "pyConf": 1.0
+  },
+  {
+   "x": 10,
+   "y": 0,
+   "w": 13,
+   "h": 37,
+   "state": "red",
+   "vertical": true,
+   "py": "red",
+   "pyConf": 1.0
+  },
+  {
+   "x": 25,
+   "y": 0,
+   "w": 20,
+   "h": 54,
+   "state": "red",
+   "vertical": true,
+   "py": "red",
+   "pyConf": 1.0
+  },
+  {
+   "x": 47,
+   "y": 0,
+   "w": 30,
+   "h": 79,
+   "state": "red",
+   "vertical": true,
+   "py": "red",
+   "pyConf": 1.0
+  },
+  {
+   "x": 79,
+   "y": 0,
+   "w": 18,
+   "h": 7,
+   "state": "red",
+   "vertical": false,
+   "py": "red",
+   "pyConf": 1.0
+  },
+  {
+   "x": 99,
+   "y": 0,
+   "w": 32,
+   "h": 13,
+   "state": "red",
+   "vertical": false,
+   "py": "red",
+   "pyConf": 1.0
+  },
+  {
+   "x": 133,
+   "y": 0,
+   "w": 45,
+   "h": 16,
+   "state": "red",
+   "vertical": false,
+   "py": "red",
+   "pyConf": 1.0
+  },
+  {
+   "x": 180,
+   "y": 0,
+   "w": 76,
+   "h": 25,
+   "state": "red",
+   "vertical": false,
+   "py": "red",
+   "pyConf": 1.0
+  },
+  {
+   "x": 258,
+   "y": 0,
+   "w": 8,
+   "h": 18,
+   "state": "yellow",
+   "vertical": true,
+   "py": "yellow",
+   "pyConf": 1.0
+  },
+  {
+   "x": 268,
+   "y": 0,
+   "w": 11,
+   "h": 34,
+   "state": "yellow",
+   "vertical": true,
+   "py": "yellow",
+   "pyConf": 1.0
+  },
+  {
+   "x": 281,
+   "y": 0,
+   "w": 21,
+   "h": 55,
+   "state": "yellow",
+   "vertical": true,
+   "py": "yellow",
+   "pyConf": 1.0
+  },
+  {
+   "x": 304,
+   "y": 0,
+   "w": 28,
+   "h": 82,
+   "state": "yellow",
+   "vertical": true,
+   "py": "yellow",
+   "pyConf": 1.0
+  },
+  {
+   "x": 334,
+   "y": 0,
+   "w": 22,
+   "h": 9,
+   "state": "yellow",
+   "vertical": false,
+   "py": "yellow",
+   "pyConf": 1.0
+  },
+  {
+   "x": 358,
+   "y": 0,
+   "w": 36,
+   "h": 15,
+   "state": "yellow",
+   "vertical": false,
+   "py": "yellow",
+   "pyConf": 1.0
+  },
+  {
+   "x": 0,
+   "y": 84,
+   "w": 56,
+   "h": 21,
+   "state": "yellow",
+   "vertical": false,
+   "py": "yellow",
+   "pyConf": 1.0
+  },
+  {
+   "x": 58,
+   "y": 84,
+   "w": 77,
+   "h": 31,
+   "state": "yellow",
+   "vertical": false,
+   "py": "yellow",
+   "pyConf": 1.0
+  },
+  {
+   "x": 137,
+   "y": 84,
+   "w": 8,
+   "h": 19,
+   "state": "green",
+   "vertical": true,
+   "py": "green",
+   "pyConf": 1.0
+  },
+  {
+   "x": 147,
+   "y": 84,
+   "w": 14,
+   "h": 35,
+   "state": "green",
+   "vertical": true,
+   "py": "green",
+   "pyConf": 1.0
+  },
+  {
+   "x": 163,
+   "y": 84,
+   "w": 16,
+   "h": 46,
+   "state": "green",
+   "vertical": true,
+   "py": "green",
+   "pyConf": 1.0
+  },
+  {
+   "x": 181,
+   "y": 84,
+   "w": 24,
+   "h": 66,
+   "state": "green",
+   "vertical": true,
+   "py": "green",
+   "pyConf": 1.0
+  },
+  {
+   "x": 207,
+   "y": 84,
+   "w": 22,
+   "h": 9,
+   "state": "green",
+   "vertical": false,
+   "py": "green",
+   "pyConf": 1.0
+  },
+  {
+   "x": 231,
+   "y": 84,
+   "w": 29,
+   "h": 10,
+   "state": "green",
+   "vertical": false,
+   "py": "green",
+   "pyConf": 1.0
+  },
+  {
+   "x": 262,
+   "y": 84,
+   "w": 52,
+   "h": 21,
+   "state": "green",
+   "vertical": false,
+   "py": "green",
+   "pyConf": 1.0
+  },
+  {
+   "x": 316,
+   "y": 84,
+   "w": 87,
+   "h": 31,
+   "state": "green",
+   "vertical": false,
+   "py": "green",
+   "pyConf": 1.0
+  },
+  {
+   "x": 405,
+   "y": 84,
+   "w": 9,
+   "h": 22,
+   "state": "off",
+   "vertical": true,
+   "py": "off",
+   "pyConf": 0.6
+  },
+  {
+   "x": 0,
+   "y": 152,
+   "w": 14,
+   "h": 37,
+   "state": "off",
+   "vertical": true,
+   "py": "off",
+   "pyConf": 0.6
+  },
+  {
+   "x": 16,
+   "y": 152,
+   "w": 17,
+   "h": 51,
+   "state": "off",
+   "vertical": true,
+   "py": "off",
+   "pyConf": 0.6
+  },
+  {
+   "x": 35,
+   "y": 152,
+   "w": 26,
+   "h": 73,
+   "state": "off",
+   "vertical": true,
+   "py": "off",
+   "pyConf": 0.6
+  },
+  {
+   "x": 63,
+   "y": 152,
+   "w": 18,
+   "h": 7,
+   "state": "off",
+   "vertical": false,
+   "py": "off",
+   "pyConf": 0.6
+  },
+  {
+   "x": 83,
+   "y": 152,
+   "w": 37,
+   "h": 13,
+   "state": "off",
+   "vertical": false,
+   "py": "off",
+   "pyConf": 0.6
+  },
+  {
+   "x": 122,
+   "y": 152,
+   "w": 59,
+   "h": 21,
+   "state": "off",
+   "vertical": false,
+   "py": "off",
+   "pyConf": 0.6
+  },
+  {
+   "x": 183,
+   "y": 152,
+   "w": 75,
+   "h": 31,
+   "state": "off",
+   "vertical": false,
+   "py": "off",
+   "pyConf": 0.6
+  }
+ ]
+}
