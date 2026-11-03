@@ -14,6 +14,8 @@ import android.graphics.YuvImage
 import android.media.Image
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.HandlerThread
 import android.os.SystemClock
 import android.util.Base64
 import android.view.Gravity
@@ -92,28 +94,33 @@ class QuadActivity : AppCompatActivity(), CameraQuadSource.Listener {
     private val frame = YuvFrame()
     private var yolo: Yolo? = null
     private var yoloError: String? = null
+    private var lut: IntArray? = null
+    private var lutKey = 0L
+    private var slotIdx = 0
+    private var frameNo = 0L
+    private val camResults = HashMap<String, CamResult>()
+    private var tl: TlResult? = null
+
+    // ---- 俯視圖辨識（道路、三角錐、停車格、地面貼圖）在 ground 執行緒，結果用 volatile 交給 frames ----
+    private val groundThread = HandlerThread("ground").apply { start() }
+    private val ground = Handler(groundThread.looper)
+    @Volatile private var groundBusy = false
+    private var bevArgb = IntArray(0)          // groundBusy=false 時才由 frames 寫入
     private val roadEx = RoadExtractor()
     private val roadTrack = RoadTracker()
     private val coneDet = ConeDetector()
     private val slotDet = ParkingSlotDetector()
     private val slotTrack = SlotTracker()
-    private var slots: List<ParkingSlot> = emptyList()
-    private var slotsAt = 0L
-    private var lut: IntArray? = null
-    private var lutKey = 0L
-    private var bevArgb = IntArray(0)
     private var bevBmp: Bitmap? = null
     private val jpeg = ByteArrayOutputStream(96 * 1024)
-    private var slotIdx = 0
-    private var frameNo = 0L
-    private val camResults = HashMap<String, CamResult>()
-    private var tl: TlResult? = null
-    private var road: RoadResult? = null
-    private var roadAt = 0L
-    private var cones: List<Cone> = emptyList()
-    private var conesAt = 0L
-    private var groundUrl: String? = null
-    private var groundAt = 0L
+    @Volatile private var slots: List<ParkingSlot> = emptyList()
+    @Volatile private var slotsAt = 0L
+    @Volatile private var road: RoadResult? = null
+    @Volatile private var roadAt = 0L
+    @Volatile private var cones: List<Cone> = emptyList()
+    @Volatile private var conesAt = 0L
+    @Volatile private var groundUrl: String? = null
+    @Volatile private var groundAt = 0L
     private var previewArgb = IntArray(0)
     private var previewBmp: Bitmap? = null
     private var emaInfer = 0f
@@ -269,6 +276,7 @@ class QuadActivity : AppCompatActivity(), CameraQuadSource.Listener {
             yolo = null
         }
         source.release()
+        groundThread.quitSafely()
         web.destroy()
     }
 
@@ -302,7 +310,7 @@ class QuadActivity : AppCompatActivity(), CameraQuadSource.Listener {
             if (s == SLOT_TL) runTrafficLightPass(det, g, qw, qh) else runCamera(det, g, s, qw, qh)
         }
         val now = SystemClock.elapsedRealtime()
-        if (prefs.camBev && frameNo % 2 == 0L) runBev(g, now)
+        if (prefs.camBev && !groundBusy) runBev(g, now)
 
         val proc = (SystemClock.elapsedRealtime() - t0).toFloat()
         emaProc = ema(emaProc, proc)
@@ -440,7 +448,6 @@ class QuadActivity : AppCompatActivity(), CameraQuadSource.Listener {
             lutKey = key
             bevArgb = IntArray(g.bev.width * g.bev.height)
         }
-        frame.sampleLut(table, bevArgb)
         val bw = g.bev.width
         val bh = g.bev.height
         val mpp = g.bev.mpp.toFloat()
@@ -458,27 +465,39 @@ class QuadActivity : AppCompatActivity(), CameraQuadSource.Listener {
             if (o.t == "car" || o.t == "van" || o.t == "truck" || o.t == "bus") vehicles.add(r)
         }
 
-        cones = coneDet.detect(bevArgb, bw, bh, mpp, cx, cy, excl)
-        conesAt = now
-        // 停車格的線常被停著的車蓋住，車子另外傳進去判斷「有車」，不當排除區
-        slots = slotTrack.update(slotDet.detect(bevArgb, bw, bh, mpp, cx, cy, listOf(ego), vehicles), now)
-        slotsAt = now
+        // 取樣在這裡做（frame 只在這條執行緒有效），辨識丟到 ground 執行緒，跟下一輪偵測並行
+        frame.sampleLut(table, bevArgb)
+        groundBusy = true
+        val buf = bevArgb
         val mode = prefs.groundMode
-        if (mode == AppPrefs.GROUND_VIRTUAL) {
-            road = roadTrack.update(roadEx.extract(bevArgb, bw, bh, mpp, cx, cy, excl), now)
-            roadAt = now
-        }
-        if (mode == AppPrefs.GROUND_REAL) {
-            var bmp = bevBmp
-            if (bmp == null || bmp.width != bw || bmp.height != bh) {
-                bmp = Bitmap.createBitmap(bw, bh, Bitmap.Config.ARGB_8888)
-                bevBmp = bmp
+        ground.post {
+            try {
+                cones = coneDet.detect(buf, bw, bh, mpp, cx, cy, excl)
+                conesAt = now
+                // 停車格的線常被停著的車蓋住，車子另外傳進去判斷「有車」，不當排除區
+                slots = slotTrack.update(slotDet.detect(buf, bw, bh, mpp, cx, cy, listOf(ego), vehicles), now)
+                slotsAt = now
+                if (mode == AppPrefs.GROUND_VIRTUAL) {
+                    road = roadTrack.update(roadEx.extract(buf, bw, bh, mpp, cx, cy, excl), now)
+                    roadAt = now
+                }
+                if (mode == AppPrefs.GROUND_REAL) {
+                    var bmp = bevBmp
+                    if (bmp == null || bmp.width != bw || bmp.height != bh) {
+                        bmp = Bitmap.createBitmap(bw, bh, Bitmap.Config.ARGB_8888)
+                        bevBmp = bmp
+                    }
+                    bmp.setPixels(buf, 0, bw, 0, 0, bw, bh)
+                    jpeg.reset()
+                    bmp.compress(Bitmap.CompressFormat.JPEG, 65, jpeg)
+                    groundUrl = "data:image/jpeg;base64," + Base64.encodeToString(jpeg.toByteArray(), Base64.NO_WRAP)
+                    groundAt = now
+                }
+            } catch (t: Throwable) {
+                camState = "俯視圖辨識失敗：${t.message}"
+            } finally {
+                groundBusy = false
             }
-            bmp.setPixels(bevArgb, 0, bw, 0, 0, bw, bh)
-            jpeg.reset()
-            bmp.compress(Bitmap.CompressFormat.JPEG, 65, jpeg)
-            groundUrl = "data:image/jpeg;base64," + Base64.encodeToString(jpeg.toByteArray(), Base64.NO_WRAP)
-            groundAt = now
         }
     }
 
