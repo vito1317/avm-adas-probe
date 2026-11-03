@@ -41,7 +41,7 @@ class SignalProbeActivity : AppCompatActivity() {
         private const val MAX_ACTIONS = 600
         private val KEYWORDS = Regex(
             "turn|lamp|light|signal|blink|flash|indicat|canbus|can_|\\.can\\.|carinfo|car_info|mcu|" +
-                "reverse|backcar|back_car|zhuan|steer|angle|radar|door|gear|acc_",
+                "reverse|backcar|back_car|zhuan|steer|angle|wheel|track|guide|radar|door|gear|speed|acc_",
             RegexOption.IGNORE_CASE
         )
         private val ACTION_LIKE = Regex("^[A-Za-z][\\w]*(\\.[\\w]+){2,}$")
@@ -73,7 +73,8 @@ class SignalProbeActivity : AppCompatActivity() {
         })
         col.addView(TextView(this).apply {
             text = "按「開始監聽」後 60 秒內：左轉燈打 5 秒→關，右轉燈打 5 秒→關，" +
-                "（安全的話）打倒車檔→回 P。結束後按「存檔」，把檔案傳給開發者。"
+                "（安全、停好的話）打倒車檔→方向盤左右轉到底各一次→回 P。全景360 跳出來沒關係，" +
+                "60 秒後回到這頁按「存檔」，把檔案傳給開發者。"
             textSize = 14f
             setPadding(0, 8, 0, 8)
         })
@@ -165,11 +166,97 @@ class SignalProbeActivity : AppCompatActivity() {
         val out = StringBuilder("\n== 候選廣播（掃了 $scanned 個 App，$noDex 個沒有 dex）：${found.size}\n")
         for ((s, pkg) in found.entries.take(200)) out.append("$s  ← $pkg\n")
         if (found.size > 200) out.append("…（共 ${found.size} 個，存檔裡有完整清單）\n")
-        out.append("\n掃描完成，可以按「開始監聽 60 秒」。")
         append(out.toString())
         if (found.size > 200) synchronized(log) {
             fullList = found.entries.joinToString("\n") { "${it.key}  ← ${it.value}" }
         }
+        probeServices(vendor)
+        append("\n掃描完成，可以按「開始監聽 60 秒」。")
+    }
+
+    /**
+     * 廠商的 CAN / MCU 服務（例如 FYT 的 com.syu.ms）：試著綁定，記下 binder 介面名稱。
+     * 方向盤轉角這類資料通常只從這種服務拿得到；有了介面名稱才查得到怎麼呼叫。
+     */
+    private fun probeServices(vendor: List<ApplicationInfo>) {
+        val hint = Regex("can|toolkit|mcu|carinfo|canbus|syu|\\.ms\\.|vehicle|car", RegexOption.IGNORE_CASE)
+        val sb = StringBuilder("\n== 廠商服務（名稱含 can/mcu/toolkit/car）\n")
+        val targets = ArrayList<android.content.ComponentName>()
+        for (a in vendor) {
+            val svcs = try {
+                @Suppress("DEPRECATION")
+                packageManager.getPackageInfo(a.packageName, PackageManager.GET_SERVICES).services
+            } catch (_: Throwable) { null } ?: continue
+            for (s in svcs) {
+                if (!hint.containsMatchIn(s.name) && !hint.containsMatchIn(a.packageName)) continue
+                sb.append("${s.name}  exported=${s.exported} perm=${s.permission ?: "-"}\n")
+                if (s.exported && s.permission == null && targets.size < 12) {
+                    targets.add(android.content.ComponentName(a.packageName, s.name))
+                }
+            }
+        }
+        append(sb.toString())
+        main.post {
+            for (cn in targets) {
+                val conn = object : android.content.ServiceConnection {
+                    override fun onServiceConnected(name: android.content.ComponentName, b: android.os.IBinder?) {
+                        val desc = try { b?.interfaceDescriptor } catch (t: Throwable) { "讀取失敗：${t.message}" }
+                        append("綁定成功 ${name.className} → 介面 ${desc ?: "（空）"}")
+                        main.postDelayed({ try { unbindService(this) } catch (_: Throwable) {} }, 1500)
+                    }
+                    override fun onServiceDisconnected(name: android.content.ComponentName) {}
+                }
+                val ok = try {
+                    bindService(Intent().setComponent(cn), conn, Context.BIND_AUTO_CREATE)
+                } catch (t: Throwable) {
+                    append("綁定 ${cn.className} 例外：${t.message}")
+                    false
+                }
+                if (!ok) append("無法綁定 ${cn.className}")
+            }
+        }
+    }
+
+    // ---------------- 系統屬性變動（倒車、方向燈有些平台寫在 property 裡） ----------------
+
+    @Volatile private var propsRunning = false
+
+    private fun watchProps() {
+        propsRunning = true
+        thread(name = "prop-watch") {
+            var prev = readProps()
+            val changes = HashMap<String, Int>()
+            val end = SystemClock.elapsedRealtime() + LISTEN_MS
+            while (propsRunning && SystemClock.elapsedRealtime() < end) {
+                try { Thread.sleep(500) } catch (_: InterruptedException) { break }
+                val cur = readProps()
+                for ((k, v) in cur) {
+                    val old = prev[k]
+                    if (old == v) continue
+                    val n = (changes[k] ?: 0) + 1
+                    changes[k] = n
+                    if (n <= 20) {   // 一直在變的（計數器之類）只記前 20 次
+                        val t = (SystemClock.elapsedRealtime() - listenStart) / 1000.0
+                        append("[%6.2fs] prop %s: %s → %s".format(t, k, old ?: "(無)", v))
+                    }
+                }
+                prev = cur
+            }
+        }
+    }
+
+    private fun readProps(): Map<String, String> {
+        val m = HashMap<String, String>()
+        try {
+            val p = Runtime.getRuntime().exec(arrayOf("getprop"))
+            for (line in p.inputStream.bufferedReader().readLines()) {
+                val i = line.indexOf("]: [")
+                if (line.startsWith("[") && i > 0 && line.endsWith("]")) {
+                    m[line.substring(1, i)] = line.substring(i + 4, line.length - 1)
+                }
+            }
+        } catch (_: Throwable) {}
+        return m
     }
 
     private var fullList: String? = null
@@ -244,12 +331,14 @@ class SignalProbeActivity : AppCompatActivity() {
             return
         }
         receiver = r
-        append("\n== 監聽 ${list.size} 個廣播 60 秒：現在打方向燈 / 倒車")
+        watchProps()
+        append("\n== 監聽 ${list.size} 個廣播＋系統屬性 60 秒：現在打方向燈 / 倒車 / 轉方向盤")
         sticky?.let { append("（黏著廣播）${it.action} ${it.extras?.keySet()}") }
         main.postDelayed({ stopListening(); append("== 監聽結束") }, LISTEN_MS)
     }
 
     private fun stopListening() {
+        propsRunning = false
         receiver?.let { try { unregisterReceiver(it) } catch (_: Throwable) {} }
         receiver = null
         main.removeCallbacksAndMessages(null)
