@@ -9,7 +9,7 @@
   :root{
     --bg:#090d13; --panel:rgba(14,20,28,.8); --line:rgba(120,160,200,.18);
     --fg:#e8f1f8; --muted:#8ba1b4;
-    --cyan:#38e1ff; --amber:#ffc24b; --green:#5ef08a; --violet:#b58cff; --red:#ff5a4d;
+    --cyan:#38e1ff; --amber:#ffc24b; --green:#5ef08a; --violet:#b58cff; --red:#ff5a4d; --orange:#ff8a3d;
     color-scheme:dark;
   }
   html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);overflow:hidden;
@@ -34,6 +34,7 @@
   .wait{top:50%;left:50%;transform:translate(-50%,-50%);color:var(--muted);font-size:14px;letter-spacing:.06em;background:var(--panel);padding:10px 16px;border-radius:10px;border:1px solid var(--line);pointer-events:none;text-align:center;line-height:1.6}
 
   .dock{left:50%;bottom:10px;transform:translateX(-50%);display:flex;gap:4px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:5px}
+  .dock .sep{flex:none;width:1px;margin:6px 3px;background:var(--line)}
   button{font:inherit;font-size:12px;font-weight:600;color:var(--muted);background:transparent;border:0;border-radius:8px;padding:8px 11px;white-space:nowrap}
   button:focus-visible{outline:2px solid var(--cyan);outline-offset:1px}
   .dock button[aria-pressed="true"]{background:rgba(56,225,255,.16);color:var(--cyan)}
@@ -50,12 +51,27 @@
   .cal output{width:46px;text-align:right;font-variant-numeric:tabular-nums;flex:none}
   .cal .chk span{width:auto}
   .cal input[type=checkbox]{accent-color:var(--amber)}
+  .cal .act{display:block;width:100%;margin:10px 0 0;color:var(--amber);background:rgba(255,194,75,.08);border:1px solid rgba(255,194,75,.45)}
+  .cal .msg{margin:6px 0 0;color:var(--fg)}
+
+  /* 號誌：右下角，避開統計面板、預警、校正鈕與 dock（太窄時由 JS 移到 dock 上方） */
+  .tl{right:10px;bottom:10px;display:flex;align-items:center;gap:8px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:6px 11px 6px 7px;pointer-events:none}
+  .tl .lamps{display:flex;gap:5px;background:#05070a;border:1px solid rgba(120,160,200,.14);border-radius:9px;padding:5px 6px}
+  .tl i{display:block;width:16px;height:16px;border-radius:50%;background:#1a2028}
+  .tl.s-red i.r{background:#ff4b3e;box-shadow:0 0 10px rgba(255,75,62,.85)}
+  .tl.s-yellow i.y{background:#ffc533;box-shadow:0 0 10px rgba(255,197,51,.85)}
+  .tl.s-green i.g{background:#35f08f;box-shadow:0 0 10px rgba(53,240,143,.85)}
+  .tl .tx{font-size:12px;font-weight:700;letter-spacing:.1em;color:var(--muted)}
+  .tl.s-red .tx{color:#ff8278}
+  .tl.s-yellow .tx{color:var(--amber)}
+  .tl.s-green .tx{color:#6ff5ad}
 
   .tag{font-size:12px;font-weight:600;padding:2px 7px;border-radius:7px;white-space:nowrap;background:rgba(9,13,19,.82);border:1px solid var(--line);color:var(--fg);transform:translateY(-4px)}
   .tag.car{border-color:rgba(56,225,255,.55)}
   .tag.truck{border-color:rgba(181,140,255,.55)}
   .tag.moto{border-color:rgba(255,194,75,.55)}
   .tag.ped{border-color:rgba(94,240,138,.55)}
+  .tag.cone{border-color:rgba(255,138,61,.6)}
   .tag.danger{border-color:var(--red);color:#ff8278}
   .tag b{margin-left:4px;font-variant-numeric:tabular-nums}
   [hidden]{display:none!important}
@@ -70,6 +86,9 @@
   </div>
   <div class="hud alert" id="alert" hidden>⚠ 碰撞預警</div>
   <div class="hud wait" id="wait">等待偵測資料…<br><small>把全景360 切到俯視畫面</small></div>
+  <div class="hud tl" id="tl" role="status" aria-label="號誌" hidden>
+    <span class="lamps"><i class="r"></i><i class="y"></i><i class="g"></i></span><span class="tx" id="tlTx">未亮</span>
+  </div>
 
   <button class="topbtn" id="calBtn" aria-pressed="false">校正</button>
   <div class="hud cal" id="cal" hidden>
@@ -83,13 +102,17 @@
     <p>寬度＝俯視圖左右兩邊之間的實際公尺數。對照方式：3D 裡自車寬 1.9 m，調到實景地面上的車身跟 3D 車身一樣寬。</p>
     <label class="chk"><input type="checkbox" id="cF"><span>俯視圖車頭朝下（翻轉）</span></label>
     <label class="chk"><input type="checkbox" id="cO"><span>只偵測俯視區（較快較準）</span></label>
+    <button class="act" id="capBtn">存截圖（校正用）</button>
+    <p class="msg" id="capMsg" role="status" hidden></p>
   </div>
 
   <div class="hud dock" id="dock">
     <button data-view="top">俯視</button>
     <button data-view="chase" aria-pressed="true">3D 跟車</button>
     <button data-view="orbit">繞行</button>
-    <button class="g" id="gBtn" aria-pressed="true">實景地面</button>
+    <span class="sep" aria-hidden="true"></span>
+    <button class="g" data-ground="real" aria-pressed="false">實景</button>
+    <button class="g" data-ground="virtual" aria-pressed="false">虛擬道路</button>
   </div>
 </div>
 
@@ -103,12 +126,15 @@
   // 座標約定：自車在原點，車頭朝 -Z；x 正 = 右側。Android 送來的 z 是「前方公尺」，進場景時取負號。
   var Bridge = window.AndroidBridge || null;
   var DEMO = location.hash.indexOf('demo') >= 0;
+  var DEMO_CAM = location.hash.indexOf('demo-cam') >= 0;
   var app = document.getElementById('app');
-  var COL = { cyan: 0x38e1ff, amber: 0xffc24b, green: 0x5ef08a, violet: 0xb58cff, red: 0xff5a4d,
+  var COL = { cyan: 0x38e1ff, amber: 0xffc24b, green: 0x5ef08a, violet: 0xb58cff, red: 0xff5a4d, orange: 0xff6a14,
     asphalt: 0x11171f, ego: 0xeaf7ff, glass: 0x0c161d };
-  var NAMES = { car: '汽車', truck: '卡車', moto: '機車', ped: '行人' };
-  var RADIUS = { car: 0.9, truck: 1.2, moto: 0.4, ped: 0.3 };   // 物件約略半寬(m)
+  var NAMES = { car: '汽車', truck: '卡車', moto: '機車', ped: '行人', cone: '三角錐' };
+  var RADIUS = { car: 0.9, truck: 1.2, moto: 0.4, ped: 0.3, cone: 0.2 };   // 物件約略半寬(m)
+  var GATE = { car: 2.5, truck: 2.5, moto: 2.5, ped: 2.5, cone: 1.2 };     // 跨幀關聯距離門檻(m)
   var EGO_W = 1.9, EGO_L = 4.9, WARN = 1.2, CRIT = 0.5;          // 停車距離門檻(m)
+  function hasFn(name) { return !!Bridge && typeof Bridge[name] === 'function'; }
 
   // ---------- renderer ----------
   var renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'low-power' });
@@ -164,12 +190,12 @@
   real.position.y = 0.02;
   real.visible = false;
   scene.add(real);
-  var groundLoaded = false, groundLoading = false, groundPending = null, realOn = true;
+  var groundLoaded = false, groundLoading = false, groundPending = null, groundMode = 'real';
   groundImg.onload = function () {
     groundTex.image = groundImg;
     groundTex.needsUpdate = true;
     groundLoaded = true;
-    real.visible = realOn;
+    real.visible = groundMode === 'real';
     groundLoading = false;
     if (groundPending) { var p = groundPending; groundPending = null; loadGround(p); }
   };
@@ -178,6 +204,264 @@
     if (groundLoading) { groundPending = url; return; }   // 只留最新一張
     groundLoading = true;
     groundImg.src = url;
+  }
+
+  // ---------- 虛擬道路（特斯拉風格：乾淨路面、路緣、平滑車道線） ----------
+  function srgb(hex) { return new THREE.Color(hex).convertSRGBToLinear(); }   // 配 toneMapped:false，色碼原樣顯示
+  var ROAD_Z = 40, DEF_EDGE = 5.25, CURB_W = 0.15, CURB_H = 0.12, WALK_W = 2.4;
+  var road = new THREE.Group();
+  road.visible = false;
+  scene.add(road);
+  function flat(hex, y) {
+    var m = new THREE.Mesh(new THREE.PlaneGeometry(1, 2 * ROAD_Z), new THREE.MeshBasicMaterial({ color: srgb(hex),
+      toneMapped: false, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 }));
+    m.rotation.x = -Math.PI / 2;
+    m.position.y = y;
+    road.add(m);
+    return m;
+  }
+  // 虛擬模式：不畫底板（路外直接是背景色，省一次全畫面填色），霧改成背景色原樣，路面遠處才淡進背景
+  var fogCol = scene.fog.color.clone(), vFogCol = srgb(COL.asphalt);
+  var strip = flat(0x262d36, 0.006);
+  var walkL = flat(0x39414b, CURB_H), walkR = flat(0x39414b, CURB_H);
+  walkL.scale.x = walkR.scale.x = WALK_W;
+  var curbGeo = new THREE.BoxGeometry(CURB_W, CURB_H, 2 * ROAD_Z);
+  var curbMat = new THREE.MeshLambertMaterial({ color: srgb(0xaab3bd) });
+  var redCurbMat = new THREE.MeshLambertMaterial({ vertexColors: true });
+  var redCurbGeo = (function () {   // 紅白相間路緣（台灣紅線），1 m 一段，合併成單一 draw call
+    var n = 2 * ROAD_Z, box = new THREE.BoxGeometry(CURB_W, CURB_H, 1);
+    var bp = box.attributes.position.array, bn = box.attributes.normal.array, bi = box.index.array, nv = bp.length / 3;
+    var pos = new Float32Array(nv * n * 3), nor = new Float32Array(nv * n * 3), col = new Float32Array(nv * n * 3), idx = [];
+    var red = srgb(0xe2362b), white = srgb(0xeef2f5);
+    for (var s = 0; s < n; s++) {
+      var c = s % 2 ? white : red, zc = -ROAD_Z + s + 0.5;
+      for (var v = 0; v < nv; v++) {
+        var o = (s * nv + v) * 3;
+        pos[o] = bp[v * 3]; pos[o + 1] = bp[v * 3 + 1]; pos[o + 2] = bp[v * 3 + 2] + zc;
+        nor[o] = bn[v * 3]; nor[o + 1] = bn[v * 3 + 1]; nor[o + 2] = bn[v * 3 + 2];
+        col[o] = c.r; col[o + 1] = c.g; col[o + 2] = c.b;
+      }
+      for (var i = 0; i < bi.length; i++) idx.push(bi[i] + s * nv);
+    }
+    box.dispose();
+    var g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    g.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
+    g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    g.setIndex(idx);
+    return g;
+  })();
+  function curb() {
+    var m = new THREE.Mesh(curbGeo, curbMat);
+    m.position.y = CURB_H / 2;
+    road.add(m);
+    return m;
+  }
+  var curbL = curb(), curbR = curb();
+
+  // 路緣：payload 的 el/er 平滑；未知時退回 ±5.25 m 且不畫路緣、人行道
+  var edgeL = { v: -DEF_EDGE, t: -DEF_EDGE, on: false }, edgeR = { v: DEF_EDGE, t: DEF_EDGE, on: false }, lastRoad = -1e9;
+  function aimEdge(e, val, sign) {
+    var ok = typeof val === 'number' && isFinite(val) && val * sign > 0.9;
+    e.on = ok;
+    e.t = ok ? sign * Math.min(Math.abs(val), 15) : sign * DEF_EDGE;
+  }
+  function sideEdge(c, wk, e, sign, red) {
+    c.visible = wk.visible = e.on;
+    c.position.x = e.v + sign * CURB_W / 2;
+    wk.position.x = e.v + sign * (CURB_W + WALK_W / 2);
+    c.geometry = red ? redCurbGeo : curbGeo;
+    c.material = red ? redCurbMat : curbMat;
+  }
+
+  // 車道線：每條線一個軌跡（種類、角度 φ、法向偏移 ρ、沿線範圍 s0..s1、虛線相位）
+  // 線方向 d = (sinφ, cosφ)，法向 n = (cosφ, −sinφ)，φ 從車軸（+z）往右量，正規化到 [−90°, 90°)
+  var LINE_C = { w: srgb(0xeef2f5), y: srgb(0xffc533), r: srgb(0xff4b3e) }, LINE_W = { w: 0.15, y: 0.15, r: 0.2 };
+  var DASH = 4, PERIOD = 10, MAXQ = 12, MAX_LINES = 16, LINE_Y = 0.014;
+  var HALF = Math.PI / 2, LONG = 25 * Math.PI / 180, MATCH_A = 8 * Math.PI / 180;
+  var LINE_IDX = (function () {
+    var a = [];
+    for (var q = 0; q < MAXQ; q++) a.push(q * 4, q * 4 + 1, q * 4 + 2, q * 4 + 2, q * 4 + 1, q * 4 + 3);
+    return a;
+  })();
+  var lineTracks = [], linePool = [];
+  function mod(a, m) { return ((a % m) + m) % m; }
+  function angDiff(a, b) {   // 無向線的角度差 → [−90°, 90°)
+    var d = a - b;
+    while (d >= HALF) d -= Math.PI;
+    while (d < -HALF) d += Math.PI;
+    return d;
+  }
+  function lineObs(l) {
+    if (!l) return null;
+    var dx = l.x2 - l.x1, dz = l.z2 - l.z1;
+    if (!(Math.hypot(dx, dz) > 0.05)) return null;   // 也擋掉 NaN
+    var phi = Math.atan2(dx, dz);
+    if (phi >= HALF) phi -= Math.PI; else if (phi < -HALF) phi += Math.PI;
+    var sn = Math.sin(phi), cs = Math.cos(phi), a = l.x1 * sn + l.z1 * cs, b = l.x2 * sn + l.z2 * cs;
+    return { k: LINE_C[l.k] ? l.k : 'w', d: !!l.d, phi: phi, rho: ((l.x1 + l.x2) * cs - (l.z1 + l.z2) * sn) / 2,
+      s0: Math.min(a, b), s1: Math.max(a, b), c: typeof l.c === 'number' && isFinite(l.c) ? l.c : 1 };
+  }
+  function flipLine(tr) {   // 同一條線換成反方向表示（φ ± 180°）
+    var s = tr.tphi >= 0 ? -Math.PI : Math.PI, a;
+    tr.tphi += s; tr.phi += s;
+    tr.trho = -tr.trho; tr.rho = -tr.rho;
+    a = tr.ts0; tr.ts0 = -tr.ts1; tr.ts1 = -a;
+    a = tr.s0; tr.s0 = -tr.s1; tr.s1 = -a;
+    tr.tph = mod(tr.ts0, PERIOD); tr.ph = mod(tr.s0, PERIOD);
+  }
+  function aimLine(tr, o, fl, dp, now) {
+    tr.tphi += dp;
+    if (fl) { tr.trho = -o.rho; tr.ts0 = -o.s1; tr.ts1 = -o.s0; } else { tr.trho = o.rho; tr.ts0 = o.s0; tr.ts1 = o.s1; }
+    tr.tph = mod(tr.ts0, PERIOD);   // 虛線以偵測段起點為錨
+    tr.d = o.d; tr.tc = o.c; tr.seen = now;
+    if (tr.tphi >= HALF || tr.tphi < -HALF) flipLine(tr);
+  }
+  function matchLines(list, now) {
+    var obs = [], pairs = [], oUsed = {}, tUsed = {}, i, j;
+    for (i = 0; i < list.length && obs.length < MAX_LINES; i++) {
+      var ob = lineObs(list[i]);
+      if (ob) obs.push(ob);
+    }
+    for (i = 0; i < obs.length; i++) {
+      for (j = 0; j < lineTracks.length; j++) {
+        var o = obs[i], tr = lineTracks[j];
+        if (tr.k !== o.k) continue;
+        var dp = angDiff(o.phi, tr.tphi), fl = Math.abs(o.phi - tr.tphi) >= HALF;
+        var dr = Math.abs((fl ? -o.rho : o.rho) - tr.trho);
+        if (Math.abs(dp) < MATCH_A && dr < 0.35) pairs.push({ i: i, j: j, fl: fl, dp: dp, cost: dr + Math.abs(dp) });
+      }
+    }
+    pairs.sort(function (a, b) { return a.cost - b.cost; });
+    for (i = 0; i < pairs.length; i++) {
+      var pr = pairs[i];
+      if (oUsed[pr.i] || tUsed[pr.j]) continue;
+      oUsed[pr.i] = tUsed[pr.j] = true;
+      aimLine(lineTracks[pr.j], obs[pr.i], pr.fl, pr.dp, now);
+    }
+    for (i = 0; i < obs.length; i++) {
+      if (oUsed[i] || lineTracks.length >= MAX_LINES) continue;
+      var nt = { k: obs[i].k, tphi: obs[i].phi, fade: 0, mesh: null, built: null };
+      aimLine(nt, obs[i], false, 0, now);
+      nt.phi = nt.tphi; nt.rho = nt.trho; nt.s0 = nt.ts0; nt.s1 = nt.ts1; nt.ph = nt.tph; nt.c = nt.tc;
+      lineTracks.push(nt);
+    }
+  }
+  function takeLine(k) {
+    var m = linePool.pop();
+    if (!m) {
+      var g = new THREE.BufferGeometry(), pa = new THREE.BufferAttribute(new Float32Array(MAXQ * 12), 3);
+      pa.setUsage(THREE.DynamicDrawUsage);
+      g.setAttribute('position', pa);
+      g.setIndex(LINE_IDX);
+      m = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false, toneMapped: false,
+        side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 }));
+      m.frustumCulled = false;   // 幾何會變，包圍球不準
+      m.renderOrder = -1;        // 先於陰影、警示框
+    }
+    m.material.color.copy(LINE_C[k]);
+    road.add(m);
+    return m;
+  }
+  function putQuad(arr, q, a, b, rho, sn, cs, hw) {
+    // 中心點 P(s) = ρn + s·d；場景 Z = −z
+    var o = q * 12, px = rho * cs, pz = -rho * sn;
+    var ax = px + a * sn, az = pz + a * cs, bx = px + b * sn, bz = pz + b * cs, ex = cs * hw, ez = -sn * hw;
+    arr[o] = ax - ex; arr[o + 1] = LINE_Y; arr[o + 2] = -(az - ez);
+    arr[o + 3] = ax + ex; arr[o + 4] = LINE_Y; arr[o + 5] = -(az + ez);
+    arr[o + 6] = bx - ex; arr[o + 7] = LINE_Y; arr[o + 8] = -(bz - ez);
+    arr[o + 9] = bx + ex; arr[o + 10] = LINE_Y; arr[o + 11] = -(bz + ez);
+  }
+  function buildLine(tr, w, lon) {
+    var b = tr.built;
+    if (b && b.w === w && b.d === tr.d && b.lon === lon && Math.abs(b.phi - tr.phi) < 0.0025 &&
+      Math.abs(b.rho - tr.rho) < 0.015 && (lon || (Math.abs(b.s0 - tr.s0) < 0.05 && Math.abs(b.s1 - tr.s1) < 0.05)) &&
+      (!tr.d || Math.abs(b.ph - tr.ph) < 0.04)) return;   // 變化不明顯就不重建
+    if (!b) b = tr.built = {};
+    b.w = w; b.d = tr.d; b.lon = lon; b.phi = tr.phi; b.rho = tr.rho; b.s0 = tr.s0; b.s1 = tr.s1; b.ph = tr.ph;
+    var sn = Math.sin(tr.phi), cs = Math.cos(tr.phi), lo = tr.s0, hi = tr.s1, nq = 0;
+    if (lon) { lo = (-ROAD_Z + tr.rho * sn) / cs; hi = (ROAD_Z + tr.rho * sn) / cs; }   // 縱向線沿航向延伸到前後 40 m
+    var geo = tr.mesh.geometry, arr = geo.attributes.position.array;
+    if (!tr.d) putQuad(arr, nq++, lo, hi, tr.rho, sn, cs, w / 2);
+    else {
+      for (var st = tr.ph + Math.floor((lo - tr.ph) / PERIOD) * PERIOD; st < hi && nq < MAXQ; st += PERIOD) {
+        var a = Math.max(st, lo), e = Math.min(st + DASH, hi);   // 實 4 m、空 6 m
+        if (e - a > 0.05) putQuad(arr, nq++, a, e, tr.rho, sn, cs, w / 2);
+      }
+    }
+    geo.attributes.position.needsUpdate = true;
+    geo.setDrawRange(0, nq * 6);
+  }
+  function updateLines(dt, now) {
+    var k = 1 - Math.pow(0.01, dt), i, j, tr;
+    // 同一條線分裂成兩個軌跡（觀測在兩者間跳，兩個都不會過期）→ 留舊的，新的直接拿掉（相距 < 8 cm，看不出跳動）
+    for (i = 0; i < lineTracks.length; i++) {
+      var a = lineTracks[i];
+      if (a.dead) continue;
+      for (j = i + 1; j < lineTracks.length; j++) {
+        var b = lineTracks[j];
+        if (b.dead || b.k !== a.k || Math.abs(angDiff(b.phi, a.phi)) > 0.035) continue;
+        var fl = Math.abs(b.phi - a.phi) >= HALF, b0 = fl ? -b.s1 : b.s0, b1 = fl ? -b.s0 : b.s1;
+        if (Math.abs((fl ? -b.rho : b.rho) - a.rho) > 0.08) continue;
+        if (Math.abs(a.phi) >= LONG && (b1 < a.s0 || b0 > a.s1)) continue;   // 同一直線上不重疊的兩段（如斑馬線）不併
+        b.dead = true;
+        b.seen = -1e9;
+        b.fade = 0;
+      }
+    }
+    for (i = lineTracks.length - 1; i >= 0; i--) {
+      tr = lineTracks[i];
+      tr.fade = now - tr.seen < 1200 ? Math.min(1, tr.fade + dt * 4) : tr.fade - dt * 2;   // 1.2 s 沒更新就淡出
+      if (tr.fade <= 0) {
+        if (tr.mesh) { road.remove(tr.mesh); linePool.push(tr.mesh); }
+        lineTracks.splice(i, 1);
+        continue;
+      }
+      tr.phi += (tr.tphi - tr.phi) * k;
+      tr.rho += (tr.trho - tr.rho) * k;
+      tr.s0 += (tr.ts0 - tr.s0) * k;
+      tr.s1 += (tr.ts1 - tr.s1) * k;
+      tr.c += (tr.tc - tr.c) * k;
+      tr.ph = mod(tr.ph + (mod(tr.tph - tr.ph + PERIOD / 2, PERIOD) - PERIOD / 2) * k, PERIOD);
+    }
+    if (!road.visible) return;
+    for (i = 0; i < lineTracks.length; i++) {
+      tr = lineTracks[i];
+      var w = LINE_W[tr.k], lon = Math.abs(tr.phi) < LONG;
+      // 雙線（雙黃線）中心距小於線寬時縮窄，留一道看得見的縫
+      if (lon) {
+        for (j = 0; j < lineTracks.length; j++) {
+          var o = lineTracks[j];
+          if (o === tr || o.k !== tr.k || Math.abs(o.phi) >= LONG || Math.abs(o.phi - tr.phi) > 0.07) continue;
+          var sep = Math.abs(o.rho - tr.rho);
+          if (sep > 0.04 && sep < w + 0.06) w = Math.max(0.06, Math.min(w, Math.round((sep - 0.05) * 100) / 100));
+        }
+      }
+      if (!tr.mesh) { tr.mesh = takeLine(tr.k); tr.built = null; }
+      buildLine(tr, w, lon);
+      tr.mesh.material.opacity = tr.fade * (0.7 + 0.3 * Math.min(1, Math.max(0, tr.c)));
+    }
+  }
+  function updateRoad(dt, now) {
+    if (now - lastRoad > 1200) { aimEdge(edgeL, null, -1); aimEdge(edgeR, null, 1); }   // 太久沒道路資料 → 預設路面
+    updateLines(dt, now);
+    if (!road.visible) return;
+    var k = 1 - Math.pow(0.02, dt);
+    edgeL.v += (edgeL.t - edgeL.v) * k;
+    edgeR.v += (edgeR.t - edgeR.v) * k;
+    strip.scale.x = edgeR.v - edgeL.v;
+    strip.position.x = (edgeL.v + edgeR.v) / 2;
+    // 紅線貼著路緣 0.6 m 內 → 該側路緣畫成紅白相間
+    var redL = false, redR = false;
+    for (var i = 0; i < lineTracks.length; i++) {
+      var tr = lineTracks[i];
+      if (tr.k !== 'r' || tr.fade < 0.3 || Math.abs(tr.phi) >= LONG) continue;
+      var sm = (tr.s0 + tr.s1) / 2, xm = tr.rho * Math.cos(tr.phi) + sm * Math.sin(tr.phi);
+      if (Math.abs(xm - edgeL.t) < 0.6) redL = true;
+      if (Math.abs(xm - edgeR.t) < 0.6) redR = true;
+    }
+    sideEdge(curbL, walkL, edgeL, -1, redL);
+    sideEdge(curbR, walkR, edgeR, 1, redR);
   }
 
   // ---------- builders ----------
@@ -193,13 +477,14 @@
     m.position.set(x || 0, y || 0, z || 0);
     return m;
   }
-  var shadowTex = (function () {
+  function radialTex(inner, outer) {
     var c = document.createElement('canvas'); c.width = c.height = 64;
     var g = c.getContext('2d'), r = g.createRadialGradient(32, 32, 2, 32, 32, 31);
-    r.addColorStop(0, 'rgba(0,0,0,.55)'); r.addColorStop(1, 'rgba(0,0,0,0)');
+    r.addColorStop(0, inner); r.addColorStop(1, outer);
     g.fillStyle = r; g.fillRect(0, 0, 64, 64);
     return new THREE.CanvasTexture(c);
-  })();
+  }
+  var shadowTex = radialTex('rgba(0,0,0,.55)', 'rgba(0,0,0,0)');
   function shadow(g, w, l) {
     var m = new THREE.Mesh(new THREE.PlaneGeometry(w * 1.6, l * 1.3),
       new THREE.MeshBasicMaterial({ map: shadowTex, transparent: true, depthWrite: false }));
@@ -266,6 +551,27 @@
     g.userData.paint = bodyM;
     return g;
   }
+  // 三角錐：橘色錐身 + 白色反光環 + 方形黑底座，高約 0.7 m
+  var CONE = (function () {
+    var y0 = 0.05, H = 0.65, rb = 0.165, rt = 0.03;
+    function r(y) { return rb - (rb - rt) * (y - y0) / H + 0.004; }
+    var band = std(0xf2f5f8, 0.1, 0.3);
+    band.emissive.setHex(0x9ba3ab); band.emissiveIntensity = 0.3;   // 反光材質感
+    return {
+      base: new THREE.BoxGeometry(0.4, y0, 0.4), baseM: std(srgb(0x1e2126), 0, 0.85),
+      body: new THREE.CylinderGeometry(rt, rb, H, 16), y0: y0, H: H,
+      band: new THREE.CylinderGeometry(r(0.47), r(0.33), 0.14, 16, 1, true), bandM: band
+    };
+  })();
+  function makeCone() {
+    var g = new THREE.Group(), body = std(srgb(COL.orange), 0.05, 0.5);   // 轉線性色，橘色才不會被照成米色
+    g.add(mesh(CONE.base, CONE.baseM, 0, CONE.y0 / 2, 0));
+    g.add(mesh(CONE.body, body, 0, CONE.y0 + CONE.H / 2, 0));
+    g.add(mesh(CONE.band, CONE.bandM, 0, 0.4, 0));
+    shadow(g, 0.45, 0.45);
+    g.userData.paint = body;
+    return g;
+  }
 
   // ---------- ego + 安全距離框 ----------
   var ego = makeCar(COL.ego, true);
@@ -289,18 +595,64 @@
   warnBand.position.y = 0.04;
   scene.add(warnBand);
 
+  // ---------- 號誌：前方約 18 m 的 3D 紅綠燈（橫式燈箱）+ HUD ----------
+  var TL_C = { red: 0xff4b3e, yellow: 0xffc533, green: 0x35f08f };
+  var TL_TX = { red: '紅燈', yellow: '黃燈', green: '綠燈', off: '未亮' };
+  var TL_D = 18, TL_Y = 2.7;   // 燈箱高度壓低，跟車視角才看得到 18 m 外的燈
+  var tlObj = new THREE.Group(), tlLamps = {}, lastTl = -1e9, tlState = '', tlAx = 0, tlAxT = 0;
+  tlObj.visible = false;
+  scene.add(tlObj);
+  (function () {
+    var dark = std(srgb(0x14171b), 0.2, 0.7);
+    tlObj.add(mesh(new THREE.CylinderGeometry(0.07, 0.09, TL_Y, 10), std(srgb(0x5a636e), 0.6, 0.45), 0, TL_Y / 2, 0));
+    tlObj.add(mesh(new THREE.BoxGeometry(1.44, 0.52, 0.3), dark, 0, TL_Y, 0));
+    var lg = new THREE.CircleGeometry(0.17, 20), vg = new THREE.BoxGeometry(0.4, 0.03, 0.2);
+    ['red', 'yellow', 'green'].forEach(function (s, i) {
+      var x = (i - 1) * 0.46;
+      // 燈面只靠自發光：底色黑、不反射環境，熄燈時留一點燈色
+      var m = new THREE.MeshStandardMaterial({ color: 0x000000, emissive: srgb(TL_C[s]), emissiveIntensity: 0.05,
+        roughness: 1, metalness: 0, toneMapped: false });
+      m.envMapIntensity = 0;
+      tlObj.add(mesh(lg, m, x, TL_Y, 0.152));
+      tlObj.add(mesh(vg, dark, x, TL_Y + 0.2, 0.25));   // 遮陽罩
+      tlLamps[s] = { m: m, x: x };
+    });
+  })();
+  var tlGlow = new THREE.Sprite(new THREE.SpriteMaterial({ map: radialTex('rgba(255,255,255,.9)', 'rgba(255,255,255,0)'),
+    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false }));
+  tlGlow.scale.set(1.05, 1.05, 1);
+  tlGlow.visible = false;
+  tlObj.add(tlGlow);
+  var tlEl = document.getElementById('tl'), tlTx = document.getElementById('tlTx');
+  function showTl(tl) {
+    var s = TL_TX[tl.s] ? tl.s : 'off';
+    tlAxT = (typeof tl.ax === 'number' && isFinite(tl.ax) ? Math.max(-60, Math.min(60, tl.ax)) : 0) * Math.PI / 180;
+    if (s === tlState) return;
+    tlState = s;
+    tlEl.className = 'hud tl s-' + s;
+    tlTx.textContent = TL_TX[s];
+    tlEl.setAttribute('aria-label', '號誌：' + TL_TX[s]);
+    for (var n in tlLamps) tlLamps[n].m.emissiveIntensity = n === s ? 1 : 0.05;
+    tlGlow.visible = !!TL_C[s];
+    if (TL_C[s]) {
+      tlGlow.material.color.copy(srgb(TL_C[s]));
+      tlGlow.position.set(tlLamps[s].x, TL_Y, 0.3);
+    }
+  }
+
   // ---------- tracks（跨幀關聯，ID 穩定、位置平滑） ----------
   var tracks = [], nextId = 1;
-  var POOL = { car: [], truck: [], moto: [], ped: [] };
+  var POOL = { car: [], truck: [], moto: [], ped: [], cone: [] };
   function makeObj(t) {
     var g = t === 'truck' ? makeTruck(0x8f7fd6) : t === 'moto' ? makeScooter(0xe0a63a)
-      : t === 'ped' ? makePerson(0x5ef08a) : makeCar(0x1f7fae);
+      : t === 'ped' ? makePerson(0x5ef08a) : t === 'cone' ? makeCone() : makeCar(0x1f7fae);
     var el = document.createElement('div');
     el.className = 'tag ' + t;
     var lab = new THREE.CSS2DObject(el);
-    lab.position.set(0, t === 'truck' ? 3.3 : 2.3, 0);
+    lab.position.set(0, t === 'truck' ? 3.3 : t === 'cone' ? 1.15 : 2.3, 0);
     g.add(lab);
     g.userData.el = el;
+    g.userData.lab = lab;
     return g;
   }
   function acquire(t) {
@@ -319,7 +671,9 @@
     var used = {};
     objs.sort(function (a, b) { return (b.c || 0) - (a.c || 0); });
     for (var i = 0; i < objs.length; i++) {
-      var o = objs[i], wx = o.x, wz = -o.z, best = null, bd = 2.5;
+      var o = objs[i];
+      if (!o || !NAMES[o.t]) continue;   // 不認得的類別略過
+      var wx = o.x, wz = -o.z, best = null, bd = GATE[o.t], fresh = false;
       for (var j = 0; j < tracks.length; j++) {
         var tr = tracks[j];
         if (used[tr.id] || tr.t !== o.t) continue;
@@ -330,11 +684,14 @@
         best = { id: nextId++, t: o.t, mesh: acquire(o.t), x: wx, z: wz, tx: wx, tz: wz, yaw: 0, yawT: 0, txt: '' };
         best.mesh.position.set(wx, 0, wz);
         tracks.push(best);
+        fresh = true;
       }
       used[best.id] = true;
       best.tx = wx; best.tz = wz; best.seen = now;
-      // 框比較寬 → 橫向停放的車
-      if (o.t !== 'ped' && o.w && o.h) best.yawT = o.w > o.h * 1.25 ? Math.PI / 2 : 0;
+      // yaw（弧度，正 = 車頭偏右）優先；沒有就看框比較寬 → 橫向停放的車
+      if (typeof o.yaw === 'number' && isFinite(o.yaw)) best.yawT = -o.yaw;
+      else if (o.t !== 'ped' && o.t !== 'cone' && o.w && o.h) best.yawT = o.w > o.h * 1.25 ? Math.PI / 2 : 0;
+      if (fresh) best.yaw = best.yawT;
     }
   }
 
@@ -343,12 +700,20 @@
   window.setFrame = function (p) {
     var now = performance.now();
     lastData = now;
+    if (p.src) setSrc(p.src);
     if (p.wm) { wm = p.wm; hm = p.hm || wm; }
     real.scale.set(wm, hm, 1);
     real.rotation.set(-Math.PI / 2, 0, p.flip ? Math.PI : 0);
-    if (p.ground && realOn) loadGround(p.ground);
+    if (p.ground && groundMode === 'real') loadGround(p.ground);
     if (p.stat) showStat(p.stat, p.overlap);
     associate(p.objs || [], now);
+    if (p.road) {
+      lastRoad = now;
+      matchLines(p.road.lines || [], now);
+      aimEdge(edgeL, p.road.el, -1);
+      aimEdge(edgeR, p.road.er, 1);
+    }
+    if (p.tl) { lastTl = now; showTl(p.tl); }
   };
 
   var statEl = document.getElementById('stat');
@@ -361,7 +726,7 @@
 
   // ---------- HUD ----------
   var LEGEND = [['car', '汽車', 'var(--cyan)'], ['truck', '卡車', 'var(--violet)'],
-    ['moto', '機車', 'var(--amber)'], ['ped', '行人', 'var(--green)']];
+    ['moto', '機車', 'var(--amber)'], ['ped', '行人', 'var(--green)'], ['cone', '三角錐', 'var(--orange)']];
   var rowsEl = document.getElementById('rows'), countEls = {};
   LEGEND.forEach(function (l) {
     var r = document.createElement('div');
@@ -390,19 +755,34 @@
     var bs = document.querySelectorAll('#dock button[data-view]');
     for (var i = 0; i < bs.length; i++) bs[i].setAttribute('aria-pressed', String(bs[i].getAttribute('data-view') === name));
   }
+
+  // 地面模式：實景 / 虛擬道路 互斥，再按一次已選的 → 關閉
+  var gBtns = document.querySelectorAll('#dock button[data-ground]');
+  function applyGround(mode) {
+    groundMode = mode;
+    for (var i = 0; i < gBtns.length; i++) gBtns[i].setAttribute('aria-pressed', String(gBtns[i].getAttribute('data-ground') === mode));
+    real.visible = mode === 'real' && groundLoaded;
+    road.visible = mode === 'virtual';
+    grid.visible = mode !== 'virtual';
+    base.visible = !road.visible;
+    scene.fog.color.copy(road.visible ? vFogCol : fogCol);
+  }
+  function saveGround(mode) {
+    try { if (hasFn('setRealGround')) Bridge.setRealGround(mode === 'real'); } catch (e) {}   // 舊版 Android 只有這個
+    try { if (hasFn('setGroundMode')) Bridge.setGroundMode(mode); } catch (e) {}
+  }
   document.getElementById('dock').addEventListener('click', function (e) {
     var b = e.target.closest('button[data-view]');
-    if (b) setView(b.getAttribute('data-view'));
+    if (b) { setView(b.getAttribute('data-view')); return; }
+    var gb = e.target.closest('button[data-ground]');
+    if (gb) {
+      var m = gb.getAttribute('data-ground');
+      if (m === groundMode) m = 'off';
+      applyGround(m);
+      saveGround(m);
+    }
   });
   setView('chase');
-
-  var gBtn = document.getElementById('gBtn');
-  gBtn.addEventListener('click', function () {
-    realOn = gBtn.getAttribute('aria-pressed') !== 'true';
-    gBtn.setAttribute('aria-pressed', String(realOn));
-    real.visible = realOn && groundLoaded;
-    if (Bridge) Bridge.setRealGround(realOn);
-  });
 
   // ---------- 校正（直接寫回 Android 設定，偵測服務下一幀就生效） ----------
   var calBtn = document.getElementById('calBtn'), cal = document.getElementById('cal');
@@ -410,7 +790,8 @@
     cT = document.getElementById('cT'), cB = document.getElementById('cB'),
     cM = document.getElementById('cM'), cF = document.getElementById('cF'), cO = document.getElementById('cO');
   function readPrefs() {
-    var p = { l: 0.03, t: 0, r: 0.48, b: 0.86, meters: 8, flip: false, realGround: true, roiOnly: true };
+    var p = { l: 0.03, t: 0, r: 0.48, b: 0.86, meters: 8, flip: false, realGround: true, roiOnly: true,
+      groundMode: DEMO ? 'virtual' : '', src: DEMO_CAM ? 'cam' : 'screen' };
     if (Bridge) { try { p = JSON.parse(Bridge.getPrefs()); } catch (e) {} }
     return p;
   }
@@ -445,18 +826,47 @@
     cal.hidden = !open;
     calBtn.setAttribute('aria-pressed', String(open));
   });
-  (function initGround() {
-    realOn = readPrefs().realGround !== false;
-    gBtn.setAttribute('aria-pressed', String(realOn));
+
+  // 存目前整張螢幕截圖給離線校正；Android 存完回呼 window.onSaved(訊息)
+  var capMsg = document.getElementById('capMsg');
+  function capNote(t) { capMsg.textContent = t; capMsg.hidden = false; }
+  document.getElementById('capBtn').addEventListener('click', function () {
+    if (!hasFn('saveCapture')) { capNote('此版本不支援存截圖'); return; }
+    capNote('儲存中…');
+    try { Bridge.saveCapture(); } catch (e) { capNote('存截圖失敗'); }
+  });
+  window.onSaved = function (text) { capNote(String(text)); };
+
+  // 來源：screen = 擷取全景360 畫面；cam = Camera2 直讀（鏡頭畫面有自己的原生控制，不用校正抽屜）
+  var srcMode = '';
+  function setSrc(s) {
+    s = s === 'cam' ? 'cam' : 'screen';
+    if (s === srcMode) return;
+    srcMode = s;
+    waitEl.innerHTML = s === 'cam' ? '等待鏡頭畫面…<br><small>Camera2 直讀模式</small>'
+      : '等待偵測資料…<br><small>把全景360 切到俯視畫面</small>';
+    calBtn.hidden = s === 'cam';
+    if (s === 'cam') { cal.hidden = true; calBtn.setAttribute('aria-pressed', 'false'); }
+  }
+
+  (function initPrefs() {
+    var p = readPrefs(), m = p.groundMode;
+    if (m !== 'real' && m !== 'virtual' && m !== 'off') m = p.realGround !== false ? 'real' : 'off';
+    applyGround(m);
+    setSrc(p.src);
   })();
 
   // ---------- resize ----------
+  var dockEl = document.getElementById('dock');
   function resize() {
     var w = app.clientWidth || window.innerWidth, h = app.clientHeight || window.innerHeight;
     renderer.setSize(w, h);
     labels.setSize(w, h);
     camera.aspect = w / h;
     camera.updateProjectionMatrix();
+    // 視窗太窄、號誌會撞到 dock 時改放到 dock 上方
+    var d = dockEl.getBoundingClientRect();
+    tlEl.style.bottom = d.right > w - 150 ? Math.round(h - d.top + 8) + 'px' : '';
   }
   window.addEventListener('resize', resize);
   resize();
@@ -465,13 +875,14 @@
   var lastT = 0;
   function update(dt, now) {
     var k = 1 - Math.pow(0.002, dt);   // 位置平滑
-    var counts = { car: 0, truck: 0, moto: 0, ped: 0 }, anyWarn = false, anyCrit = false;
+    var counts = { car: 0, truck: 0, moto: 0, ped: 0, cone: 0 }, anyWarn = false, anyCrit = false;
     for (var i = tracks.length - 1; i >= 0; i--) {
       var tr = tracks[i];
       if (now - tr.seen > 900) { release(tr); tracks.splice(i, 1); continue; }
       tr.x += (tr.tx - tr.x) * k;
       tr.z += (tr.tz - tr.z) * k;
-      tr.yaw += (tr.yawT - tr.yaw) * k;
+      var dy = tr.yawT - tr.yaw;
+      tr.yaw += Math.atan2(Math.sin(dy), Math.cos(dy)) * k;   // 走最短的方向轉
       tr.mesh.position.set(tr.x, 0, tr.z);
       tr.mesh.rotation.y = Math.PI + tr.yaw;
       counts[tr.t]++;
@@ -480,6 +891,7 @@
       var dx = Math.max(Math.abs(tr.x) - EGO_W / 2, 0), dz = Math.max(Math.abs(tr.z) - EGO_L / 2, 0);
       var clr = Math.max(0, Math.hypot(dx, dz) - RADIUS[tr.t]);
       var warn = clr < WARN, crit = clr < CRIT;
+      tr.clr = clr;
       if (warn) anyWarn = true;
       if (crit) anyCrit = true;
       var p = tr.mesh.userData.paint;
@@ -495,12 +907,39 @@
       if (tr.txt !== txt) { el.innerHTML = txt; tr.txt = txt; }
       if (el.className !== cls) el.className = cls;
     }
+    // 三角錐常成排出現：2 m 內一群只標最近的一個，標籤才不會疊成一團
+    if (counts.cone) {
+      for (i = 0; i < tracks.length; i++) {
+        var a = tracks[i], show = true;
+        if (a.t !== 'cone') continue;
+        for (var j = 0; j < tracks.length && show; j++) {
+          var b = tracks[j];
+          if (b !== a && b.t === 'cone' && (b.clr < a.clr || (b.clr === a.clr && b.id < a.id)) &&
+            Math.hypot(b.x - a.x, b.z - a.z) < 2) show = false;
+        }
+        a.mesh.userData.lab.visible = show;   // CSS2DRenderer 依 visible 決定顯示
+      }
+    }
     for (var t in counts) countEls[t].textContent = counts[t];
     alertEl.hidden = !anyWarn;
     alertEl.textContent = anyCrit ? '⚠ 距離過近' : '⚠ 碰撞預警';
     warnBand.material.color.setHex(anyWarn ? COL.red : COL.cyan);
     warnBand.material.opacity = anyWarn ? 0.35 + 0.3 * Math.abs(Math.sin(now / 160)) : 0.22;
     waitEl.hidden = now - lastData < 2000;
+
+    updateRoad(dt, now);
+
+    // 號誌：1.5 s 沒資料就收起來
+    var tlOn = now - lastTl < 1500;
+    if (tlEl.hidden === tlOn) tlEl.hidden = !tlOn;
+    if (tlOn && !tlObj.visible) tlAx = tlAxT;   // 剛出現直接到位
+    tlObj.visible = tlOn;
+    if (tlOn) {
+      tlAx += (tlAxT - tlAx) * k;
+      var X = TL_D * Math.sin(tlAx), Z = -TL_D * Math.cos(tlAx);
+      tlObj.position.set(X, 0, Z);
+      tlObj.rotation.y = Math.atan2(-X, -Z);   // 燈面朝自車
+    }
   }
   function loop(t) {
     requestAnimationFrame(loop);
@@ -514,8 +953,9 @@
   }
   requestAnimationFrame(loop);
 
-  // ---------- 示範資料（瀏覽器預覽用：index.html#demo） ----------
+  // ---------- 示範資料（瀏覽器預覽用：index.html#demo、#demo-cam） ----------
   if (DEMO) {
+    window.__bev3d = { renderer: renderer, camera: camera, controls: controls, lines: lineTracks };   // 除錯用（僅示範模式）
     var demoGround = (function () {
       var c = document.createElement('canvas'); c.width = 256; c.height = 192;
       var g = c.getContext('2d');
@@ -527,17 +967,31 @@
       g.fillStyle = '#5b6a3a'; g.fillRect(0, 0, 18, 192); g.fillRect(238, 0, 18, 192);
       return c.toDataURL('image/jpeg', 0.7);
     })();
+    var jit = function (a) { return (Math.random() - 0.5) * a; };
     var n = 0;
+    // 停在紅燈前：雙黃實線（-1.95/-1.80）、右側白虛線 +1.75、右路緣 +3.6 帶紅線、左路緣未知、前方 8 m 停止線
     setInterval(function () {
-      var s = performance.now() / 1000;
+      var s = performance.now() / 1000, cyc = s % 12;
       var objs = [
-        { t: 'car', x: -2.9, z: 0.3, w: 1.8, h: 4.4, c: 0.62 },
-        { t: 'car', x: 2.8, z: Math.sin(s * 0.5) * 6, w: 1.8, h: 4.4, c: 0.55 },
+        { t: 'car', x: -3.0, z: 0.3, w: 1.8, h: 4.4, c: 0.62 },
+        { t: 'car', x: 2.75, z: -1.5 + Math.sin(s * 0.5) * 2.5, w: 1.8, h: 4.4, c: 0.55 },
         { t: 'ped', x: Math.sin(s * 0.35) * 4, z: 4.0, w: 0.5, h: 0.5, c: 0.7 },
-        { t: 'moto', x: 1.6 + Math.sin(s) * 0.3, z: -4.6, w: 0.6, h: 1.6, c: 0.5 }
+        { t: 'moto', x: 1.2 + Math.sin(s) * 0.25, z: -4.6, w: 0.6, h: 1.6, c: 0.5 },
+        { t: 'cone', x: 3.1 + jit(0.04), z: 5.2 + jit(0.04), w: 0.4, h: 0.4, c: 0.8 },
+        { t: 'cone', x: 2.75 + jit(0.04), z: 6.2 + jit(0.04), w: 0.4, h: 0.4, c: 0.75 },
+        { t: 'cone', x: 2.4 + jit(0.04), z: 7.2 + jit(0.04), w: 0.4, h: 0.4, c: 0.7 }
       ];
+      var rd = { el: null, er: 3.6 + jit(0.06), lines: [
+        { k: 'y', d: 0, x1: -1.95 + jit(0.04), z1: -6.6, x2: -1.95 + jit(0.04), z2: 6.8, c: 1 },
+        { k: 'y', d: 0, x1: -1.80 + jit(0.04), z1: -6.5, x2: -1.80 + jit(0.04), z2: 6.8, c: 1 },
+        { k: 'w', d: 1, x1: 1.75 + jit(0.04), z1: -6.0, x2: 1.75 + jit(0.04), z2: 6.9, c: 0.8 },
+        { k: 'r', d: 0, x1: 3.5 + jit(0.04), z1: -6.8, x2: 3.5 + jit(0.04), z2: 6.8, c: 0.9 },
+        { k: 'w', d: 0, x1: -1.65, z1: 8 + jit(0.06), x2: 3.45, z2: 8 + jit(0.06), c: 0.7 }
+      ] };
       window.setFrame({ objs: objs, wm: 8, hm: 6, flip: false, ground: (n++ % 10 === 0) ? demoGround : null,
-        stat: { eng: 'GPU', res: 320, inf: 48, e2e: 66, fps: 9.6 } });
+        stat: { eng: 'GPU', res: 320, inf: 48, e2e: 66, fps: 9.6 }, road: rd,
+        tl: { s: cyc < 5 ? 'red' : cyc < 10 ? 'green' : 'yellow', c: 0.86, ax: 4 },
+        src: DEMO_CAM ? 'cam' : 'screen' });
     }, 150);
   }
 })();
