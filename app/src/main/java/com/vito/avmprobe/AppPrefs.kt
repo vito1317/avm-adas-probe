@@ -24,6 +24,10 @@ class AppPrefs(context: Context) {
         const val PANEL_RIGHT = "right"
         const val PANEL_LEFT = "left"
         const val PANEL_OFF = "off"
+
+        const val GROUND_REAL = "real"
+        const val GROUND_VIRTUAL = "virtual"
+        const val GROUND_OFF = "off"
     }
 
     var model: String
@@ -60,10 +64,39 @@ class AppPrefs(context: Context) {
         get() = sp.getBoolean("roiOnly", true)
         set(v) = sp.edit().putBoolean("roiOnly", v).apply()
 
-    /** 3D 地面貼上即時俯視畫面。 */
+    /** 3D 地面貼上即時俯視畫面。（舊設定，改用 groundMode） */
     var realGround: Boolean
         get() = sp.getBoolean("realGround", true)
         set(v) = sp.edit().putBoolean("realGround", v).apply()
+
+    /** 3D 地面：real＝實景貼圖、virtual＝辨識出的虛擬道路、off＝不畫。 */
+    var groundMode: String
+        get() = sp.getString("groundMode", null) ?: if (realGround) GROUND_REAL else GROUND_OFF
+        set(v) {
+            sp.edit().putString("groundMode", v).putBoolean("realGround", v == GROUND_REAL).apply()
+        }
+
+    // ---------- 鏡頭直讀（Camera2） ----------
+
+    /** 四分割鏡頭的 Camera2 id（實測：2）。 */
+    var camId: String
+        get() = sp.getString("camId", "2")!!
+        set(v) = sp.edit().putString("camId", v).apply()
+
+    /** 要偵測的鏡頭：F 前 / B 後 / L 左 / R 右。 */
+    var camDetect: String
+        get() = sp.getString("camDetect", "FBLR")!!
+        set(v) = sp.edit().putString("camDetect", v).apply()
+
+    /** 自建俯視圖（拼接四顆鏡頭）→ 實景地面、道路、三角錐。 */
+    var camBev: Boolean
+        get() = sp.getBoolean("camBev", true)
+        set(v) = sp.edit().putBoolean("camBev", v).apply()
+
+    /** 前鏡頭上半部多跑一輪，專找紅綠燈。 */
+    var camTrafficLight: Boolean
+        get() = sp.getBoolean("camTl", true)
+        set(v) = sp.edit().putBoolean("camTl", v).apply()
 
     var panel: String
         get() = sp.getString("panel", PANEL_RIGHT)!!

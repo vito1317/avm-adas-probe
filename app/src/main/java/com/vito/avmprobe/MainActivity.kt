@@ -72,10 +72,16 @@ class MainActivity : AppCompatActivity() {
             setTextColor(Color.parseColor("#008577"))
         })
         col.addView(TextView(this).apply {
-            text = "截「全景360」俯視畫面 → YOLO 偵測 → 右側 3D 面板即時重建周遭物件。\n" +
-                "改了模型／引擎／面板位置，要按「停止」再「開始」才生效；俯視區校正在 3D 面板右上角「校正」。"
+            text = "主要模式：直接讀環景鏡頭（Camera2 四分割）→ 各鏡頭輪流偵測 → 右側 3D 即時重建周遭。不需要開全景360。\n" +
+                "舊模式：截「全景360」俯視畫面偵測（下方）。改了模型／引擎，要重新進入才生效。"
             textSize = 14f
             setPadding(0, 10, 0, 18)
+        })
+
+        col.addView(section("鏡頭直讀（Camera2）— 四分割鏡頭的 ID（實測：2）"))
+        col.addView(segRow(cameraIds().map { "鏡頭 $it" to it }, { prefs.camId }) { prefs.camId = it })
+        col.addView(btn("▶ 開始鏡頭直讀偵測") {
+            startActivity(Intent(this, QuadActivity::class.java))
         })
 
         col.addView(section("模型（輸入解析度，小＝快；int8＝量化版）"))
@@ -87,13 +93,11 @@ class MainActivity : AppCompatActivity() {
             { if (prefs.useGpu) "gpu" else "cpu" }
         ) { prefs.useGpu = it == "gpu" })
 
-        col.addView(section("3D 面板位置（不要擋住俯視圖那一側）"))
+        col.addView(section("舊模式：截全景360 螢幕 — 3D 面板位置（不要擋住俯視圖那一側）"))
         col.addView(segRow(
             listOf("右側" to AppPrefs.PANEL_RIGHT, "左側" to AppPrefs.PANEL_LEFT, "關閉" to AppPrefs.PANEL_OFF),
             { prefs.panel }
         ) { prefs.panel = it })
-
-        col.addView(section("執行"))
         col.addView(btn("① 授予懸浮窗權限") { requestOverlay() })
         col.addView(btn("② 開始偵測（截螢幕）") { startDetection() })
         col.addView(btn("■ 停止") { stopDetection() })
@@ -106,6 +110,9 @@ class MainActivity : AppCompatActivity() {
             startActivity(Intent(this, UvcActivity::class.java))
         })
         col.addView(btn("硬體探測（Camera2 / USB / v4l2）") { runProbe() })
+        col.addView(btn("車機訊號探測（方向燈 / 倒車 / CAN）") {
+            startActivity(Intent(this, SignalProbeActivity::class.java))
+        })
 
         log = TextView(this).apply {
             text = "— 硬體探測結果會顯示在這裡 —"
@@ -192,6 +199,13 @@ class MainActivity : AppCompatActivity() {
 
     private fun runProbe() {
         log.text = "探測中…\n\n" + UsbProbe.report(this)
+    }
+
+    private fun cameraIds(): List<String> = try {
+        (getSystemService(Context.CAMERA_SERVICE) as android.hardware.camera2.CameraManager)
+            .cameraIdList.toList().ifEmpty { listOf("2") }
+    } catch (_: Throwable) {
+        listOf("2")
     }
 
     private fun toast(s: String) =

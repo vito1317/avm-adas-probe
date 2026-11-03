@@ -20,13 +20,17 @@ import java.nio.channels.FileChannel
 import kotlin.math.max
 import kotlin.math.min
 
-/** 一筆偵測結果。rect 為「被偵測的原始點陣圖」座標系。 */
+/** 一筆偵測結果。rect 為「被偵測的原始點陣圖」座標系；type 為 ObjTypes 的物件種類。 */
 data class Detection(
     val rect: RectF,
     val label: String,
     val classId: Int,
-    val score: Float
+    val score: Float,
+    val type: String
 )
+
+/** letterbox 參數：來源座標 = (input 座標 - pad) / scale。 */
+data class Letterbox(val scale: Float, val padX: Float, val padY: Float)
 
 /**
  * YOLO11 / YOLOv8 TFLite 偵測器。
@@ -35,19 +39,24 @@ data class Detection(
 class Yolo(
     context: Context,
     modelAsset: String = "model_320.tflite",
-    labelAsset: String = "coco_labels.txt",
+    labelAsset: String? = null,
     private val confThreshold: Float = 0.30f,
     private val iouThreshold: Float = 0.45f,
     useGpu: Boolean = true
 ) {
     companion object {
         private const val TAG = "Yolo"
-        // ADAS 只關心的類別：行人 / 腳踏車 / 汽車 / 機車 / 公車 / 卡車
-        private val ADAS_CLASSES = setOf(0, 1, 2, 3, 5, 7)
+
+        /** model_x.tflite 旁邊有 model_x.labels.txt 就用它，否則是 COCO 模型。 */
+        fun labelAssetFor(context: Context, modelAsset: String): String {
+            val own = modelAsset.removeSuffix(".tflite") + ".labels.txt"
+            return if (context.assets.list("")?.contains(own) == true) own else "coco_labels.txt"
+        }
     }
 
     private val interpreter: Interpreter
     private val labels: List<String>
+    private val types: Array<String?>   // 每個類別對應的物件種類；null = 不關心
     private var gpuDelegate: GpuDelegate? = null
 
     val engineName: String
@@ -68,8 +77,10 @@ class Yolo(
     private val output: Array<Array<FloatArray>>   // 重用，避免每幀配置數 MB
 
     init {
-        labels = context.assets.open(labelAsset).bufferedReader().readLines()
-            .map { it.trim() }.filter { it.isNotEmpty() }
+        labels = context.assets.open(labelAsset ?: labelAssetFor(context, modelAsset))
+            .bufferedReader().readLines().map { it.trim() }.filter { it.isNotEmpty() }
+        val hasScooter = labels.any { it.equals("scooter", true) || it.equals("moped", true) }
+        types = Array(labels.size) { ObjTypes.typeOf(labels[it], hasScooter) }
 
         val model = loadModel(context, modelAsset)
 
@@ -150,38 +161,46 @@ class Yolo(
      * roi 不為 null 時只偵測該區域（直接從原圖裁切縮放，不額外配置 bitmap）。
      */
     fun detect(bitmap: Bitmap, roi: Rect? = null): Pair<List<Detection>, Long> {
-        val offX = roi?.left ?: 0
-        val offY = roi?.top ?: 0
         val srcW = roi?.width() ?: bitmap.width
         val srcH = roi?.height() ?: bitmap.height
+        return detectWith(srcW, srcH, (roi?.left ?: 0).toFloat(), (roi?.top ?: 0).toFloat()) { buf, nchw, size, lb ->
+            letterboxCanvas.drawColor(Color.rgb(114, 114, 114))
+            val dst = RectF(lb.padX, lb.padY, lb.padX + srcW * lb.scale, lb.padY + srcH * lb.scale)
+            letterboxCanvas.drawBitmap(bitmap, roi, dst, letterboxPaint)
 
-        // letterbox：等比縮放至 inputSize，四周填灰(114)
-        val scale = min(inputSize / srcW.toFloat(), inputSize / srcH.toFloat())
-        val newW = srcW * scale
-        val newH = srcH * scale
-        val padX = (inputSize - newW) / 2f
-        val padY = (inputSize - newH) / 2f
-
-        letterboxCanvas.drawColor(Color.rgb(114, 114, 114))
-        val dst = RectF(padX, padY, padX + newW, padY + newH)
-        letterboxCanvas.drawBitmap(bitmap, roi, dst, letterboxPaint)
-
-        // 填入 inputBuffer（NHWC, float32, /255）
-        letterboxBmp.getPixels(pixels, 0, inputSize, 0, 0, inputSize, inputSize)
-        inputBuffer.rewind()
-        if (chFirst) {
-            // NCHW：先全部 R，再全部 G，再全部 B
-            for (p in pixels) inputBuffer.putFloat(((p shr 16) and 0xFF) / 255f)
-            for (p in pixels) inputBuffer.putFloat(((p shr 8) and 0xFF) / 255f)
-            for (p in pixels) inputBuffer.putFloat((p and 0xFF) / 255f)
-        } else {
-            // NHWC：每像素 RGB 交錯
-            for (p in pixels) {
-                inputBuffer.putFloat(((p shr 16) and 0xFF) / 255f)
-                inputBuffer.putFloat(((p shr 8) and 0xFF) / 255f)
-                inputBuffer.putFloat((p and 0xFF) / 255f)
+            letterboxBmp.getPixels(pixels, 0, size, 0, 0, size, size)
+            if (nchw) {
+                // NCHW：先全部 R，再全部 G，再全部 B
+                for (p in pixels) buf.putFloat(((p shr 16) and 0xFF) / 255f)
+                for (p in pixels) buf.putFloat(((p shr 8) and 0xFF) / 255f)
+                for (p in pixels) buf.putFloat((p and 0xFF) / 255f)
+            } else {
+                // NHWC：每像素 RGB 交錯
+                for (p in pixels) {
+                    buf.putFloat(((p shr 16) and 0xFF) / 255f)
+                    buf.putFloat(((p shr 8) and 0xFF) / 255f)
+                    buf.putFloat((p and 0xFF) / 255f)
+                }
             }
         }
+    }
+
+    /**
+     * 由呼叫端自己填輸入張量（例如直接從相機 YUV 取樣，不經 Bitmap）。
+     * srcW×srcH 是被偵測區域的大小，結果座標再加上 (offX, offY)。
+     * fill 收到已 rewind 的 buffer、是否 NCHW、輸入邊長、letterbox 參數；未填的地方要自己補灰 (114/255)。
+     */
+    fun detectWith(
+        srcW: Int, srcH: Int, offX: Float, offY: Float,
+        fill: (buf: ByteBuffer, nchw: Boolean, size: Int, lb: Letterbox) -> Unit
+    ): Pair<List<Detection>, Long> {
+        // letterbox：等比縮放至 inputSize，四周填灰(114)
+        val scale = min(inputSize / srcW.toFloat(), inputSize / srcH.toFloat())
+        val padX = (inputSize - srcW * scale) / 2f
+        val padY = (inputSize - srcH * scale) / 2f
+
+        inputBuffer.rewind()
+        fill(inputBuffer, chFirst, inputSize, Letterbox(scale, padX, padY))
         inputBuffer.rewind()
 
         val t0 = System.nanoTime()
@@ -203,7 +222,7 @@ class Yolo(
                 if (s > bestScore) { bestScore = s; bestCls = c }
             }
             if (bestScore < confThreshold) continue
-            if (bestCls !in ADAS_CLASSES) continue
+            val type = types.getOrNull(bestCls) ?: continue
 
             // 座標：相容「像素(0..inputSize)」與「正規化(0..1)」兩種輸出
             var cx = feat(0); var cy = feat(1); var w = feat(2); var h = feat(3)
@@ -224,7 +243,7 @@ class Yolo(
 
             val label = labels.getOrElse(bestCls) { "cls$bestCls" }
             candidates.add(Detection(
-                RectF(x1 + offX, y1 + offY, x2 + offX, y2 + offY), label, bestCls, bestScore
+                RectF(x1 + offX, y1 + offY, x2 + offX, y2 + offY), label, bestCls, bestScore, type
             ))
         }
 
