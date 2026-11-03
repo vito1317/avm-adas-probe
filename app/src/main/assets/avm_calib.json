@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "note": "預設值（未校正）。fx/fy 以象限寬度為單位；角度為度。",
+  "car": { "length": 4.84, "width": 1.85 },
+  "cams": {
+    "front": { "quad": 0, "mirror": false, "cx": 0.5, "cy": 0.5, "fx": 0.265, "fy": 0.265,
+               "k1": 0.0, "k2": 0.0, "maxDeg": 95,
+               "pos": [0.0, 0.55, 2.35], "yaw": 0, "pitch": 25, "roll": 0 },
+    "rear":  { "quad": 1, "mirror": false, "cx": 0.5, "cy": 0.5, "fx": 0.265, "fy": 0.265,
+               "k1": 0.0, "k2": 0.0, "maxDeg": 95,
+               "pos": [0.0, 0.95, -2.40], "yaw": 180, "pitch": 35, "roll": 0 },
+    "left":  { "quad": 2, "mirror": false, "cx": 0.5, "cy": 0.5, "fx": 0.265, "fy": 0.265,
+               "k1": 0.0, "k2": 0.0, "maxDeg": 95,
+               "pos": [-1.0, 1.0, 0.85], "yaw": -90, "pitch": 55, "roll": 0 },
+    "right": { "quad": 3, "mirror": false, "cx": 0.5, "cy": 0.5, "fx": 0.265, "fy": 0.265,
+               "k1": 0.0, "k2": 0.0, "maxDeg": 95,
+               "pos": [1.0, 1.0, 0.85], "yaw": 90, "pitch": 55, "roll": 0 }
+  },
+  "bev": { "xMin": -6.0, "xMax": 6.0, "zMin": -7.0, "zMax": 7.0, "mpp": 0.04 }
+}
