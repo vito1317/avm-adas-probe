@@ -126,21 +126,33 @@ class SignalProbeActivity : AppCompatActivity() {
         val pm = packageManager
         @Suppress("DEPRECATION")
         val apps = try { pm.getInstalledApplications(PackageManager.GET_META_DATA) } catch (_: Throwable) { emptyList() }
+        // 環景 App（全景360）可能是一般安裝的，不一定是系統 App：用名稱認
+        val avmLabel = Regex("360|全景|環景|环景|avm|panoram|倒車|倒车", RegexOption.IGNORE_CASE)
+        fun label(a: ApplicationInfo) = try { pm.getApplicationLabel(a).toString() } catch (_: Throwable) { "" }
         val vendor = apps.filter {
             val sys = (it.flags and ApplicationInfo.FLAG_SYSTEM) != 0
             val pkg = it.packageName
-            sys && !pkg.startsWith("com.android.") && !pkg.startsWith("com.google.") &&
+            val vendorSys = sys && !pkg.startsWith("com.android.") && !pkg.startsWith("com.google.") &&
                 pkg != "android" && !pkg.startsWith("androidx.")
+            vendorSys || (pkg != packageName && (avmLabel.containsMatchIn(label(it)) || VENDOR_HINT.containsMatchIn(pkg)))
         }.sortedBy { it.packageName }
-        sb.append("\n== 廠商系統 App（${vendor.size}）\n")
+        val isAvm = { a: ApplicationInfo -> avmLabel.containsMatchIn(label(a)) || avmLabel.containsMatchIn(a.packageName) }
+        sb.append("\n== 廠商 / 環景 App（${vendor.size}）\n")
         for (a in vendor) {
-            val hint = if (VENDOR_HINT.containsMatchIn(a.packageName)) " ★" else ""
-            sb.append("${a.packageName}$hint\n")
+            val mark = when {
+                isAvm(a) -> " ◎環景"
+                VENDOR_HINT.containsMatchIn(a.packageName) -> " ★"
+                else -> ""
+            }
+            val sys = if ((a.flags and ApplicationInfo.FLAG_SYSTEM) != 0) "" else "（使用者安裝）"
+            sb.append("${a.packageName}  「${label(a)}」$sys$mark\n")
         }
         append(sb.toString())
 
-        // 掃程式碼字串：先掃名稱有特徵的，再掃其他廠商 App
-        val ordered = vendor.sortedByDescending { VENDOR_HINT.containsMatchIn(it.packageName) }
+        // 掃程式碼字串：環景 App 最優先（它自己就在讀方向燈/轉角），再來是名稱有特徵的
+        val ordered = vendor.sortedByDescending {
+            (if (isAvm(it)) 2 else 0) + (if (VENDOR_HINT.containsMatchIn(it.packageName)) 1 else 0)
+        }
         var scanned = 0
         var noDex = 0
         val found = LinkedHashMap<String, String>()
