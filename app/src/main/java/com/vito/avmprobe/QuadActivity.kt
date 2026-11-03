@@ -131,9 +131,25 @@ class QuadActivity : AppCompatActivity(), CameraQuadSource.Listener {
     @Volatile private var saveRawRequested = false
     @Volatile private var camState = "啟動中…"
 
+    @Volatile private var mapSrc: MapSource? = null
+
     private val permLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { ok -> if (ok && started) source.start() else if (!ok) camState = "需要相機權限" }
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) {
+        if (!started) return@registerForActivityResult
+        if (granted(Manifest.permission.CAMERA)) source.start() else camState = "需要相機權限"
+        startMap()
+    }
+
+    private fun granted(p: String) =
+        ContextCompat.checkSelfPermission(this, p) == PackageManager.PERMISSION_GRANTED
+
+    /** 地圖輔助：有定位權限才開（沒有也不影響鏡頭偵測）。 */
+    private fun startMap() {
+        if (mapSrc != null) return
+        val m = MapSource(this)
+        if (m.start()) mapSrc = m
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -255,17 +271,22 @@ class QuadActivity : AppCompatActivity(), CameraQuadSource.Listener {
         super.onStart()
         started = true
         web.view.onResume()
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
-            source.start()
-        } else {
-            permLauncher.launch(Manifest.permission.CAMERA)
-        }
+        if (granted(Manifest.permission.CAMERA)) source.start()
+        startMap()
+        val need = listOf(
+            Manifest.permission.CAMERA,
+            Manifest.permission.ACCESS_FINE_LOCATION,
+            Manifest.permission.ACCESS_COARSE_LOCATION
+        ).filter { !granted(it) }
+        if (need.isNotEmpty()) permLauncher.launch(need.toTypedArray())
     }
 
     override fun onStop() {
         super.onStop()
         started = false
         source.stop()       // 一定要放掉鏡頭：倒車時全景360 要用
+        mapSrc?.stop()
+        mapSrc = null
         web.view.onPause()
     }
 
@@ -537,6 +558,7 @@ class QuadActivity : AppCompatActivity(), CameraQuadSource.Listener {
         if (now - slotsAt < BEV_TTL_MS && slots.isNotEmpty()) p.put("slots", slotsJson(slots, false))
         val vs = VehicleBus.signals.snapshot()
         if (!vs.isEmpty) p.put("veh", VehicleSignals.toJson(vs))
+        mapSrc?.takeJsonIfNew()?.let { p.put("map", it) }   // 每個 GPS 定位只送一次，3D 自己沿路推算
         val t = tl
         if (t != null && now - t.at < TL_TTL_MS) {
             p.put("tl", JSONObject().put("s", t.s).put("c", r2(t.c)).put("ax", r2(t.ax)))

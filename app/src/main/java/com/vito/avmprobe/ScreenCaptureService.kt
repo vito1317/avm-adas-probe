@@ -88,6 +88,7 @@ class ScreenCaptureService : Service() {
 
     @Volatile private var busy = false
     @Volatile private var saveRequested = false
+    @Volatile private var mapSrc: MapSource? = null
     private var emaInfer = 0f
     private var emaE2e = 0f
     private var emaFps = 0f
@@ -141,6 +142,7 @@ class ScreenCaptureService : Service() {
         }
 
         startCapture()
+        mapSrc = MapSource(this).takeIf { it.start() }   // 沒有定位權限就不開，不影響偵測
         return START_STICKY
     }
 
@@ -338,6 +340,7 @@ class ScreenCaptureService : Service() {
                 slotsArr?.let { payload.put("slots", it) }
                 val vs = VehicleBus.signals.snapshot()
                 if (!vs.isEmpty) payload.put("veh", VehicleSignals.toJson(vs))
+                mapSrc?.takeJsonIfNew()?.let { payload.put("map", it) }
                 tl?.let { payload.put("tl", it) }
                 p.push(payload.toString())
             }
@@ -481,6 +484,8 @@ class ScreenCaptureService : Service() {
         try { virtualDisplay?.release() } catch (_: Throwable) {}
         try { imageReader?.close() } catch (_: Throwable) {}
         try { projection?.stop() } catch (_: Throwable) {}
+        mapSrc?.stop()
+        mapSrc = null
         panel?.hide()
         overlay?.let { try { windowManager.removeView(it) } catch (_: Throwable) {} }
         overlay = null
