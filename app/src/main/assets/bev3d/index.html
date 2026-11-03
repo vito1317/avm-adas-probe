@@ -120,6 +120,7 @@
 <script src="lib/OrbitControls.js"></script>
 <script src="lib/CSS2DRenderer.js"></script>
 <script src="lib/RoomEnvironment.js"></script>
+<script src="lib/GLTFLoader.js"></script>
 <script>
 (function () {
   'use strict';
@@ -577,6 +578,39 @@
   var ego = makeCar(COL.ego, true);
   ego.rotation.y = Math.PI;
   scene.add(ego);
+
+  // 自車換成 BMW 525i E60 模型（CC BY 4.0，作者 szymonpasterczyk，見 models/CREDITS.md）。
+  // 載入前或載入失敗時沿用上面的方塊車。車身銀灰色金屬漆＋透明漆。
+  if (THREE.GLTFLoader) {
+    new THREE.GLTFLoader().load('models/e60.glb', function (gltf) {
+      var car = gltf.scene, paintM = null;
+      car.traverse(function (m) {
+        if (!m.isMesh) return;
+        var mt = m.material;
+        if (mt.name === 'paint') {
+          paintM = new THREE.MeshPhysicalMaterial({
+            color: new THREE.Color(0x8f969d).convertSRGBToLinear(),
+            metalness: 0.75, roughness: 0.33, clearcoat: 1, clearcoatRoughness: 0.08
+          });
+          paintM.envMapIntensity = 0.7;
+          paintM.userData.baseEm = 0x000000;
+          paintM.userData.baseEmI = 1;
+          m.material = paintM;
+          return;
+        }
+        mt.envMapIntensity = mt.name === 'glass' ? 0.9 : 0.5;
+        if (mt.name === 'taillight') { mt.emissive = new THREE.Color(0xff2a20); mt.emissiveIntensity = 0.8; }
+        if (mt.name === 'headlight') { mt.emissive = new THREE.Color(0xfff2cf); mt.emissiveIntensity = 1.0; }
+        if (mt.transparent) mt.depthWrite = false;
+      });
+      for (var i = ego.children.length - 1; i >= 0; i--) {
+        var c = ego.children[i];
+        if (!(c.material && c.material.map === shadowTex)) ego.remove(c);   // 只留地面陰影
+      }
+      ego.add(car);
+      if (paintM) ego.userData.paint = paintM;
+    }, undefined, function () { /* 載入失敗：保留方塊車 */ });
+  }
 
   function roundRect(w, h, r) {
     var s = new THREE.Shape(), x = -w / 2, y = -h / 2;
