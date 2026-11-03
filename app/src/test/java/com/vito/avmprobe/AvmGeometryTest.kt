@@ -49,8 +49,8 @@ class AvmGeometryTest {
             return AvmGeometry.fromJson(f.readText(Charsets.UTF_8))
         }
 
-        /** 大數值（射線接近水平、打到幾百公尺外）用相對誤差，否則用絕對誤差。 */
-        private fun close(a: Double, ref: Double): Boolean = abs(a - ref) <= TOL * max(1.0, abs(ref))
+        // 參考值存 12 位有效數字；fixtures 裡最遠的地面點約 2.8 km，捨入誤差仍遠小於 1e-6
+        private fun close(a: Double, ref: Double): Boolean = abs(a - ref) <= TOL
     }
 
     private fun JSONArray.d(i: Int) = getDouble(i)
