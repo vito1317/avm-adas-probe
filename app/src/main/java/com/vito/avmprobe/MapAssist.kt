@@ -131,34 +131,38 @@ class MapGraph private constructor(
                     val e = els.optJSONObject(i) ?: continue
                     val id = e.optLong("id", Long.MIN_VALUE)
                     if (id == Long.MIN_VALUE) continue
-                    when (e.optString("type")) {
-                        "node" -> {
-                            if (e.has("lat") && e.has("lon")) {
-                                nodeLat[id] = e.getDouble("lat"); nodeLon[id] = e.getDouble("lon")
-                            }
-                            val tg = e.optJSONObject("tags")
-                            if (tg != null && tg.optString("highway") == "traffic_signals") {
-                                val d = tg.optString("traffic_signals:direction", tg.optString("direction"))
-                                nodeSig[id] = when (d) { "forward" -> 2; "backward" -> 3; else -> 1 }
-                            }
-                        }
-                        "way" -> {
-                            if (rawWays.containsKey(id)) continue
-                            val tg = e.optJSONObject("tags") ?: continue
-                            if (!drivable(tg)) continue
-                            val na = e.optJSONArray("nodes") ?: continue
-                            val ids = LongArray(na.length()) { na.getLong(it) }
-                            // out geom 格式：座標直接附在 way 上
-                            e.optJSONArray("geometry")?.let { ge ->
-                                if (ge.length() == ids.size) for (k in ids.indices) {
-                                    val p = ge.optJSONObject(k) ?: continue
-                                    if (!nodeLat.containsKey(ids[k])) {
-                                        nodeLat[ids[k]] = p.getDouble("lat"); nodeLon[ids[k]] = p.getDouble("lon")
-                                    }
+                    // 單一壞元素（型別錯、缺欄位）只跳過它，不讓整份圖磚失效
+                    try {
+                        when (e.optString("type")) {
+                            "node" -> {
+                                val la = e.optDouble("lat", Double.NaN); val lo = e.optDouble("lon", Double.NaN)
+                                if (validLatLon(la, lo)) { nodeLat[id] = la; nodeLon[id] = lo }
+                                val tg = e.optJSONObject("tags")
+                                if (tg != null && tg.optString("highway") == "traffic_signals") {
+                                    val d = tg.optString("traffic_signals:direction", tg.optString("direction"))
+                                    nodeSig[id] = when (d) { "forward" -> 2; "backward" -> 3; else -> 1 }
                                 }
                             }
-                            rawWays[id] = ids to tg
+                            "way" -> {
+                                if (rawWays.containsKey(id)) continue
+                                val tg = e.optJSONObject("tags") ?: continue
+                                if (!drivable(tg)) continue
+                                val na = e.optJSONArray("nodes") ?: continue
+                                val ids = LongArray(na.length()) { na.getLong(it) }
+                                // out geom 格式：座標直接附在 way 上
+                                e.optJSONArray("geometry")?.let { ge ->
+                                    if (ge.length() == ids.size) for (k in ids.indices) {
+                                        val p = ge.optJSONObject(k) ?: continue
+                                        val la = p.optDouble("lat", Double.NaN); val lo = p.optDouble("lon", Double.NaN)
+                                        if (!nodeLat.containsKey(ids[k]) && validLatLon(la, lo)) {
+                                            nodeLat[ids[k]] = la; nodeLon[ids[k]] = lo
+                                        }
+                                    }
+                                }
+                                rawWays[id] = ids to tg
+                            }
                         }
+                    } catch (_: Exception) {
                     }
                 }
             }
@@ -331,9 +335,11 @@ class OsmWay internal constructor(
 /**
  * GPS → 道路配對 + 前方道路形狀。純 Kotlin（不碰 android.*），單執行緒使用。
  *
- * 配對：候選路段（有向、遵守單行）以 距離 + 航向一致 + 與上一筆配對的路網連續性 + 道路等級 打分，取最小。
- * GPS 航向在 < 2 m/s 時不可靠：沿用最後一次可靠的航向（權重放寬）。
- * 位置先過一個簡單的等速預測濾波，降低 GPS 抖動。
+ * 配對：候選路段（有向、遵守單行）以 距離 + 航向一致 + 與上一筆配對的路網連續性 + 道路等級 打分，取最小；
+ * 分不清時偏向留在同一條 way（平行匝道、高架下的平面道路）。
+ * GPS 航向在 < 2 m/s 時不採用：沿用最後一次可靠的航向（權重放寬）；2–5 m/s 孤立的大偏差當雜訊。
+ * 位置先過一個簡單的等速預測濾波，降低 GPS 抖動；單筆離譜跳點不採用（連續 3 筆才當真）。
+ * 不硬配：雙向道上沒航向也沒上一筆（開機停著）、精度 > 50 m 又接不上上一筆、超出死巷 / 資料邊緣 → matched = false。
  */
 class MapAssist {
 
@@ -345,6 +351,11 @@ class MapAssist {
         const val ROADS_M = 300.0
         private const val UTURN_M = 20.0
         private const val MAX_ROAD_PTS = 2500
+        private const val MAX_SPEED = 70.0          // m/s，超過的速度 / 位移當成跳點
+        private const val MIN_BRG_SPEED = 2.0       // 低於這個速度的 GPS 航向不採用
+        private const val POOR_ACC_M = 50.0         // 精度比這差：只在跟上一筆接得起來時才配
+        private const val DEAD_END_OVER_M = 12.0    // 超出路尾（死巷 / 已載入範圍邊緣）這麼遠就不算在這條路上
+        private const val SAME_WAY_BONUS = 0.5
 
         /** 送到 3D 面板的 payload 欄位 `map`。 */
         @JvmStatic
@@ -399,10 +410,13 @@ class MapAssist {
     private var rawX = 0.0
     private var rawY = 0.0
     private var speedEst = 0.0
+    private var outliers = 0            // 連續幾筆離譜跳點（先不採用）
 
     // 航向
     private var goodHeading = Double.NaN
     private var goodHeadingMs = Long.MIN_VALUE
+    private var lastBrg = Double.NaN    // 上一筆原始 GPS 航向（判斷前後一致）
+    private var lastBrgMs = Long.MIN_VALUE
 
     // 上一筆配對
     private var prevE = -1
@@ -448,8 +462,8 @@ class MapAssist {
 
     /** 清掉配對與濾波狀態（例如 GPS 斷很久）。 */
     fun reset() {
-        fVar = -1.0; prevE = -1; offEma = Double.NaN; lastMs = Long.MIN_VALUE
-        goodHeading = Double.NaN; goodHeadingMs = Long.MIN_VALUE
+        fVar = -1.0; prevE = -1; offEma = Double.NaN; lastMs = Long.MIN_VALUE; outliers = 0
+        goodHeading = Double.NaN; goodHeadingMs = Long.MIN_VALUE; lastBrg = Double.NaN
     }
 
     /**
@@ -459,70 +473,94 @@ class MapAssist {
     fun update(lat: Double, lon: Double, speedMps: Double, bearingDeg: Double, accuracyM: Double, nowMs: Long): MapState? {
         val g = graph ?: return null
         if (g.isEmpty()) return null
+        // NaN / 超出範圍的定位直接丟掉（不然會污染濾波狀態，之後每一筆都是 NaN）
+        if (!validLatLon(lat, lon)) return null
         val zx = g.toX(lon); val zy = g.toY(lat)
         val acc = if (accuracyM.isFinite() && accuracyM > 0) accuracyM else 10.0
         val dt = if (lastMs == Long.MIN_VALUE) -1.0 else (nowMs - lastMs) / 1000.0
+        val disp = hypot(zx - rawX, zy - rawY)
 
-        // 速度：GPS 都卜勒速度優先；沒有就用位移估
+        // 速度：GPS 都卜勒速度優先；沒有就用位移估（跳點造成的離譜速度不採用）
         var v = speedMps
         if (!v.isFinite() || v < 0) {
             v = if (dt in 0.2..5.0) {
-                val inst = hypot(zx - rawX, zy - rawY) / dt
-                speedEst += (inst - speedEst) * 0.5
+                val inst = disp / dt
+                if (inst < MAX_SPEED) speedEst += (inst - speedEst) * 0.5
                 speedEst
             } else 0.0
         }
+        v = min(v, MAX_SPEED)
         var brg = bearingDeg
-        if (!brg.isFinite() && dt in 0.2..5.0 && v >= 3.0 && hypot(zx - rawX, zy - rawY) >= 5.0) brg = bearing(zx - rawX, zy - rawY)
+        if (!brg.isFinite() && dt in 0.2..5.0 && v >= 3.0 && disp >= 5.0 && disp <= MAX_SPEED * dt) brg = bearing(zx - rawX, zy - rawY)
         rawX = zx; rawY = zy
 
-        // 航向：GPS 航向在 < 2 m/s 幾乎是亂數。速度越快權重越高（1.5 m/s 以下不採用、4.5 m/s 以上直接採用），
-        // 慢速時沿用最後的可靠航向
-        if (brg.isFinite() && v >= 1.5) {
-            val wt = ((v - 1.5) / 3.0).coerceIn(0.0, 1.0)
-            if (goodHeading.isFinite()) {
-                goodHeading = norm360(goodHeading + signedDiff(brg, goodHeading) * wt)
-                goodHeadingMs = nowMs
-            } else if (v >= 3.0) {
-                goodHeading = norm360(brg); goodHeadingMs = nowMs
+        // 航向：GPS 航向在 < 2 m/s 幾乎是亂數 → 不採用，沿用最後的可靠航向。2–5 m/s 權重漸增；
+        // 這個速度區間跟目前航向差 > 45° 又跟上一筆原始航向差 > 30°/s 的，當成雜訊
+        // （真的轉彎時前後幾筆是連續的，最多晚 1–2 筆才跟上）
+        var accepted = false
+        if (brg.isFinite() && v >= MIN_BRG_SPEED) {
+            val b = norm360(brg)
+            val bdt = (nowMs - lastBrgMs) / 1000.0
+            val consistent = lastBrg.isFinite() && bdt > 0 && bdt <= 2.5 && angDiff(b, lastBrg) < 30.0 * max(1.0, bdt)
+            lastBrg = b; lastBrgMs = nowMs
+            if (!goodHeading.isFinite()) {
+                if (v >= 5.0 || (v >= 3.0 && consistent)) { goodHeading = b; goodHeadingMs = nowMs; accepted = true }
+            } else {
+                var wt = ((v - MIN_BRG_SPEED) / 3.0).coerceIn(0.0, 1.0)
+                if (v < 5.0 && !consistent && angDiff(b, goodHeading) > 45) wt = 0.0
+                if (wt > 0) {
+                    goodHeading = norm360(goodHeading + signedDiff(b, goodHeading) * wt)
+                    goodHeadingMs = nowMs; accepted = true
+                }
             }
         }
-        val reliable = brg.isFinite() && v >= 3.0 && goodHeading.isFinite()
+        val reliable = accepted && v >= 3.0
         val held = !reliable && goodHeading.isFinite() && nowMs - goodHeadingMs < 600_000
         val heading = if (reliable || held) goodHeading else Double.NaN
 
-        // 位置濾波（等速預測 + 量測更新）
+        // 位置濾波（等速預測 + 量測更新）。離譜的跳點（多路徑反射常見 30–100 m）先不採用、照預測走；
+        // 連續 3 筆都離譜才當成真的（例如之前的估計錯了）並重設
         val sm2 = max(acc, 3.0).let { it * it }
-        if (fVar < 0 || dt <= 0 || dt > 10) {
-            fx = zx; fy = zy; fVar = sm2
+        if (fVar < 0 || dt < 0 || dt > 10 || !fx.isFinite() || !fy.isFinite() || !fVar.isFinite()) {
+            fx = zx; fy = zy; fVar = sm2; outliers = 0
         } else {
-            // 預測方向：可靠航向；否則沿上一筆配對的道路（但要跟記住的航向一致，免得錯配時越推越偏）
-            var dirB = Double.NaN
-            if (reliable) dirB = goodHeading
-            else if (prevE >= 0 && nowMs - prevMs < 15_000) {
-                val eb = g.eBearing(prevE)
-                if (!heading.isFinite() || angDiff(eb, heading) < 60) dirB = eb
+            if (dt > 0) {
+                // 預測方向：可靠航向；否則沿上一筆配對的道路（但要跟記住的航向一致，免得錯配時越推越偏）
+                var dirB = Double.NaN
+                if (reliable) dirB = goodHeading
+                else if (prevE >= 0 && nowMs - prevMs < 15_000) {
+                    val eb = g.eBearing(prevE)
+                    if (!heading.isFinite() || angDiff(eb, heading) < 60) dirB = eb
+                }
+                if (dirB.isFinite() && v > 0.3) {
+                    val r = Math.toRadians(dirB)
+                    fx += v * dt * sin(r); fy += v * dt * cos(r)
+                }
+                val q = (1.5 + 0.3 * v) * dt
+                fVar += q * q
             }
-            if (dirB.isFinite() && v > 0.3) {
-                val r = Math.toRadians(dirB)
-                fx += v * dt * sin(r); fy += v * dt * cos(r)
-            }
-            val q = (1.5 + 0.3 * v) * dt
-            fVar += q * q
             val ix = zx - fx; val iy = zy - fy
-            if (hypot(ix, iy) > 4 * sqrt(fVar + sm2) + 25) {
-                fx = zx; fy = zy; fVar = sm2   // 跳太遠：重設
+            if (hypot(ix, iy) > 3 * sqrt(fVar + sm2) + 10) {
+                if (++outliers >= 3) { fx = zx; fy = zy; fVar = sm2; outliers = 0 }
             } else {
+                outliers = 0
                 val k = fVar / (fVar + sm2)
                 fx += k * ix; fy += k * iy
                 fVar *= (1 - k)
             }
         }
         lastMs = nowMs
-        debug?.invoke(String.format("fix %d raw=(%.1f,%.1f) f=(%.1f,%.1f) sd=%.1f v=%.1f hdg=%.0f rel=%b",
-            nowMs, zx, zy, fx, fy, sqrt(fVar), v, heading, reliable))
+        debug?.invoke(String.format("fix %d raw=(%.1f,%.1f) f=(%.1f,%.1f) sd=%.1f v=%.1f hdg=%.0f rel=%b out=%d",
+            nowMs, zx, zy, fx, fy, sqrt(fVar), v, heading, reliable, outliers))
 
-        val best = match(g, fx, fy, acc, v, if (dt > 0) dt else 1.0, heading, reliable, nowMs)
+        val hadPrev = prevE >= 0 && nowMs - prevMs < 15_000
+        var best = match(g, fx, fy, acc, v, max(dt, 0.0), heading, reliable, nowMs)
+        if (best != null && !hadPrev && !heading.isFinite() && g.allowed(best.e xor 1)) {
+            best = null   // 雙向道、沒有航向也沒有上一筆：分不出往哪開（開機時停著）→ 先不配
+        }
+        if (best != null && acc > POOR_ACC_M && !best.net.isFinite()) {
+            best = null   // 精度很差又跟上一筆接不起來：不硬配
+        }
         if (best == null) {
             if (prevE >= 0 && nowMs - prevMs > 15_000) prevE = -1
             val hd = if (heading.isFinite()) heading else 0.0
@@ -630,7 +668,10 @@ class MapAssist {
             val bx = g.nx[b]; val by = g.ny[b]
             val len = g.sLen[s]
             val ux = (bx - ax) / len; val uy = (by - ay) / len
-            val tA = ((x - ax) * ux + (y - ay) * uy).coerceIn(0.0, len)
+            val tRaw = (x - ax) * ux + (y - ay) * uy
+            // 投影落在路尾之外、且那一端沒有別的路接（死巷或已載入資料的邊緣）→ 車子已不在這條路上
+            if ((tRaw < -DEAD_END_OVER_M && g.nSegs[a].size == 1) || (tRaw > len + DEAD_END_OVER_M && g.nSegs[b].size == 1)) continue
+            val tA = tRaw.coerceIn(0.0, len)
             val d = hypot(x - (ax + ux * tA), y - (ay + uy * tA))
             if (d > r) continue
             val w = g.ways[g.sWay[s]]
@@ -649,6 +690,8 @@ class MapAssist {
                     net = netDistance(g, e, t, bound)
                     cost += if (net.isFinite()) min(abs(net - expected) / (8.0 + 0.5 * expected), 4.5) else 4.5
                     if (v < 1.0 && e == prevE) cost -= 1.0     // 停車時黏住
+                    // 分不清時假設還在同一條路上（平行的匝道 / 高架下的平面道路，GPS 分不出來）
+                    if (g.sWay[s] == g.sWay[prevE shr 1]) cost -= SAME_WAY_BONUS
                 }
                 cost += when {
                     w.rank >= 9 -> 1.2
@@ -871,6 +914,10 @@ class MapAssist {
 /** 方位角（度，北 = 0，順時針）。 */
 internal fun bearing(dx: Double, dy: Double): Double = norm360(Math.toDegrees(atan2(dx, dy)))
 
+/** 經緯度有限且在合理範圍（擋掉 NaN / 無窮大 / 亂碼座標）。 */
+internal fun validLatLon(lat: Double, lon: Double): Boolean =
+    lat.isFinite() && lon.isFinite() && lat >= -90.0 && lat <= 90.0 && lon >= -180.0 && lon <= 180.0
+
 internal fun norm360(a: Double): Double { val r = a % 360.0; return if (r < 0) r + 360.0 else r }
 
 /** 兩方位角的夾角（0..180）。 */
@@ -930,6 +977,8 @@ object OsmTiles {
     const val TILE = 0.005
     const val NEED_M = 700.0          // 前導點周圍 ±700 m 都要有資料
     const val LEAD_MAX_M = 300.0      // 前導點最多在車前 300 m（約 20 s 車程）
+    /** split() 產生的圖磚檔小於這個大小 = 沒有任何道路（空磚約 40 bytes；一條最短的路就 > 250）。 */
+    const val EMPTY_TILE_BYTES = 200L
 
     val HIGHWAY_RE = MapGraph.DRIVABLE.keys.sorted().joinToString("|")
 

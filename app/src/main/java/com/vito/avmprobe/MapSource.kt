@@ -46,7 +46,10 @@ class MapSource(
         )
         private const val MIN_INTERVAL_MS = 30_000L      // Overpass 使用規範：低頻率
         private const val TIMEOUT_MS = 25_000
+        private const val TOTAL_MS = 60_000L              // 整個請求（含慢慢滴下來的回應）最多 60 s
         private const val TILE_TTL_MS = 30L * 24 * 3600 * 1000
+        // 沒有道路的圖磚（海上 / 山區，或伺服器資料庫異常回了空結果）3 天後重抓，不要一錯就錯 30 天
+        private const val EMPTY_TTL_MS = 3L * 24 * 3600 * 1000
         private const val MAX_TILES_ON_DISK = 1500
         private const val MAX_TILES_PER_REQUEST = 25
         private const val LOAD_HALF_M = 1000.0           // 載入記憶體：車子周圍 ±1 km
@@ -199,7 +202,8 @@ class MapSource(
             val k = OsmTiles.key(t[0], t[1])
             val f = tileFile(k)
             if (!f.exists()) { missing.add(t); continue }
-            if (now - f.lastModified() > TILE_TTL_MS) stale.add(t)
+            val age = now - f.lastModified()
+            if (age > TILE_TTL_MS || (age > EMPTY_TTL_MS && f.length() < OsmTiles.EMPTY_TILE_BYTES)) stale.add(t)
             if (k !in loaded) haveNew = true
         }
         if (missing.isNotEmpty()) fetch(missing, lat, lon)
@@ -213,8 +217,9 @@ class MapSource(
         val h = handler ?: return
         loading = true
         ex.execute {
+            var keys: List<String> = emptyList()
             try {
-                val keys = OsmTiles.around(lat, lon, LOAD_HALF_M).map { OsmTiles.key(it[0], it[1]) }
+                keys = OsmTiles.around(lat, lon, LOAD_HALF_M).map { OsmTiles.key(it[0], it[1]) }
                     .filter { tileFile(it).exists() }
                 val texts = keys.mapNotNull { k -> try { tileFile(k).readText() } catch (_: IOException) { null } }
                 val g = MapGraph.parse(texts, lat, lon)
@@ -227,7 +232,9 @@ class MapSource(
                 }
             } catch (t: Throwable) {
                 Log.w(TAG, "載入圖磚失敗：${t.message}")
-                h.post { loading = false }
+                // 也記成已處理：不然每個定位（1 Hz）都會再讀再解析一次同一批壞檔，直到有新圖磚才再試
+                val k = keys
+                h.post { loaded.clear(); loaded.addAll(k); loading = false }
             }
         }
     }
@@ -275,6 +282,7 @@ class MapSource(
     }
 
     private fun post(url: String, query: String): String {
+        val t0 = SystemClock.elapsedRealtime()
         val c = URL(url).openConnection() as HttpURLConnection
         try {
             c.requestMethod = "POST"
@@ -294,6 +302,8 @@ class MapSource(
                     if (n < 0) break
                     buf.write(b, 0, n)
                     if (buf.size() > MAX_BODY) throw IOException("回應太大")
+                    // readTimeout 只管單次 read 的空檔，伺服器一直慢慢滴資料就永遠不會逾時 → 另外限制總時間
+                    if (SystemClock.elapsedRealtime() - t0 > TOTAL_MS) throw IOException("回應太慢")
                 }
                 return buf.toString("UTF-8")
             }

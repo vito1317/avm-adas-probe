@@ -606,6 +606,447 @@ class MapAssistTest {
         }
     }
 
+    // ---------------- 刁難情境（合成路網 + AR(1) 相關 GPS 雜訊） ----------------
+
+    /** 以 (lat0, lon0) 為原點、x 東 y 北（公尺）建合成 OSM 資料。投影跟 MapGraph 一致。 */
+    private class Synth(val lat0: Double, val lon0: Double) {
+        val ky = MapGraph.R_EARTH * Math.PI / 180.0
+        val kx = ky * cos(Math.toRadians(lat0))
+        val nodes = LinkedHashMap<Long, DoubleArray>()
+        val ways = ArrayList<JSONObject>()
+        val sig = HashSet<Long>()
+        private var nextId = 1000L
+        fun ll(x: Double, y: Double) = doubleArrayOf(lat0 + y / ky, lon0 + x / kx)
+        fun xy(lat: Double, lon: Double) = doubleArrayOf((lon - lon0) * kx, (lat - lat0) * ky)
+        fun node(x: Double, y: Double): Long { val id = nextId++; nodes[id] = ll(x, y); return id }
+        fun way(ids: List<Long>, vararg tags: Pair<String, String>): Long {
+            val id = nextId++
+            val tg = JSONObject(); for ((k, v) in tags) tg.put(k, v)
+            ways.add(JSONObject().put("type", "way").put("id", id).put("nodes", JSONArray(ids)).put("tags", tg))
+            return id
+        }
+        /** 東西向直線：x0..x1、每 step 一個節點。 */
+        fun line(x0: Double, x1: Double, y: Double, step: Double): List<Long> {
+            val n = (abs(x1 - x0) / step).toInt()
+            return (0..n).map { node(x0 + (x1 - x0) * it / n, y) }
+        }
+        fun json(skip: Set<Long> = emptySet()): String {
+            val els = JSONArray()
+            for (w in ways) if (w.getLong("id") !in skip) els.put(w)
+            for ((id, p) in nodes) {
+                val n = JSONObject().put("type", "node").put("id", id).put("lat", p[0]).put("lon", p[1])
+                if (id in sig) n.put("tags", JSONObject().put("highway", "traffic_signals"))
+                els.put(n)
+            }
+            return JSONObject().put("elements", els).toString()
+        }
+        fun assist(refLat: Double = lat0, refLon: Double = lon0) = MapAssist().also { it.loadOverpass(json(), refLat, refLon) }
+        fun fix(m: MapAssist, x: Double, y: Double, v: Double, brg: Double, acc: Double, t: Long) =
+            ll(x, y).let { m.update(it[0], it[1], v, brg, acc, t) }
+    }
+
+    /** GPS 誤差：AR(1) 相關（τ 秒）+ 白雜訊。 */
+    private class Noise(seed: Long, val sigma: Double, val white: Double, val tau: Double = 15.0) {
+        val r = java.util.Random(seed)
+        private var ex = r.nextGaussian() * sigma
+        private var ey = r.nextGaussian() * sigma
+        fun next(): DoubleArray {
+            val a = kotlin.math.exp(-1.0 / tau); val b = sigma * kotlin.math.sqrt(1 - a * a)
+            ex = a * ex + b * r.nextGaussian(); ey = a * ey + b * r.nextGaussian()
+            return doubleArrayOf(ex + r.nextGaussian() * white, ey + r.nextGaussian() * white)
+        }
+    }
+
+    @Test
+    fun parallelRoads15mApart() {
+        // 同方向的兩條平行路相距 15 m（主線 + 側車道），每 400 m 有橫街相連；GPS σ 6 m 相關誤差
+        for (oneway in listOf(false, true)) {
+            var wrong = 0; var n = 0
+            for (seed in 1..30L) {
+                val s = Synth(25.0, 121.5)
+                val a = s.line(-1000.0, 1000.0, 0.0, 50.0)
+                val b = s.line(-1000.0, 1000.0, 15.0, 50.0)
+                val ow = if (oneway) arrayOf("oneway" to "yes") else emptyArray()
+                val wa = s.way(a, "highway" to "secondary", "name" to "主線", *ow)
+                s.way(b, "highway" to "secondary", "name" to "側車道", *ow)
+                for (cx in listOf(-600, -200, 200, 600)) {
+                    s.way(listOf(s.node(cx.toDouble(), -100.0), a[(cx + 1000) / 50], b[(cx + 1000) / 50], s.node(cx.toDouble(), 115.0)),
+                        "highway" to "residential")
+                }
+                val m = s.assist()
+                val nz = Noise(seed, 6.0, 1.5)
+                for (k in 0..150) {
+                    val e = nz.next()
+                    val st = s.fix(m, -900.0 + 10 * k + e[0], -1.75 + e[1], 10.0, 90.0 + nz.r.nextGaussian() * 3, 6.0, k * 1000L)
+                    if (k < 3) continue
+                    n++
+                    if (st == null || !st.matched || st.wayId != wa) wrong++
+                }
+            }
+            println("parallel 15 m oneway=$oneway: wrong $wrong/$n")
+            assertTrue("parallel oneway=$oneway wrong $wrong/$n", wrong <= 0.05 * n)
+        }
+    }
+
+    @Test
+    fun gpsJump50mIsRejected() {
+        // 單一筆 50 m 跳點（多路徑反射）跳到 50 m 外的平行路上：配對、路徑都不能跟著跳
+        var wrong = 0; var pathJump = 0; var n = 0
+        for (seed in 1..20L) {
+            val s = Synth(25.0, 121.5)
+            val a = s.line(-1000.0, 1000.0, 0.0, 50.0)
+            val b = s.line(-1000.0, 1000.0, 50.0, 50.0)
+            val wa = s.way(a, "highway" to "secondary", "name" to "A", "oneway" to "yes")
+            s.way(b, "highway" to "secondary", "name" to "B", "oneway" to "yes")
+            for (cx in listOf(-600, -200, 200, 600)) s.way(listOf(a[(cx + 1000) / 50], b[(cx + 1000) / 50]), "highway" to "residential")
+            val m = s.assist()
+            val nz = Noise(seed, 4.0, 1.0)
+            var last: MapState? = null
+            for (k in 0..90) {
+                val e = nz.next()
+                val jump = if (k == 60 || k == 75) 50.0 else 0.0
+                val st = s.fix(m, -900.0 + 12 * k + e[0], -1.75 + e[1] + jump, 12.0, 90.0, 5.0, k * 1000L)
+                if (k in 55..85) {
+                    n++
+                    if (st == null || !st.matched || st.wayId != wa) wrong++
+                    if (st != null && last != null && st.path.size > 16 && last.path.size > 16 &&
+                        abs(st.path[16][0] - last.path[16][0]) > 5f) pathJump++
+                }
+                last = st
+            }
+        }
+        assertEquals("跳點時配錯路", 0, wrong)
+        assertEquals("跳點時路徑側移", 0, pathJump)
+        assertTrue(n > 500)
+    }
+
+    @Test
+    fun gpsOffsetThatPersistsIsEventuallyAccepted() {
+        // 一直偏 80 m（例如之前的估計是錯的）：連續 3 筆後重設到新位置，不會永遠卡在舊預測
+        val s = Synth(25.0, 121.5)
+        s.way(s.line(-2000.0, 2000.0, 0.0, 50.0), "highway" to "secondary", "name" to "A")
+        val wb = s.way(s.line(-2000.0, 2000.0, 80.0, 50.0), "highway" to "secondary", "name" to "B")
+        val m = s.assist()
+        for (k in 0..10) s.fix(m, -500.0 + 10 * k, -1.75, 10.0, 90.0, 5.0, k * 1000L)
+        var st: MapState? = null
+        for (k in 11..16) st = s.fix(m, -500.0 + 10 * k, 78.25, 10.0, 90.0, 5.0, k * 1000L)
+        assertEquals(wb, st!!.wayId)
+    }
+
+    @Test
+    fun standingStillWithDriftingFixes() {
+        // 停在號誌路口前 12 m 兩分鐘：定位漂移（相關 random walk，偏到 10 m 以上）、速度 ~0、航向亂給或沒有
+        var bad = 0; var n = 0
+        for (seed in 1..20L) {
+            val s = Synth(25.0, 121.5)
+            val a = s.line(-1000.0, 1000.0, 0.0, 50.0)
+            val wa = s.way(a, "highway" to "secondary", "name" to "A")
+            val ix = a[(-200 + 1000) / 50]
+            s.sig.add(ix)
+            s.way(listOf(s.node(-200.0, -200.0), ix, s.node(-200.0, 200.0)), "highway" to "secondary", "name" to "X")
+            val m = s.assist()
+            val r = java.util.Random(seed)
+            var t = 0L
+            for (k in 0..10) { s.fix(m, -330.0 + 10 * k, -1.75, 10.0, 90.0, 5.0, t); t += 1000 }
+            var dx = 0.0; var dy = 0.0
+            for (k in 0 until 120) {
+                dx = 0.97 * dx + r.nextGaussian() * 2.0; dy = 0.97 * dy + r.nextGaussian() * 2.0
+                val brg = if (r.nextBoolean()) Double.NaN else r.nextDouble() * 360
+                val st = s.fix(m, -212.0 + dx, -1.75 + dy, abs(r.nextGaussian() * 0.3), brg, 8.0 + r.nextDouble() * 8, t)
+                t += 1000
+                n++
+                if (st == null || !st.matched || st.wayId != wa || abs(st.headingDeg - 90f) > 20f ||
+                    st.signalsAheadM.none { it < 40f }) bad++
+            }
+        }
+        assertEquals("停車漂移 $bad/$n", 0, bad)
+    }
+
+    @Test
+    fun startupStationaryWithoutHeadingDoesNotGuessDirection() {
+        // 開機時停在雙向道上、沒有航向：分不出往哪開 → 不配（不能隨便畫一條往後的路）；一起步就配上正確方向
+        for (west in listOf(false, true)) for (seed in 1..10L) {
+            val s = Synth(25.0, 121.5)
+            s.way(s.line(-1000.0, 1000.0, 0.0, 50.0), "highway" to "secondary", "name" to "A")
+            val m = s.assist()
+            val r = java.util.Random(seed)
+            val y = if (west) 1.75 else -1.75
+            for (k in 0 until 10) {
+                val st = s.fix(m, r.nextGaussian() * 3, y + r.nextGaussian() * 3, 0.0, Double.NaN, 8.0, k * 1000L)!!
+                assertFalse(st.matched)
+                assertTrue("小地圖仍有道路", st.roads.isNotEmpty())
+            }
+            val want = if (west) 270.0 else 90.0
+            var x = 0.0
+            var st: MapState? = null
+            for (k in 10 until 16) {
+                val v = min(8.0, (k - 9) * 1.5); x += if (west) -v else v
+                st = s.fix(m, x + r.nextGaussian() * 2, y + r.nextGaussian() * 2, v, want + r.nextGaussian() * 5, 6.0, k * 1000L)
+            }
+            assertTrue(st!!.matched)
+            assertEquals(want, st.headingDeg.toDouble(), 15.0)
+        }
+        // 單行道：方向由單行決定，停著也可以配
+        val s = Synth(25.0, 121.5)
+        s.way(s.line(1000.0, -1000.0, 0.0, 50.0), "highway" to "secondary", "name" to "單行", "oneway" to "yes")
+        val st = s.fix(s.assist(), 0.0, 1.0, 0.0, Double.NaN, 8.0, 0L)!!
+        assertTrue(st.matched)
+        assertEquals(270.0, st.headingDeg.toDouble(), 1.0)
+    }
+
+    @Test
+    fun lowSpeedBearingGarbageDoesNotFlipDirection() {
+        // 塞車慢行：< 2 m/s 航向完全亂數；2–3.5 m/s σ 20° 再加 15% 亂數。不能配到反向
+        for (mode in 0..1) {
+            var wrong = 0; var n = 0
+            for (seed in 1..20L) {
+                val s = Synth(25.0, 121.5)
+                val a = s.line(-1000.0, 1000.0, 0.0, 50.0)
+                s.way(a, "highway" to "secondary", "name" to "A")
+                for (cx in listOf(-600, -400, -200, 0, 200, 400)) {
+                    s.way(listOf(s.node(cx.toDouble(), -150.0), a[(cx + 1000) / 50], s.node(cx.toDouble(), 150.0)), "highway" to "residential")
+                }
+                val m = s.assist()
+                val r = java.util.Random(seed)
+                var t = 0L; var x = -700.0
+                for (k in 0..5) { s.fix(m, x, -1.75, 10.0, 90.0, 5.0, t); t += 1000; x += 10 }
+                val nz = Noise(seed, 5.0, 1.5)
+                for (k in 0 until 120) {
+                    val v = if (mode == 0) 0.5 + r.nextDouble() * 1.45 else 2.0 + r.nextDouble() * 1.5
+                    x += v
+                    val e = nz.next()
+                    val brg = if (mode == 0 || r.nextDouble() < 0.15) r.nextDouble() * 360 else 90 + r.nextGaussian() * 20
+                    val st = s.fix(m, x + e[0], -1.75 + e[1], v, brg, 8.0, t)
+                    t += 1000
+                    n++
+                    if (st == null || !st.matched || abs(st.headingDeg - 90f) > 30) wrong++
+                }
+            }
+            println("low speed mode $mode: wrong $wrong/$n")
+            assertTrue("low speed mode $mode: $wrong/$n", wrong <= 0.01 * n)
+        }
+    }
+
+    @Test
+    fun overpassBridgeIsNotATurn() {
+        // 高架橋從上面橫越（不共點）：不能配到橋上，前方路徑也不能在交叉處轉上去；含 1 m/s 慢行（航向亂數）
+        for (v in listOf(12.0, 1.0)) for (seed in 1..10L) {
+            val s = Synth(25.0, 121.5)
+            val wa = s.way(s.line(-1000.0, 1000.0, 0.0, 50.0), "highway" to "secondary", "name" to "A")
+            s.way((0..40).map { s.node(5.0, -1000.0 + 50.0 * it) }, "highway" to "trunk", "name" to "橋", "bridge" to "yes", "layer" to "1")
+            val m = s.assist()
+            val nz = Noise(seed, 5.0, 1.5)
+            val r = java.util.Random(seed)
+            var x = -150.0; var t = 0L
+            for (k in 0..6) { s.fix(m, x, -1.75, 10.0, 90.0, 5.0, t); t += 1000; x += 10 }
+            while (x < 80) {
+                x += v
+                val e = nz.next()
+                val brg = if (v < 2) r.nextDouble() * 360 else 90.0 + r.nextGaussian() * 3
+                val st = s.fix(m, x + e[0], -1.75 + e[1], v, brg, 6.0, t)!!
+                t += 1000
+                assertEquals(wa, st.wayId)
+                assertTrue(st.path.all { abs(it[0]) < 8f })
+            }
+        }
+    }
+
+    @Test
+    fun elevatedRoadAboveAndRamps() {
+        // 高架道路疊在平面道路正上方 2 m（以匝道相連）：沒上匝道就一直留在平面道路
+        var notSurface = 0; var n = 0
+        for (seed in 1..20L) {
+            val s = Synth(25.0, 121.5)
+            val sa = s.line(-1000.0, 1000.0, 0.0, 50.0)
+            val ws = s.way(sa, "highway" to "primary", "name" to "平面", "oneway" to "yes")
+            val e = s.line(-300.0, 300.0, 2.0, 50.0)
+            s.way(listOf(sa[(-450 + 1000) / 50], e.first()), "highway" to "trunk_link", "oneway" to "yes")
+            s.way(e, "highway" to "trunk", "name" to "高架", "oneway" to "yes", "bridge" to "yes", "layer" to "1")
+            s.way(listOf(e.last(), sa[(450 + 1000) / 50]), "highway" to "trunk_link", "oneway" to "yes")
+            val m = s.assist()
+            val nz = Noise(seed, 5.0, 1.5)
+            for (k in 0..90) {
+                val x = -800.0 + 15 * k
+                val ee = nz.next()
+                val st = s.fix(m, x + ee[0], -1.75 + ee[1], 15.0, 90.0, 6.0, k * 1000L)
+                if (x in -250.0..250.0) { n++; if (st?.wayId != ws) notSurface++ }
+            }
+        }
+        assertTrue("not surface $notSurface/$n", notSurface <= 0.02 * n)
+
+        // 反過來：真的上了匝道（15° 分岔）→ 匝道分開後要跟上，之後一筆都不能留在平面道路
+        var lagMax = 0; var wrongAfter = 0
+        for (seed in 1..20L) {
+            val s = Synth(25.0, 121.5)
+            val sa = s.line(-1000.0, 1000.0, 0.0, 50.0)
+            s.way(sa, "highway" to "primary", "name" to "平面", "oneway" to "yes")
+            val ang = Math.toRadians(15.0)
+            val rampLen = 26.0 / sin(ang)
+            val rx1 = -200.0 + rampLen * cos(ang)
+            val top = s.node(rx1, 26.0)
+            val ramp = s.way(listOf(sa[(-200 + 1000) / 50], s.node(-200.0 + rampLen * 0.5 * cos(ang), 13.0), top),
+                "highway" to "primary_link", "oneway" to "yes")
+            val we = s.way(listOf(top) + s.line(rx1 + 50, rx1 + 1000, 26.0, 50.0), "highway" to "trunk", "name" to "快速道路", "oneway" to "yes")
+            val m = s.assist()
+            val nz = Noise(seed, 5.0, 1.5)
+            var first = -1
+            for (k in 0..60) {
+                val d = -500.0 + 15 * k
+                val along = d + 200
+                val tx: Double; val ty: Double; val h: Double
+                if (d < -200) { tx = d; ty = -1.75; h = 90.0 }
+                else if (along < rampLen) { tx = -200 + along * cos(ang); ty = along * sin(ang) - 1.5; h = 75.0 }
+                else { tx = rx1 + along - rampLen; ty = 24.25; h = 90.0 }
+                val ee = nz.next()
+                val st = s.fix(m, tx + ee[0], ty + ee[1], 15.0, h + nz.r.nextGaussian() * 2, 6.0, k * 1000L)
+                if (d > -190) {
+                    val ok = st != null && st.matched && (st.wayId == ramp || st.wayId == we)
+                    if (ok && first < 0) first = k
+                    if (along > rampLen && !ok) wrongAfter++
+                }
+            }
+            lagMax = max(lagMax, first - 21)
+        }
+        assertEquals(0, wrongAfter)
+        assertTrue("ramp lag $lagMax fixes", lagMax <= 7)
+    }
+
+    @Test
+    fun enteringAreaNotYetLoaded() {
+        // 只載入 x ≤ 0 的路；開過資料邊緣後要變成未配對（不能把車「釘」在路尾），補進新資料後馬上接回
+        val s = Synth(25.0, 121.5)
+        val a1 = s.line(-1000.0, 0.0, 0.0, 50.0)
+        s.way(a1, "highway" to "secondary", "name" to "A1")
+        val w2 = s.way(listOf(a1.last()) + s.line(50.0, 1000.0, 0.0, 50.0), "highway" to "secondary", "name" to "A2")
+        val m = MapAssist()
+        m.loadOverpass(s.json(skip = setOf(w2)), 25.0, 121.5)
+        val full = MapGraph.parse(s.json(), 25.0005, 121.5003)
+        for (k in 0..50) {
+            val x = -300.0 + 12 * k
+            if (k == 35) m.load(full)
+            val st = s.fix(m, x, -1.75, 12.0, 90.0, 5.0, k * 1000L)!!
+            when {
+                x < -10 -> { assertTrue(st.matched); assertEquals("A1", st.name) }
+                x in 15.0..119.0 -> assertFalse("x=$x 已超出資料邊緣仍配對", st.matched)
+                x >= 120 -> {
+                    assertTrue("x=$x 補資料後沒接回", st.matched)
+                    assertEquals("A2", st.name)
+                    assertTrue(st.path.last()[1] > 190f)
+                }
+            }
+        }
+    }
+
+    @Test
+    fun malformedOrEmptyOverpassResponses() {
+        val bad = listOf("", "{}", "<html>504 Gateway Timeout</html>", "{\"elements\":[]}", "{\"elements\":null}",
+            "{\"remark\":\"runtime error: Query timed out\"}")
+        for (j in bad) {
+            val m = MapAssist()
+            m.loadOverpass(j, 25.0, 121.5)
+            assertNull("'$j'", m.update(25.0, 121.5, 5.0, 90.0, 5.0, 0L))
+        }
+        // 壞元素（型別錯 / 缺座標）只丟掉它自己，其他道路照用
+        val s = Synth(25.0, 121.5)
+        s.way(s.line(-500.0, 500.0, 0.0, 50.0), "highway" to "secondary", "name" to "好路")
+        val root = JSONObject(s.json())
+        val els = root.getJSONArray("elements")
+        els.put(JSONObject("{\"type\":\"node\",\"id\":1,\"lat\":\"x\",\"lon\":121.5}"))
+        els.put(JSONObject("{\"type\":\"node\",\"id\":2,\"lat\":95.0,\"lon\":121.5}"))
+        els.put(JSONObject("{\"type\":\"way\",\"id\":3,\"nodes\":[\"a\",2],\"tags\":{\"highway\":\"primary\"}}"))
+        els.put(JSONObject("{\"type\":\"way\",\"id\":4,\"nodes\":[5,6],\"tags\":{\"highway\":\"primary\"},\"geometry\":[{\"lat\":25.0},{\"lat\":25.001,\"lon\":121.5}]}"))
+        val g = MapGraph.parse(root.toString(), 25.0, 121.5)
+        assertEquals(1, g.wayCount)
+        val m = MapAssist(); m.load(g)
+        val st = s.fix(m, 0.0, -1.5, 10.0, 90.0, 5.0, 0L)!!
+        assertTrue(st.matched)
+        assertEquals("好路", st.name)
+    }
+
+    @Test
+    fun invalidFixesDoNotPoisonState() {
+        val s = Synth(25.0, 121.5)
+        s.way(s.line(-1000.0, 1000.0, 0.0, 50.0), "highway" to "secondary", "name" to "A")
+        s.way(s.line(-1000.0, 1000.0, 40.0, 50.0), "highway" to "secondary", "name" to "B")
+        val m = s.assist()
+        for (k in 0..5) s.fix(m, -200.0 + 10 * k, -1.75, 10.0, 90.0, 5.0, k * 1000L)
+        assertNull(m.update(Double.NaN, Double.NaN, 10.0, 90.0, 5.0, 6000L))
+        assertNull(m.update(25.0, Double.POSITIVE_INFINITY, 10.0, 90.0, 5.0, 6500L))
+        var st = s.fix(m, -130.0, -1.75, 10.0, 90.0, 5.0, 7000L)!!
+        assertTrue(st.matched); assertEquals("A", st.name)
+        assertTrue(st.lat.isFinite() && st.headingDeg.isFinite())
+        // 冷開機常見的 (0, 0) 定位、NaN 速度 / 航向 / 精度、同一時間戳重複
+        m.update(0.0, 0.0, Double.NaN, Double.NaN, Double.NaN, 8000L)
+        st = s.fix(m, -110.0, -1.75, 10.0, 90.0, 5.0, 9000L)!!
+        assertTrue(st.matched); assertEquals("A", st.name)
+        st = s.fix(m, -110.0, -1.75, 10.0, 90.0, 5.0, 9000L)!!
+        assertTrue(st.matched); assertEquals("A", st.name)
+        st = s.fix(m, -100.0, -1.75, Double.NaN, Double.NaN, Double.NaN, 10_000L)!!
+        assertTrue(st.matched); assertEquals("A", st.name)
+        assertEquals(90.0, st.headingDeg.toDouble(), 2.0)
+        assertTrue(MapAssist.toJson(st).toString().isNotEmpty())
+    }
+
+    @Test
+    fun poorAccuracyDoesNotForceAMatch() {
+        val s = Synth(25.0, 121.5)
+        s.way(s.line(-1000.0, 1000.0, 0.0, 50.0), "highway" to "secondary", "name" to "A")
+        s.way(s.line(-1000.0, 1000.0, 45.0, 50.0), "highway" to "secondary", "name" to "B")
+        // 第一筆就 ±80 m：不知道在哪條路
+        assertFalse(s.fix(s.assist(), 0.0, 25.0, 10.0, 90.0, 80.0, 0L)!!.matched)
+        // 已經在 A 上開，精度短暫變差：沿路接得起來就繼續
+        val m = s.assist()
+        for (k in 0..5) s.fix(m, -100.0 + 10 * k, -1.75, 10.0, 90.0, 5.0, k * 1000L)
+        val st = s.fix(m, -40.0, 3.0, 10.0, 90.0, 80.0, 6000L)!!
+        assertTrue(st.matched); assertEquals("A", st.name)
+    }
+
+    @Test
+    fun taiwanLatitudeRange() {
+        // 墾丁 21.9° 到馬祖 26.2°：等距圓柱投影的公尺尺度、車輛座標、圖磚範圍都要對
+        for (lat in listOf(21.9, 22.6, 23.5, 24.5, 25.3, 26.2)) {
+            val s = Synth(lat, 120.5)
+            s.way(s.line(-1000.0, 1000.0, 0.0, 100.0), "highway" to "primary", "name" to "東西")
+            s.way((0..20).map { s.node(150.0, -1000.0 + 100.0 * it) }, "highway" to "primary", "name" to "南北")
+            val m = s.assist(lat + 0.002, 120.5 - 0.003)   // 參考點故意偏開
+            var st: MapState? = null
+            for (k in 0..8) st = s.fix(m, -200.0 + 10 * k, -1.75, 10.0, 90.0, 5.0, k * 1000L)
+            st!!
+            assertTrue(st.matched)
+            assertEquals(90.0, st.headingDeg.toDouble(), 0.5)
+            for (i in 1 until st.path.size) {
+                val d = hypot((st.path[i][0] - st.path[i - 1][0]).toDouble(), (st.path[i][1] - st.path[i - 1][1]).toDouble())
+                assertEquals("lat $lat step", 5.0, d, 0.05)
+            }
+            // 南北路在東邊 x = 150（節點每 100 m）：車輛座標 z = 150 − 車子 x；往北 = 車子左邊，北距 = −x
+            val car = s.xy(st.lat, st.lon)
+            val ns = st.roads.first { r -> r.size >= 2 && r.all { abs(it[1] - (150.0 - car[0])) < 1.5 } }
+            assertTrue(ns.minOf { it[0] } < -100f && ns.maxOf { it[0] } > 100f)
+            for (p in ns) {
+                val north = car[1] - p[0]
+                assertEquals("lat $lat 南北路節點 $north", Math.round(north / 100.0) * 100.0, north, 1.5)
+            }
+            // 圖磚：±halfM 的方塊確實被圖磚蓋住
+            val tiles = OsmTiles.around(lat, 120.5, 700.0)
+            val bb = OsmTiles.bbox(tiles)
+            assertTrue(bb[0] <= lat - 700 / 111_195.0 && bb[2] >= lat + 700 / 111_195.0)
+            val dLon = 700 / (111_195.0 * cos(Math.toRadians(lat)))
+            assertTrue(bb[1] <= 120.5 - dLon && bb[3] >= 120.5 + dLon)
+        }
+    }
+
+    @Test
+    fun emptyTileIsSmallerThanThreshold() {
+        // MapSource 用檔案大小判斷「沒有道路的圖磚」（3 天重抓，不要被伺服器空結果卡 30 天）
+        val s = Synth(25.0025, 121.5025)   // 圖磚正中央
+        s.way(listOf(s.node(1.0, 1.0), s.node(30.0, 1.0)), "highway" to "service")
+        val t0 = intArrayOf(OsmTiles.ix(121.5025), OsmTiles.iy(25.0025))
+        val far = intArrayOf(t0[0] + 5, t0[1] + 5)
+        val parts = OsmTiles.split(s.json(), listOf(t0, far))
+        assertTrue(parts[OsmTiles.key(far[0], far[1])]!!.toByteArray().size < OsmTiles.EMPTY_TILE_BYTES)
+        assertTrue(parts[OsmTiles.key(t0[0], t0[1])]!!.toByteArray().size >= OsmTiles.EMPTY_TILE_BYTES)
+    }
+
     // ---------------- 圖磚 ----------------
 
     @Test

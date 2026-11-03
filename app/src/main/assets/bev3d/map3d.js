@@ -4,8 +4,10 @@
  *
  *   AVM_MAP.init(scene, THREE, hudParent)  hudParent：放小地圖與提示的 DOM 容器（位置由呼叫端 CSS 決定）
  *   AVM_MAP.update(map, now)               map = payload.map（或 null：只推進動畫）；now = performance.now()
+ *                                          （省略或誤傳 Date.now() 時自動改用 performance.now()）
  *                                          setFrame 收到 map 時呼叫一次，render loop 每幀再呼叫 update(null, now)
  *   AVM_MAP.setNear(surfaceM, linesM)      近處淡入距離（預設 8 / 12 m）
+ *   AVM_MAP.state()                        除錯：{ road, hud, mini, matched, dispN, roads, roadPts, … }
  *
  * 座標：payload 是車輛座標（x 右、z 前，公尺），場景 z = −z。GPS 1 Hz，兩筆之間沿 path 依車速推算位置，
  * 新資料到時平滑過去。超過 5 s 沒有新資料、或沒配到道路 → 淡出。
@@ -21,6 +23,8 @@
   var DASH = 4, PERIOD = 10;  // 車道虛線：實 4 m、空 6 m
   var MAXP = 64;              // path 最多點數
   var MAXQ = 160;             // 虛線 quad 上限
+  var MAX_ROAD_PTS = 4000;    // 小地圖道路點數上限（Android 端給 ≤ 2500；異常大的資料不要拖慢每次重畫）
+  var MAX_LANES = 10;
   var MINI = 170;             // 小地圖邊長（CSS px）
   var MINI_SCALE = 0.55;      // px / m
   var CAR_Y = 0.70;           // 車子在小地圖的高度比例
@@ -30,6 +34,7 @@
 
   var T = null, root = null, hud = null, ui = {}, inited = false;
   var cur = null;             // 最新一筆（已前處理）
+  var curM = null;            // 最後一筆有配到道路的
   var lastT = null, lastAt = -1e9, lastNow = 0;
   var disp = [], dispN = 0;   // 顯示中的中心線（目前車輛座標，平滑後）
   var phase = 0, phaseInit = false;
@@ -64,18 +69,29 @@
       var d = hyp(ax + dx * t, az + dz * t);
       if (d < best) { best = d; s0 = S[i - 1] + t * Math.sqrt(l2); }
     }
-    var lanes = num(m.lanes, 0) | 0, known = lanes > 0;
+    var lanes = Math.min(MAX_LANES, num(m.lanes, 0) | 0), known = lanes > 0;
     var w = known ? lanes * LANE_W : num(m.width, 0) > 1 ? m.width : (m.hw ? hwWidth(m.hw) : 7);
-    if (!known) lanes = Math.max(1, Math.round(w / LANE_W));
+    w = Math.min(w, 40);
+    if (!known) lanes = Math.max(1, Math.min(MAX_LANES, Math.round(w / LANE_W)));
     var minor = m.hw === 'residential' || m.hw === 'living_street' || m.hw === 'service';
     var sig = [];
     if (m.signals && m.signals.length) for (i = 0; i < m.signals.length; i++) if (isFinite(m.signals[i])) sig.push(+m.signals[i]);
+    // 小地圖道路：只收陣列、總點數設上限（Android 端把大路排在最後 → 從後往前收，超過上限丟的是前面的小路）
+    var roads = [], rc = [], rcIn = m.rc && m.rc.length ? m.rc : null, budget = MAX_ROAD_PTS;
+    var rIn = m.roads && m.roads.length ? m.roads : [];
+    for (i = rIn.length - 1; i >= 0 && budget > 0; i--) {
+      var r = rIn[i];
+      if (!r || !r.length || r.length < 2 || r.length > budget) continue;
+      roads.push(r); rc.push(rcIn && rcIn.length === rIn.length ? rcIn[i] : 1);
+      budget -= r.length;
+    }
+    roads.reverse(); rc.reverse();
     return {
       at: now, pts: pts, S: S, s0: s0, spd: Math.max(0, num(m.spd, 0) / 3.6), off: num(m.off, 0),
-      od: num(m.od, 0), lanes: lanes, known: known, w: Math.min(w, 40), oneway: !!m.oneway,
+      od: num(m.od, 0), lanes: lanes, known: known, w: w, oneway: !!m.oneway,
       center: !m.oneway && (known ? lanes >= 2 : !minor),   // 巷弄多半沒有中線
       maxspeed: num(m.maxspeed, 0) > 0 ? Math.round(m.maxspeed) : 0, name: typeof m.name === 'string' ? m.name : '',
-      sig: sig, roads: m.roads || [], rc: m.rc || [], matched: m.matched !== false && pts.length >= 2,
+      sig: sig, roads: roads, rc: rc, matched: m.matched !== false && pts.length >= 2,
       acc: num(m.acc, 0)
     };
   }
@@ -422,7 +438,9 @@
 
   function update(map, now) {
     if (!inited) return;
-    now = typeof now === 'number' ? now : performance.now();
+    // 只接受 performance.now() 這種單調時間；誤傳 Date.now()（1.7e12）會讓「多久沒資料」永遠算不對 → 改用 performance.now()
+    now = typeof now === 'number' && isFinite(now) && now < 1e11 ? now : performance.now();
+    if (now < lastNow - 1000) { lastAt = -1e9; lastNow = now; }   // 時間倒退（換了時間基準）：舊資料一律當過期
     var dt = Math.min(0.2, Math.max(0, (now - (lastNow || now)) / 1000));
     lastNow = now;
     if (map && typeof map === 'object') {
@@ -435,6 +453,7 @@
           var ph = mod(cur.od, PERIOD);
           if (!phaseInit) { phase = ph; phaseInit = true; }
           cur.phT = ph;
+          curM = cur;
         }
       }
     }
@@ -448,14 +467,15 @@
     if (cur && cur.matched && q) buildDisplay(cur, q, k);
     else if (!showRoad) dispN = fade < 0.02 ? 0 : dispN;
 
-    // 3D
-    root.visible = fade > 0.02 && dispN >= 2;
+    // 3D（淡出時用最後一筆配到的道路屬性畫，不要中途換成未配對資料的預設寬度 / 車道數）
+    var dc = cur && cur.matched ? cur : curM;
+    root.visible = fade > 0.02 && dispN >= 2 && !!dc;
     if (root.visible) {
       for (var key in meshes) if (meshes.hasOwnProperty(key)) {
         var mm = meshes[key].material;
         mm.uniforms.uOpacity.value = mm.userData.base * fade;
       }
-      draw3d(cur, q);
+      draw3d(dc, q);
     }
 
     // HUD
@@ -582,5 +602,14 @@
     }
   }
 
-  window.AVM_MAP = { init: init, update: update, setNear: setNear };
+  /** 除錯 / 測試用：目前顯示狀態。 */
+  function state() {
+    var pts = 0;
+    if (cur) for (var i = 0; i < cur.roads.length; i++) pts += cur.roads[i].length;
+    return { road: !!(root && root.visible), dispN: dispN, fade: fade, matched: !!(cur && cur.matched),
+      roads: cur ? cur.roads.length : 0, roadPts: pts, lanes: cur ? cur.lanes : 0,
+      hud: !!(hud && !hud.hasAttribute('data-off')), mini: !!(ui.mini && !ui.mini.hasAttribute('data-off')) };
+  }
+
+  window.AVM_MAP = { init: init, update: update, setNear: setNear, state: state };
 })();
