@@ -1,0 +1,331 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>換道輔助示範</title>
+<style>
+  /* 只給瀏覽器檢查 lca3d.js 用：情境腳本產生 payload.lca / objs，跟 Android 送來的格式一樣 */
+  :root{--bg:#090d13;--panel:rgba(14,20,28,.84);--line:rgba(120,160,200,.18);--fg:#e8f1f8;--muted:#8ba1b4;--cyan:#38e1ff;color-scheme:dark}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);overflow:hidden;
+    font-family:system-ui,-apple-system,"Noto Sans TC","PingFang TC","Microsoft JhengHei",sans-serif}
+  #app{position:relative;width:100%;height:100%}
+  canvas{display:block}
+  .bar{position:absolute;z-index:6;left:50%;transform:translateX(-50%);display:flex;gap:4px;
+    background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:5px;max-width:calc(100% - 32px);
+    box-sizing:border-box;overflow-x:auto;scrollbar-width:none}
+  .bar::-webkit-scrollbar{display:none}
+  #scn{top:10px}
+  #views{bottom:10px}
+  @media (max-width:520px){#info{bottom:58px;font-size:11px}}
+  button{font:inherit;font-size:12px;font-weight:600;color:var(--muted);background:transparent;border:0;border-radius:8px;padding:8px 10px;white-space:nowrap;cursor:pointer}
+  button:focus-visible{outline:2px solid var(--cyan);outline-offset:1px}
+  button[aria-pressed="true"]{background:rgba(56,225,255,.16);color:var(--cyan)}
+  #info{position:absolute;z-index:6;left:50%;bottom:62px;transform:translateX(-50%);font-size:12px;color:var(--muted);
+    background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:6px 10px;font-variant-numeric:tabular-nums;white-space:nowrap;max-width:calc(100% - 32px);overflow:hidden;text-overflow:ellipsis}
+  .car-tag{font-size:11px;font-weight:600;padding:1px 6px;border-radius:6px;background:rgba(9,13,19,.8);border:1px solid rgba(56,225,255,.5);color:var(--fg);white-space:nowrap}
+</style>
+</head>
+<body>
+<div id="app">
+  <div class="bar" id="scn" role="toolbar" aria-label="情境"></div>
+  <div id="info" role="status">—</div>
+  <div class="bar" id="views" role="toolbar" aria-label="視角">
+    <button data-view="chase" aria-pressed="true">3D 跟車</button>
+    <button data-view="top">俯視</button>
+    <button data-view="far">高空</button>
+  </div>
+</div>
+<script src="lib/three.min.js"></script>
+<script src="lib/OrbitControls.js"></script>
+<script src="lib/CSS2DRenderer.js"></script>
+<script src="lca3d.js"></script>
+<script>
+(function () {
+  'use strict';
+  var app = document.getElementById('app');
+  var renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'low-power' });
+  renderer.setPixelRatio(1);
+  renderer.outputEncoding = THREE.sRGBEncoding;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  app.insertBefore(renderer.domElement, app.firstChild);
+  var labels = new THREE.CSS2DRenderer();
+  labels.domElement.style.cssText = 'position:absolute;top:0;left:0;pointer-events:none';
+  app.insertBefore(labels.domElement, renderer.domElement.nextSibling);
+
+  var scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x11171f);
+  scene.fog = new THREE.Fog(0x11171f, 30, 90);
+  var camera = new THREE.PerspectiveCamera(50, 1, 0.1, 300);
+  var controls = new THREE.OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true;
+  scene.add(new THREE.HemisphereLight(0x9fc4ff, 0x0a0f16, 0.7));
+  var key = new THREE.DirectionalLight(0xffffff, 1.2);
+  key.position.set(6, 14, 4);
+  scene.add(key);
+
+  function lin(h) { return new THREE.Color(h).convertSRGBToLinear(); }
+  var road = new THREE.Mesh(new THREE.PlaneGeometry(14, 240), new THREE.MeshBasicMaterial({ color: lin(0x262d36), toneMapped: false }));
+  road.rotation.x = -Math.PI / 2;
+  scene.add(road);
+
+  // 車道線：±1.75 白虛線、±5.25 白實線（隨偏移情境整組平移）
+  var lanes = new THREE.Group();
+  scene.add(lanes);
+  (function () {
+    var m = new THREE.MeshBasicMaterial({ color: lin(0xeef2f5), toneMapped: false });
+    function seg(x, z0, z1) {
+      var g = new THREE.Mesh(new THREE.PlaneGeometry(0.15, z1 - z0), m);
+      g.rotation.x = -Math.PI / 2;
+      g.position.set(x, 0.01, -(z0 + z1) / 2);
+      lanes.add(g);
+    }
+    [-1.75, 1.75].forEach(function (x) { for (var z = -120; z < 120; z += 10) seg(x, z, z + 4); });
+    [-5.25, 5.25].forEach(function (x) { seg(x, -120, 120); });
+  })();
+
+  var DIM = { car: [1.85, 4.6], truck: [2.3, 7.0], bus: [2.5, 11.0], moto: [0.7, 1.9] };   // 寬、長（m）
+  function makeCar(color, ego, type) {
+    var d = DIM[type] || DIM.car, two = type === 'moto';
+    var g = new THREE.Group(), paint = new THREE.MeshStandardMaterial({ color: color, metalness: 0.3, roughness: 0.45 });
+    var b = new THREE.Mesh(new THREE.BoxGeometry(d[0], two ? 0.9 : 0.55, d[1]), paint); b.position.y = 0.55; g.add(b);
+    if (!two) {
+      var c = new THREE.Mesh(new THREE.BoxGeometry(d[0] - 0.25, 0.5, Math.min(2.2, d[1] * 0.48)), new THREE.MeshStandardMaterial({ color: 0x0c161d, roughness: 0.1 }));
+      c.position.set(0, 1.08, 0.15); g.add(c);
+    }
+    if (ego) { paint.emissive = new THREE.Color(0x38e1ff); paint.emissiveIntensity = 0.12; }
+    return g;
+  }
+  var ego = makeCar(0xeaf7ff, true);
+  scene.add(ego);
+
+  var others = {};
+  function syncObjs(objs) {
+    var seen = {};
+    for (var i = 0; i < objs.length; i++) {
+      var o = objs[i], m = others[o.id];
+      if (!m) {
+        m = makeCar(o.t === 'moto' ? 0xd9822b : 0x1f7fae, false, o.t);
+        var el = document.createElement('div');
+        el.className = 'car-tag';
+        el.textContent = '#' + o.id;
+        var lab = new THREE.CSS2DObject(el);
+        lab.position.set(0, 2.2, 0);
+        m.add(lab);
+        m.userData.lab = lab;
+        others[o.id] = m;
+        scene.add(m);
+      }
+      m.position.set(o.x, 0, -o.z);
+      seen[o.id] = true;
+    }
+    for (var id in others) {
+      if (seen[id]) continue;
+      var el2 = others[id].userData.lab.element;   // CSS2D 標籤不會跟著父物件離場，要自己拿掉
+      if (el2.parentNode) el2.parentNode.removeChild(el2);
+      scene.remove(others[id]);
+      delete others[id];
+    }
+  }
+
+  AVM_LCA.init(scene, THREE, app);
+
+  // ---------- 與 LaneChangeAssist.lanePath 相同的五次多項式 ----------
+  function lanePath(targetX, phi, len) {
+    var sn = Math.sin(phi), cs = Math.cos(phi), dT = targetX * cs, m0 = -Math.tan(phi), delta = dT - m0 * len;
+    var n = Math.ceil(len - 1e-6), out = [];
+    for (var i = 0; i <= n; i++) {
+      var s = Math.min(i, len), u = s / len, u3 = u * u * u;
+      var h = u3 * (10 - 15 * u + 6 * u * u), g = u3 * (-4 + 7 * u - 3 * u * u), d = m0 * s + delta * h - m0 * len * g;
+      out.push([+(s * sn + d * cs).toFixed(2), +(s * cs - d * sn).toFixed(2)]);
+    }
+    return out;
+  }
+  var EGO_HL = 2.42, Z_MIN = -12.42, Z_MAX = 1;
+  function zones(cx) { return { L: [cx - 5.25, Z_MIN, cx - 1.75, Z_MAX], R: [cx + 1.75, Z_MIN, cx + 5.25, Z_MAX] }; }
+  function blink(t, a, b) { return t >= a && t <= b && (t * 1000) % 800 < 400; }
+
+  var EGO_HW = 0.925;
+  function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+  /**
+   * 一台車 → 在哪一側、是否在盲點、後方來車 TTC（LaneChangeAssist 的簡化版）：車道線決定的內緣夾在
+   * 自車側面外 0.55–0.85 m；機車另有「鑽車縫」帶（自車側面外 0.2 m 到車道線，只看並排到後保桿後 3 m）。
+   */
+  function assess(o, laneL, laneR) {
+    var two = o.t === 'moto', hl = (DIM[o.t] || DIM.car)[1] / 2;
+    var front = o.z + hl, rear = o.z - hl;
+    for (var s = 0; s < 2; s++) {
+      var sx = s === 0 ? -o.x : o.x, own = Math.max(0, s === 0 ? -laneL : laneR);
+      var innerCar = clamp(own - 0.3, EGO_HW + 0.55, EGO_HW + 0.85), innerTwo = EGO_HW + 0.2;
+      var outer = Math.max(own, EGO_HW) + 3.5 + 0.6;
+      var innerAdj = two ? Math.max(innerTwo, Math.min(own - 0.3, innerCar)) : innerCar;
+      var band = sx > outer ? 0 : sx >= innerAdj ? 1 : (two && sx >= innerTwo) ? 2 : 0;
+      if (!band) continue;
+      var back = band === 1 ? Z_MIN : -EGO_HL - 3;
+      var inZone = front >= back && rear <= Z_MAX, range = -EGO_HL - front, ttc = null;
+      if (range > 0 && o.vz > 1 && range / o.vz < 3.5) ttc = range / o.vz;
+      return { side: s === 0 ? 'L' : 'R', zone: inZone, ttc: ttc, squeeze: band === 2 };
+    }
+    return null;
+  }
+
+  /** 沿換道路徑往前推 3 s：會不會碰到目標車道上的車（同 LaneChangeAssist.pathConflict）。 */
+  function pathConflict(objs, side, target, len, ego) {
+    var v = Math.max(ego, 3), tTot = len / v, sg = side === 'L' ? -1 : 1;
+    for (var i = 0; i < objs.length; i++) {
+      var o = objs[i], d0 = DIM[o.t] || DIM.car, sx = sg * o.x;
+      if (sx < (o.t === 'moto' ? EGO_HW + 0.2 : EGO_HW + 0.55)) continue;
+      var gapX = EGO_HW + d0[0] / 2 + 0.3, gapZ = EGO_HL + d0[1] / 2 + 1.5 + 0.3 * Math.abs(o.vz || 0);
+      for (var t = 0; t <= 3.0001; t += 0.25) {
+        var u = Math.min(1, t / tTot), d = target * u * u * u * (10 - 15 * u + 6 * u * u);
+        if (Math.abs(o.x - d) < gapX && Math.abs(o.z + (o.vz || 0) * t) < gapZ) return true;
+      }
+    }
+    return false;
+  }
+
+  // ---------- 情境（每個 t 秒循環） ----------
+  var SC = {
+    approach: { name: '左後來車', dur: 9, run: function (t) {
+      var o = { id: 7, t: 'car', x: -3.5, z: -20 + 6 * t, vz: 6 };
+      return { ego: 16.7, objs: [o], turn: null, drift: 0 };
+    } },
+    blindTurn: { name: '盲點有車＋打左燈', dur: 9, run: function (t) {
+      return { ego: 16.7, objs: [{ id: 3, t: 'car', x: -3.5, z: -4 + Math.sin(t * 0.7) * 0.6, vz: 0 }], turn: blink(t, 2, 7) ? 'L' : null, drift: 0 };
+    } },
+    turnClear: { name: '打右燈 無來車', dur: 8, run: function (t) {
+      return { ego: 16.7, objs: [{ id: 5, t: 'car', x: -3.5, z: 14, vz: 0 }], turn: blink(t, 1, 6.5) ? 'R' : null, drift: 0 };
+    } },
+    drift: { name: '未打燈右偏＋盲點有車', dur: 9, run: function (t) {
+      var v = t > 2 && t < 5 ? 0.4 : 0;   // 自車往右 0.4 m/s → 車道線往左移
+      return { ego: 16.7, objs: [{ id: 9, t: 'truck', x: 3.6, z: -6, vz: 0.2 }], turn: null, drift: v,
+        lx: -0.4 * Math.max(0, Math.min(t, 5) - 2), driftOn: t > 2.6 && t < 5.6 };
+    } },
+    highway: { name: '高速換道 108km/h', dur: 8, run: function (t) {
+      return { ego: 30, objs: [{ id: 11, t: 'car', x: 3.5, z: -26 + 2 * t, vz: 2 }], turn: blink(t, 0.5, 7) ? 'L' : null, drift: 0 };
+    } },
+    stale: { name: '資料中斷（1.2 s 後收起）', dur: 8, run: function (t) {
+      return { ego: 16.7, objs: [{ id: 3, t: 'car', x: -3.5, z: -4, vz: 0 }], turn: 'L', drift: 0, stop: t > 3 };
+    } },
+    squeeze: { name: '機車鑽車縫', dur: 8, run: function (t) {
+      // 自車靠右（左線在 −2.45）、20 km/h；機車從後方鑽進自車與左線之間，+5 m/s；第 1.5 s 起打左燈
+      return { ego: 5.6, objs: [{ id: 21, t: 'moto', x: -1.7, z: -15 + 5 * t, vz: 5 },
+        { id: 22, t: 'car', x: -4.3, z: -6, vz: 0 }], turn: blink(t, 1.5, 7.6) ? 'L' : null, drift: 0, lx: -0.7 };
+    } },
+    frontBlock: { name: '目標車道前方並行車', dur: 8, run: function (t) {
+      // 左車道的車在前車門以前（盲點區外）同速並行：盲點不亮，但打左燈時路徑不可行
+      return { ego: 16.7, objs: [{ id: 31, t: 'car', x: -3.5, z: 4.6 + 0.4 * Math.sin(t), vz: 0 }],
+        turn: blink(t, 1, 7) ? 'L' : null, drift: 0 };
+    } },
+    none: { name: '沒有 lca 欄位', dur: 6, run: function (t) {
+      return { ego: 16.7, objs: [{ id: 2, t: 'car', x: -3.5, z: -5 + t, vz: 1 }], turn: null, drift: 0, noLca: true };
+    } }
+  };
+
+  var scName = (location.hash || '').replace('#', '');
+  if (!SC[scName]) scName = 'approach';
+  var t0 = performance.now(), lastP = null, laneX = 0, hold = { t: -1e9, side: null };
+  var bar = document.getElementById('scn');
+  Object.keys(SC).forEach(function (k) {
+    var b = document.createElement('button');
+    b.textContent = SC[k].name;
+    b.setAttribute('data-k', k);
+    b.setAttribute('aria-pressed', String(k === scName));
+    bar.appendChild(b);
+  });
+  function pick(k) {
+    if (!SC[k]) return;
+    scName = k;
+    t0 = performance.now(); laneX = 0; hold = { t: -1e9, side: null }; lastP = null;
+    var bs = bar.querySelectorAll('button');
+    for (var i = 0; i < bs.length; i++) bs[i].setAttribute('aria-pressed', String(bs[i].getAttribute('data-k') === k));
+  }
+  bar.addEventListener('click', function (e) {
+    var b = e.target.closest('button[data-k]');
+    if (!b) return;
+    history.replaceState(null, '', '#' + b.getAttribute('data-k'));
+    pick(b.getAttribute('data-k'));
+  });
+  window.addEventListener('hashchange', function () { pick((location.hash || '').replace('#', '')); });
+
+  var info = document.getElementById('info');
+  var FREEZE = /[?&]t=([0-9.]+)/.exec(location.search);   // lca-demo.html?t=3.2#blindTurn：停在第 3.2 s（截圖用）
+  function tick() {
+    var sc = SC[scName], now = performance.now(), t = FREEZE ? +FREEZE[1] : ((now - t0) / 1000) % sc.dur;
+    var f = sc.run(t);
+    if (f.stop && lastP) return;   // 不再送新 payload：lca3d.js 應在 1.2 s 後收起
+    laneX = f.lx || 0;
+    lanes.position.x = laneX;
+    var laneL = laneX - 1.75, laneR = laneX + 1.75, L = 0, R = 0, threat = null, sqL = false, sqR = false;
+    if (f.turn) hold = { t: now, side: f.turn };
+    var turn = now - hold.t < 1200 ? hold.side : null;
+    var intent = turn || (f.driftOn ? 'R' : null);
+    for (var i = 0; i < f.objs.length; i++) {
+      var a = assess(f.objs[i], laneL, laneR);
+      if (!a) continue;
+      var lv = a.zone || a.ttc !== null ? 1 : 0;
+      if (lv && (intent === a.side || (a.ttc !== null && a.ttc < 2 && f.objs[i].vz >= 2))) lv = 2;
+      if (a.side === 'L') L = Math.max(L, lv); else R = Math.max(R, lv);
+      if (lv && a.squeeze) { if (a.side === 'L') sqL = true; else sqR = true; }
+      if (a.ttc !== null && (!threat || a.ttc < threat.ttc)) threat = { id: f.objs[i].id, ttc: +a.ttc.toFixed(2) };
+    }
+    var path = null, conflict = false;
+    if (intent) {
+      var phi = f.drift ? -Math.asin(f.drift / f.ego) : 0, len = Math.max(15, f.ego * 4), target = intent === 'L' ? laneX - 3.5 : laneX + 3.5;
+      path = lanePath(target, phi, len);
+      conflict = pathConflict(f.objs, intent, target, len, f.ego);
+    }
+    var zs = zones(laneX);
+    if (sqL) zs.L[2] = Math.max(zs.L[2], -(EGO_HW + 0.2));   // 鑽車縫：盲點區往內延伸到自車側面
+    if (sqR) zs.R[0] = Math.min(zs.R[0], EGO_HW + 0.2);
+    var lca = { L: L, R: R, intent: intent, path: path,
+      pathOk: !conflict && !(intent === 'L' ? L === 2 : intent === 'R' ? R === 2 : false), threat: threat, zones: zs };
+    lastP = { objs: f.objs, lca: f.noLca ? undefined : lca };
+    syncObjs(f.objs);
+    info.textContent = f.noLca ? '（payload 沒有 lca）' :
+      'L ' + L + ' · R ' + R + ' · 意圖 ' + (intent || '—') + ' · 路徑 ' + (path ? (lca.pathOk ? '可行' : '不可行') : '—') +
+      ' · 威脅 ' + (threat ? '#' + threat.id + ' TTC ' + threat.ttc.toFixed(1) + ' s' : '—');
+  }
+  setInterval(tick, 100);
+  tick();
+
+  // ---------- 視角 ----------
+  var VIEWS = { chase: [[0, 7.5, 11], [0, 0, -2]], top: [[0, 26, 0.01], [0, 0, 0]], far: [[-9, 30, 22], [0, 0, -10]] };
+  function setView(v) {
+    var p = VIEWS[v];
+    camera.position.set(p[0][0], p[0][1], p[0][2]);
+    controls.target.set(p[1][0], p[1][1], p[1][2]);
+    controls.update();
+    var bs = document.querySelectorAll('#views button');
+    for (var i = 0; i < bs.length; i++) bs[i].setAttribute('aria-pressed', String(bs[i].getAttribute('data-view') === v));
+  }
+  document.getElementById('views').addEventListener('click', function (e) {
+    var b = e.target.closest('button[data-view]');
+    if (b) setView(b.getAttribute('data-view'));
+  });
+  setView('chase');
+
+  function resize() {
+    var w = app.clientWidth, h = app.clientHeight;
+    renderer.setSize(w, h);
+    labels.setSize(w, h);
+    camera.aspect = w / h;
+    camera.updateProjectionMatrix();
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  function loop() {
+    requestAnimationFrame(loop);
+    var now = performance.now();
+    AVM_LCA.update(lastP && lastP.lca, lastP && lastP.objs, now);
+    controls.update();
+    renderer.render(scene, camera);
+    labels.render(scene, camera);
+  }
+  requestAnimationFrame(loop);
+  window.__lcaDemo = { scene: scene, renderer: renderer, camera: camera, setView: setView };
+})();
+</script>
+</body>
+</html>
