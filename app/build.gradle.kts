@@ -85,4 +85,8 @@ dependencies {
     // UVC 直讀（免 root，內含預編 native lib）。若 mavenCentral 解析失敗，
     // 改用 jitpack 座標：com.github.herohan:UVCAndroid:<tag>
     implementation("com.herohan:UVCAndroid:1.0.4")
+
+    // 純 Kotlin 演算法（幾何、道路、三角錐、紅綠燈）的 JVM 單元測試
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")   // android.jar 的 org.json 在 JVM 測試裡是空殼
 }
