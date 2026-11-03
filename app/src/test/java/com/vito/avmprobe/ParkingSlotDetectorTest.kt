@@ -15,6 +15,8 @@ import kotlin.math.min
  * ParkingSlotDetector 與 tools/parking_proto.py 的一致性、合成真值的精度、負樣本、輸出慣例、耗時。
  * fixture（app/src/test/resources/parking 下的 PNG + JSON）由 `parking_proto.py fixtures` 產生：
  * json 內有輸入參數（mpp、cx、cy、排除區、車輛框）、真值 gt 與原型輸出 proto。
+ * adv_* 是對抗場景（機車格 T 字 / 框、停止線 + 車道線、機車停等區、植草磚、陰影亮縫、網狀線、地下室柱子、
+ * 車頭斜對走道、接縫 + 校正誤差、重度模糊、輪擋、雙線、停歪的車），多數是舊版會誤報或類型錯的情況。
  */
 class ParkingSlotDetectorTest {
 
@@ -26,12 +28,19 @@ class ParkingSlotDetectorTest {
     )
 
     companion object {
-        private val SYNTH = listOf(
+        /** 對抗場景（parking_proto.py adv）：負樣本 = 舊版會誤報的機車格 T 字 / 框、停等區、植草磚、陰影亮縫。 */
+        private val ADV_NEG = listOf("adv_scoot2_t", "adv_scoot2_box", "adv_curb", "adv_pavers", "adv_pavers_part", "adv_shadow")
+        private val ADV_POS = listOf(
+            "adv_xwalk", "adv_hatch", "adv_text", "adv_garage", "adv_rot", "adv_seam", "adv_blur", "adv_stopper",
+            "adv_double", "adv_occl"
+        )
+        private val BASE = listOf(
             "aisle_box_t", "aisle_sep", "aisle_u", "egoperp", "parallel", "egopar", "angled", "ahead",
             "road", "scooter", "v256_egoperp_own", "v256_egoperp_stock"
         )
+        private val SYNTH = BASE + ADV_NEG + ADV_POS
         private val REAL = listOf("real8", "real13", "real13_painted")
-        private val NEGATIVE = listOf("road", "scooter", "real8", "real13")
+        private val NEGATIVE = listOf("road", "scooter", "real8", "real13") + ADV_NEG
 
         /**
          * 每個 fixture 至少要正確找到幾格（真值入口兩角 ≤ 0.25 m、類型正確）。aisle_box_t 有兩格的分隔線被停著的車蓋住，
@@ -39,7 +48,10 @@ class ParkingSlotDetectorTest {
          */
         private val MIN_TP = mapOf(
             "aisle_box_t" to 7, "aisle_sep" to 7, "aisle_u" to 6, "egoperp" to 2, "parallel" to 1,
-            "angled" to 3, "ahead" to 3, "v256_egoperp_stock" to 2, "real13_painted" to 3
+            "angled" to 3, "ahead" to 3, "v256_egoperp_stock" to 2, "real13_painted" to 3,
+            // 對抗場景；adv_double 的真值角點在雙線中間，偵測取內側兩條線（寬 2.04 m 對 2.43 m，角點差 0.20–0.27 m），不計入
+            "adv_xwalk" to 1, "adv_hatch" to 4, "adv_text" to 4, "adv_garage" to 1, "adv_rot" to 3, "adv_seam" to 4,
+            "adv_blur" to 4, "adv_stopper" to 5, "adv_occl" to 4
         )
 
         private val cache = HashMap<String, Fix>()
@@ -256,6 +268,49 @@ class ParkingSlotDetectorTest {
         }
     }
 
+    /** 對到真值的偵測，類型都要對（柱子擋住入口角的地下室、車頭斜對走道時不能變成斜角格）。 */
+    @Test
+    fun matchedSlotsHaveRightKind() {
+        var n = 0
+        for (name in SYNTH + listOf("real13_painted")) {
+            val f = load(name)
+            for (s in run(f)) {
+                val g = f.gt.firstOrNull { same(d(s), it.p) } ?: continue
+                assertEquals("$name: ${s.p.joinToString()} 類型", g.kind, s.kind)
+                n++
+            }
+        }
+        assertTrue(n >= 60)
+    }
+
+    /**
+     * 只有自車（含原點的排除區）算佔用物：倒車時原廠導引線那種整塊排除區蓋到格子，格子仍是空的；
+     * 同一塊換成車輛框才是 occupied。
+     */
+    @Test
+    fun excludeRectIsNotOccupant() {
+        val f = load("ahead")
+        val base = run(f)
+        val free = base.filter { !it.occupied }
+        assertTrue(free.isNotEmpty())
+        for (s in free) {
+            val p = d(s)
+            val xs = doubleArrayOf(p[0], p[2], p[4], p[6]); val zs = doubleArrayOf(p[1], p[3], p[5], p[7])
+            // 格內（離四邊 ≥ 0.5 m）的一塊：不蓋到標線，面積 > 30 %
+            val r = floatArrayOf((xs.min() + 0.5).toFloat(), (zs.min() + 0.6).toFloat(), (xs.max() - 0.5).toFloat(), (zs.max() - 0.6).toFloat())
+            val ex = ParkingSlotDetector().detect(f.argb, f.w, f.h, f.mpp, f.cx, f.cy, f.exclude + listOf(r), f.vehicles)
+            val m1 = ex.firstOrNull { same(d(it), p) } ?: error("加了排除區後找不到 ${p.joinToString()}")
+            assertTrue("排除區（非自車）不應讓格子變成 occupied", !m1.occupied)
+            val ve = ParkingSlotDetector().detect(f.argb, f.w, f.h, f.mpp, f.cx, f.cy, f.exclude, f.vehicles + listOf(r))
+            val m2 = ve.firstOrNull { same(d(it), p) } ?: error("加了車輛框後找不到 ${p.joinToString()}")
+            assertTrue("車輛框蓋 > 30 % 應為 occupied", m2.occupied)
+        }
+        // 自車在格內（自車排除區含原點）→ occupied
+        val eg = load("egoperp")
+        val around = run(eg).filter { s -> val c = centroid(d(s)); abs(c[0]) < 1.0 && abs(c[1]) < 1.0 }
+        assertTrue(around.isNotEmpty() && around.all { it.occupied })
+    }
+
     @Test
     fun reusesBuffersAcrossSizes() {
         val det = ParkingSlotDetector()
@@ -300,5 +355,23 @@ class ParkingSlotDetectorTest {
             "格子假設 ${"%.2f".format(prof[2] / 50e6)}，驗證 ${"%.2f".format(prof[3] / 50e6)}，其餘 ${"%.2f".format(prof[4] / 50e6)}")
         println("parking detect 300x350 暖機後中位數：停車場 ${"%.2f".format(ts[25])} ms（p90 ${"%.2f".format(ts[45])}），道路 ${"%.2f".format(tn[25])} ms")
         assertTrue("太慢：${ts[25]} ms", ts[25] < 40.0)
+        // 最壞情況：每個 fixture 暖機後 15 次的中位數，取最大（整片紋理、斑馬線、雜線多的場景）
+        var worst = 0.0
+        var worstName = ""
+        for (name in SYNTH + REAL) {
+            val g = load(name)
+            if (g.w != 300) continue
+            repeat(5) { run(g, det) }
+            val tw = DoubleArray(15)
+            for (k in tw.indices) {
+                val t0 = System.nanoTime()
+                run(g, det)
+                tw[k] = (System.nanoTime() - t0) / 1e6
+            }
+            tw.sort()
+            if (tw[7] > worst) { worst = tw[7]; worstName = name }
+        }
+        println("parking detect 300x350 最慢的 fixture：$worstName ${"%.2f".format(worst)} ms")
+        assertTrue("最壞情況太慢：$worstName $worst ms", worst < 80.0)
     }
 }

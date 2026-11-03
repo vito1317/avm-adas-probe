@@ -4,8 +4,14 @@
 用法（/opt/homebrew/bin/python3，需要 numpy / scipy / Pillow）：
   parking_proto.py stats [N] [300|256] [-v]   合成資料評估（每種場景 N 張），印出各類型 P/R 與角點誤差
   parking_proto.py preview [N] [300|256]      存合成場景 + 偵測結果疊圖到 scratch 目錄
+  parking_proto.py adv [N] [300|256] [類型,...] [-v] [-p]
+                                              對抗場景評估（重度模糊、15 % 接縫 + 校正誤差、停歪的車 / 漏框、行人穿越道、
+                                              雙線、路緣紅黃線 + 停止線 + 機車停等區、車頭轉 0–90°、空地陰影、機車格變體、
+                                              輪擋、格內文字、網狀線 / 斜紋、地下室柱子、植草磚）；-p 存疊圖
   parking_proto.py real                       車機螢幕翻拍照（8、13）校正成俯視圖後跑偵測，存疊圖
   parking_proto.py fixtures                   產生 Kotlin 單元測試用的 PNG + 期望 JSON（app/src/test/resources/parking/）
+  parking_proto.py dump N 300|256 目錄        合成 + 對抗場景與原型輸出寫成 PNG + JSON（Kotlin 大量一致性比對用）
+  parking_proto.py parity 目錄                比對目錄裡 Kotlin 輸出（*.kt.json）與原型
 調參：環境變數 PP_SET="RIDGE_T=10,MIN_VOTES_M=0.3" 可暫時覆寫參數。
 
 座標：車身座標 x 右、z 前（公尺），BEV 影像第 0 列 = 前方、第 0 行 = 左方，
@@ -22,18 +28,25 @@
  3. 停車格假設：一對平行線（間距 1.8–3.5 m）= 長邊對；與之相交（≥ 25°）的線 = 橫邊（入口線、底線、
     平行格的分隔線），或兩條線同時真的結束的「開口端」。沿長邊對依序排列橫邊，相鄰兩個橫邊圍成一格；
     只看到入口側（T/L 標記、另一端出畫面）的格子用標準深度 5.5 m（平行格 6 m）補遠端。
- 4. 驗證：長邊與四角的遮罩支持度；格內不得有平行或橫過的線（機車格、兩格併成一格）；格內雜線比例
-    不得太高（草叢、樹影）；單側格長邊 > 7 m 視為車道線；只有分隔線的格子要成排或明顯斜於車身。
+    橫邊與長邊的線寬（漆通道剖面半高寬，每條線每 0.25 m 取樣一次）差 1.6 倍以上且寬的那邊 ≥ 0.24 m
+    → 停止線、機車停等區、斑馬線，不當格子的邊。單側斜角格兩條分隔線都要伸進格內 ≥ 1 m。
+ 4. 驗證：長邊與四角的遮罩支持度；格內不得有平行或橫過的線（機車格、兩格併成一格），格內平行線看得到
+    ≥ 1.2 m 也算（斜紋禁停區）；從真的橫邊伸進格內的細短線頭（機車格 T 字，左右 0.2 m 沒有）→ 不是汽車格；
+    格內雜線比例不得太高（草叢、樹影），格子外圍 1 m 一圈也不得太高（植草磚、連鎖磚）；
+    單側格長邊 > 7 m 視為車道線；只有分隔線的格子要成排或明顯斜於車身，鄰格入口方向要一致（柱子擋住
+    分隔線頭會湊出鋸齒狀的斜格）。整張圖地面 ≥ 20 % 是標線遮罩（整片紋理）直接結束。
     車輛框內：命中照算、沒命中當作被車擋住（未知）。
  5. 類型：垂直 / 平行由「與鄰格共用長邊（垂直）或短邊（平行）」、面向自車的邊、尺寸投票；
     斜角格由橫邊與長邊夾角（25–75°）判定。入口 = 面向自車的那一邊（在自車左右 → 較平行車身的邊，
     在車頭 / 車尾 → 較垂直車身的邊）；和自車並排的垂直格取車頭那端（多半倒車入庫）。
- 6. 與車輛框（或車身大小的排除區，例如自車）重疊 > 30 % 面積 → occupied；多邊形 IoU > 0.3 做 NMS。
+ 6. 與車輛框或自車（含原點的排除區；導引線等其他排除區不算）重疊 > 30 % 面積 → occupied；多邊形 IoU > 0.3 做 NMS。
 
 合成評估（stats 40，每種場景 40 張；300x350 @ 0.04 m/px 自家拼接 BEV：接縫、遠處模糊、黑角、磨損、陰影、
 停著的車、車道線 / 斑馬線 / 停止線 / 機車格干擾）：
-  垂直 P 0.99 R 0.73、平行 P 1.00 R 0.70、斜角 P 1.00 R 0.75；入口角點誤差中位數約 0.01 m、≤ 0.25 m 約 97 %。
-  256 寬 @ 0.03 m/px（視野只有 ±3.8 m，旁邊的格子多半只露出一角）：垂直 P 0.98 R 0.62、平行 P 1.00 R 0.57。
+  垂直 P 1.00 R 0.72、平行 P 1.00 R 0.70、斜角 P 1.00 R 0.71；入口角點誤差中位數約 0.01 m、≤ 0.25 m 約 97 %。
+  256 寬 @ 0.03 m/px（視野只有 ±3.8 m，旁邊的格子多半只露出一角）：垂直 P 0.97 R 0.62、平行 P 1.00 R 0.57。
+對抗場景（adv 30，14 種 × 30 張，300x350）：誤報 2 格（行人穿越道斑馬紋剛好和平行格長邊共線、機車停等區寬度
+  剛好等於標準深度），召回 0.56（被停歪的車整個蓋住、地下室柱子擋住分隔線頭、重度模糊的格子找不到）。
 """
 import json
 import math
@@ -80,6 +93,15 @@ CORRIDOR = 1.2          # 自車左右 ±此寬度內算「車頭 / 車尾方向
 OCC_FRAC = 0.30
 NMS_IOU = 0.30
 MAX_SLOTS = 16
+WIDE_MIN = 0.24         # 橫邊與長邊半高寬差 WIDE_RATIO 倍以上、寬的那邊 ≥ 此值 → 停止線 / 停等區 / 斑馬線，不當格子的邊
+WIDE_RATIO = 1.6
+WSTEP = 0.25            # 線寬取樣間距（每條線算一次，之後查表）
+STUB_IN = 0.45          # 格內短分隔線頭（機車格 T 字）探針長度：從橫邊外約 0.1 m 起往格內這麼長
+INNER_PAR = 1.2         # 格內平行線看得到的長度 ≥ 此值 → 格內有線（斜紋禁停區、兩格併一格）
+SEP_MIN_A = 1.0         # 單側斜角格：兩條分隔線從橫邊伸進格內至少這麼長
+RING = 1.0              # 格子外圍一圈的寬度（雜線比例用）
+RING_MAX = 0.25
+TEXTURE_MAX = 0.2       # 整張圖看得到的地面中標線遮罩比例上限（一般停車場 ≤ 0.13）
 
 # 調參用：PP_SET="RIDGE_T=10,MIN_VOTES_M=0.3"
 for _kv in filter(None, os.environ.get('PP_SET', '').split(',')):
@@ -91,6 +113,7 @@ COS_OBLIQUE = math.cos(math.radians(20.0))
 OPEN_WMAX = 2.75        # 只有分隔線（沒有入口 / 底線）的格子：寬度上限（車道寬多半 ≥ 2.8 m）
 COS_CROSS = math.cos(math.radians(CROSS_MIN_DEG))
 SIN_PERP = math.sin(math.radians(PERP_TOL_DEG))
+SIN_12 = math.sin(math.radians(12.0))
 NEG = -(1 << 28)
 
 
@@ -168,6 +191,7 @@ class Detector:
         yb = np.minimum(R, G) - B
         boost = np.where((yb > 40) & (R >= 90) & (G >= 70), (yb - 40) >> 1, 0)
         P = np.where(valid, Y + boost, 0).astype(np.int32)
+        self.P = P
         vcnt = np.zeros((h, w), np.int32)
         S = np.zeros((h, w), np.int32)
         for dj in (-1, 0, 1):
@@ -475,6 +499,102 @@ class Detector:
             return None
         return hit / vis
 
+    # ------------------------------------------------------------ 線寬（停止線、斑馬線邊線比停車格線寬很多）
+    def _width_at(self, x0, z0, nx, nz):
+        """(x0, z0) 沿法線 (nx, nz) 的漆通道剖面半高寬（m）；看不到、對比太低回傳 None。步長 mpp/2，±0.45 m。"""
+        h = 0.5 * self.mpp
+        K = int(math.ceil(0.45 / h))
+        ko = int(math.ceil(0.3 / h))
+        kc = int(0.12 / h)
+        st, P = self.state, self.P
+        prof = []
+        for k in range(-K, K + 1):
+            o = k * h
+            i = math.floor((x0 + o * nx) / self.mpp + self.cx)
+            j = math.floor(self.cy - (z0 + o * nz) / self.mpp)
+            if i < 0 or i >= self.w or j < 0 or j >= self.h or st[j, i] != 1:
+                return None
+            prof.append(int(P[j, i]))
+        c = K
+        pk = c - kc
+        for k in range(c - kc, c + kc + 1):
+            if prof[k] > prof[pk]:
+                pk = k
+        left = sorted(prof[:K - ko + 1])
+        right = sorted(prof[K + ko:])
+        bg = max(left[len(left) // 2], right[len(right) // 2])
+        if prof[pk] - bg < 20:
+            return None
+        thr2 = prof[pk] + bg          # 半高門檻 ×2（整數比較）
+        a = pk
+        while a > 0 and 2 * prof[a - 1] >= thr2:
+            a -= 1
+        b = pk
+        while b < 2 * K and 2 * prof[b + 1] >= thr2:
+            b += 1
+        return (b - a + 1) * h
+
+    def _width_samples(self, X):
+        """線 X 沿各線段每 WSTEP 一點（只取遮罩上的點；離段端 < 0.3 m 的不取，交會處量到的是別條線）的
+        (參數, 半高寬)，每條線算一次。"""
+        key = id(X)
+        if key in self._wcache:
+            return self._wcache[key]
+        nx, nz = -X.uz, X.ux
+        ts, ws = [], []
+        for a, b in X.pieces:
+            q = 0
+            while True:
+                t = a + 0.3 + WSTEP * q
+                if t > b - 0.3:
+                    break
+                q += 1
+                x, z = X.cx + t * X.ux, X.cz + t * X.uz
+                i = math.floor(x / self.mpp + self.cx)
+                j = math.floor(self.cy - z / self.mpp)
+                if i < 0 or i >= self.w or j < 0 or j >= self.h or not self.D[j, i]:
+                    continue
+                v = self._width_at(x, z, nx, nz)
+                if v is not None:
+                    ts.append(t)
+                    ws.append(v)
+        self._wcache[key] = (ts, ws)
+        return ts, ws
+
+    def _width_med(self, X, lo, hi, gap=-1.0, t0=0.0, nmin=2):
+        """線 X 在參數 [lo, hi] 內（且 |t - t0| ≥ gap）的半高寬（下）中位數；不到 nmin 點回傳 None。"""
+        ts, ws = self._width_samples(X)
+        v = sorted(w for t, w in zip(ts, ws) if lo <= t <= hi and abs(t - t0) >= gap)
+        return v[(len(v) - 1) // 2] if len(v) >= nmin else None
+
+    def _wide_cross(self, A, B, Cl, PA, PB):
+        """橫邊與長邊的線寬差很多（停止線、機車停等區、斑馬線邊線 0.3 m 以上，停車格線 0.10–0.15 m）→ True。"""
+        def tpar(X, p):
+            return (p[0] - X.cx) * X.ux + (p[1] - X.cz) * X.uz
+        ta, tb = tpar(Cl, PA), tpar(Cl, PB)
+        if abs(tb - ta) < 0.9:
+            return False
+        # 橫邊寬度：兩條長邊之間的局部值與整條線的值取大（磨損的停止線局部可能只剩細細一條；被自車擋住時量不到）
+        wl = self._width_med(Cl, min(ta, tb) + 0.25, max(ta, tb) - 0.25)
+        wa = self._width_med(Cl, -1e9, 1e9, nmin=3)
+        if wl is None and wa is None:
+            return False
+        wc = max(-1.0 if wl is None else wl, -1.0 if wa is None else wa)
+        ws = -1.0
+        for X, P0 in ((A, PA), (B, PB)):           # 長邊：交點前後 0.3–1.5 m
+            t0 = tpar(X, P0)
+            v = self._width_med(X, t0 - 1.5, t0 + 1.5, 0.3, t0)
+            if v is not None:
+                ws = max(ws, v)
+        if ws < 0:
+            for X in (A, B):
+                v = self._width_med(X, -1e9, 1e9, nmin=3)
+                if v is not None:
+                    ws = max(ws, v)
+        if ws < 0:
+            return False
+        return (wc >= WIDE_MIN and wc >= WIDE_RATIO * ws) or (ws >= WIDE_MIN and ws >= WIDE_RATIO * wc)
+
     # ------------------------------------------------------------ 主流程
     def detect(self, rgb, mpp, cx, cy, exclude, vehicles):
         mpp, cx, cy = f32(mpp), f32(cx), f32(cy)
@@ -484,11 +604,19 @@ class Detector:
         self.vis, self.D = vis, D
         self.dbg = {'M': M, 'C': C}
         self.M = M
+        # 整片紋理（植草磚、連鎖磚）：看得到的地面 ≥ TEXTURE_MAX 是標線遮罩 → 格子外圍雜線幾乎一定過高，直接結束（省下最耗時的情況）
+        nvis = int((self.state == 1).sum())
+        if nvis >= 1000 and int(M[self.state == 1].sum()) >= TEXTURE_MAX * nvis:
+            self.lines = []
+            self.dbg['lines'] = []
+            self.dbg['cells'] = []
+            return []
         lines = self._lines(C, K, w, h, mpp, cx, cy)
         for L in lines:
             self._extend(L)
         self.lines = lines
         self.dbg['lines'] = lines
+        self._wcache = {}
         cells = []
         nl = len(lines)
         for a in range(nl):
@@ -514,7 +642,7 @@ class Detector:
         occ = [list(map(f32, r)) for r in vehicles]
         for r in exclude:
             r = list(map(f32, r))
-            if r[2] - r[0] >= 1.2 and r[3] - r[1] >= 1.2:
+            if r[0] <= 0.0 <= r[2] and r[1] <= 0.0 <= r[3]:      # 只有自車（含原點的排除區）算佔用物
                 occ.append(r)
         out = []
         for c in keep:
@@ -680,7 +808,8 @@ class Detector:
                 okinds = []
                 # 垂直 / 斜角格：橫邊是長邊對的終點（另一側沒有線），長邊不能太長（車道線）
                 term = not ((ga is not None and ga > 0.3) or (gb is not None and gb > 0.3))
-                if term and max(lA, lB) <= LANE_LEN and not (
+                # 斜角格兩條分隔線都要真的伸進格內（≥ SEP_MIN_A）：斜紋、網狀線、字的筆畫湊出的斜格常常只有一條
+                if term and max(lA, lB) <= LANE_LEN and (c['perp'] or min(lA, lB) >= SEP_MIN_A) and not (
                         1.4 <= max(lA, lB) <= 4.2 and self._real_end(A, F, eA, s) and self._real_end(B, F, eB, s)):
                     okinds.append('p' if c['perp'] else 'a')
                 # 平行格：長邊對是入口線與路緣側的線，往 s 側延伸到畫面外（另一個橫邊看不到）
@@ -731,6 +860,8 @@ class Detector:
         okA = (rAp is not None and rAp >= 0.4) or (rAm is not None and rAm >= 0.4) or (rAp is None and rAm is None)
         okB = (rBp is not None and rBp >= 0.4) or (rBm is not None and rBm >= 0.4) or (rBp is None and rBm is None)
         if not (okA and okB):
+            return None
+        if self._wide_cross(A, B, self.lines[ci], PA, PB):
             return None
         if cA is not None and cB is not None:
             km = (cA + cB) / 2.0
@@ -818,7 +949,7 @@ class Detector:
             if rA is None or rB is None or rA < 0.6 or rB < 0.6 or w > OPEN_WMAX:
                 return self._why('open2')
         # 格內不得有平行線 / 橫線
-        if self._interior(F, c['a'], c['b'], tA0, tA1, tB0, tB1):
+        if self._interior(F, c['a'], c['b'], tA0, tA1, tB0, tB1, c0, c1):
             return self._why('interior')
         if rA is not None and rB is not None:
             rsep = (rA + rB) / 2.0
@@ -835,7 +966,42 @@ class Detector:
             return self._why('score')
         if self._clutter([Ak, Bk, Bm, Am]) > CLUTTER_MAX:
             return self._why('clutter')
-        return {'cell': c, 'kinds': kinds, 'Ak': Ak, 'Bk': Bk, 'Am': Am, 'Bm': Bm, 'score': score, 'row': row}
+        ring = self._ring(Ak, Bk, Am)
+        if ring > RING_MAX:
+            return self._why('ring')
+        return {'cell': c, 'kinds': kinds, 'Ak': Ak, 'Bk': Bk, 'Am': Am, 'Bm': Bm, 'score': score, 'row': row,
+                'ringv': ring}
+
+    def _ring(self, o, pa, pb):
+        """格子外圍 RING 寬的一圈（以 o→pa、o→pb 張成的平行四邊形往外擴）看得到的像素中，標線遮罩 M 的比例。
+        植草磚、連鎖磚、斜紋區這類整片紋理會很高；停車場裡格子旁邊多半是空的地面。每 2 px 取樣。"""
+        ax, az = pa[0] - o[0], pa[1] - o[1]
+        bx, bz = pb[0] - o[0], pb[1] - o[1]
+        la, lb = math.hypot(ax, az), math.hypot(bx, bz)
+        if la < 1e-6 or lb < 1e-6:
+            return 0.0
+        ea, eb = RING / la, RING / lb
+        na = int(math.ceil((la + 2 * RING) / (2 * self.mpp)))
+        nb = int(math.ceil((lb + 2 * RING) / (2 * self.mpp)))
+        st, M = self.state, self.M
+        n = m = 0
+        for q in range(nb + 1):
+            fb = -eb + (1 + 2 * eb) * q / nb
+            inb = 0.0 <= fb <= 1.0
+            for k in range(na + 1):
+                fa = -ea + (1 + 2 * ea) * k / na
+                if inb and 0.0 <= fa <= 1.0:
+                    continue
+                x = o[0] + fa * ax + fb * bx
+                z = o[1] + fa * az + fb * bz
+                i = math.floor(x / self.mpp + self.cx)
+                j = math.floor(self.cy - z / self.mpp)
+                if i < 0 or i >= self.w or j < 0 or j >= self.h or st[j, i] != 1:
+                    continue
+                n += 1
+                if M[j, i]:
+                    m += 1
+        return m / n if n >= 30 else 0.0
 
     def _clutter(self, quad):
         """格內（往中心縮 15 %）看得到的像素中，標線遮罩 M 的比例；草叢、樹影拖曳的雜線會很高。每 2 px 取樣。"""
@@ -879,11 +1045,34 @@ class Detector:
     def _corner_hidden(self, cr):
         return cr['cA'] is None or cr['cB'] is None
 
-    def _interior(self, F, ia, ib, tA0, tA1, tB0, tB1):
+    def _interior(self, F, ia, ib, tA0, tA1, tB0, tB1, c0=None, c1=None):
         """格內有與長邊平行的線（機車格、兩格合成一格）或橫過的線 → True。車框內不算。"""
         A, B = self.lines[ia], self.lines[ib]
         sA = 1.0 if tA1 >= tA0 else -1.0
         sB = 1.0 if tB1 >= tB0 else -1.0
+        # 從真的橫邊伸進格內的短分隔線頭（機車格的 T 字、每 1 m 一格）→ 不是汽車格。
+        # 沿橫邊在寬度 20–80 % 處逐點往格內探 STUB_IN（直接看遮罩，短線頭常常抽不成 Hough 線）；
+        # 線頭是細的：該點命中、左右各 0.2 m 的探針都沒命中（橫向的東西會讓三支都命中）。
+        for cr, sg in ((c0, sA), (c1, -sA)):
+            if cr is None or cr['open']:
+                continue
+            ax, az = cr['PA']
+            bx, bz = cr['PB']
+            wd = math.hypot(bx - ax, bz - az)
+            sn = abs(F.ux * (bz - az) - F.uz * (bx - ax)) / max(wd, 1e-9)
+            e0 = 0.1 / max(sn, 0.5)
+            m = int(math.ceil(0.6 * wd / self.mpp))
+            dl = int(round(0.2 / (0.6 * wd / m)))
+            rs = []
+            for k in range(-dl, m + dl + 1):
+                f = 0.2 + 0.6 * k / m
+                px_, pz_ = ax + (bx - ax) * f, az + (bz - az) * f
+                hit, vis, n = self._seg(px_ + sg * e0 * F.ux, pz_ + sg * e0 * F.uz,
+                                        px_ + sg * (e0 + STUB_IN) * F.ux, pz_ + sg * (e0 + STUB_IN) * F.uz, True)
+                rs.append(hit / vis if vis >= 0.8 * n else -1.0)       # 被擋住 / 看不到 → 不判斷
+            for k in range(m + 1):
+                if rs[k + dl] >= 0.7 and 0.0 <= rs[k] < 0.4 and 0.0 <= rs[k + 2 * dl] < 0.4:
+                    return True
         a0 = F.on(A, tA0 + sA * 0.5)
         a1 = F.on(A, tA1 - sA * 0.5)
         b0 = F.on(B, tB0 + sB * 0.5)
@@ -920,8 +1109,9 @@ class Detector:
                     continue
                 p0 = F.on(X, lo)
                 p1 = F.on(X, hi)
-                r = self._ratio(p0[0], p0[1], p1[0], p1[1], True)
-                if r is not None and r >= 0.45:
+                # 命中比例高，或看得到的線夠長（斜紋禁停區的斜線、網狀線常常只有一段在格內）
+                hit, vis, n = self._seg(p0[0], p0[1], p1[0], p1[1], True)
+                if vis >= 3 and vis * self.mpp >= 0.25 and (hit / vis >= 0.45 or hit * (hi - lo) / n >= INNER_PAR):
                     return True
             elif abs(X.ux * ux + X.uz * uz) <= COS_CROSS:
                 PA = intersect(A, X)
@@ -945,11 +1135,20 @@ class Detector:
         return False
 
     def _row_ok(self, c, cands):
-        """只有分隔線的單側格：成排（與別格共用分隔線），或分隔線明顯斜於車頭方向且不寬（車道線多半與車身平行）。"""
-        if any(d is not c and self._long_neighbors(c['cell'], d['cell']) for d in cands):
+        """只有分隔線的單側格：成排（與別格共用分隔線），或分隔線明顯斜於車頭方向且不寬（車道線多半與車身平行）。
+        成排時鄰格的入口邊（開口端或入口線）方向要一致；不一致是被柱子 / 磨損截短的分隔線湊出的鋸齒，不算。"""
+        a = c['cell']['c0']
+        zig = False
+        for d in cands:
+            if d is c or not self._long_neighbors(c['cell'], d['cell']):
+                continue
+            b = d['cell']['c0']
+            if abs(a['vx'] * b['vz'] - a['vz'] * b['vx']) > SIN_12:
+                zig = True
+                continue
             return True
         F = c['cell']['F']
-        return abs(F.uz) < COS_CROSS
+        return not zig and abs(F.uz) < COS_CROSS
 
     def _span_on(self, cell, which):
         """格子在某條長邊上的區段，用該線自身參數表示（不同長邊對之間可比）。"""
@@ -1301,6 +1500,18 @@ class Scene:
         self.tags = []
         self.worn = rng.random() < 0.35
         self.lw, self.col = 0.12, (240, 240, 240)
+        # 對抗場景用的選項（預設值不消耗亂數，原有場景的影像不變）
+        self.occ_p = None     # 停車機率（None = 各版面原本的值）
+        self.crook = False    # 車停歪（橫移 ±0.45 m、轉 ±0.15 rad）
+        self.yolo_miss = 0.1  # 車輛框漏掉的機率
+        self.objs = []        # 沒有車輛框的立體物（行人、推車、柱子）：(corners, rgb, smear)
+        self.shade = []       # 額外陰影：f(X, Z) → 0..1 的遮光比例
+        self.base_rgb = None  # 指定地面顏色
+        self.dim = 1.0        # 整體亮度（地下室）
+        self.blur_mul = 1.0   # 遠處模糊倍數
+        self.base_blur = 0.0  # 全圖模糊（px）
+        self.seam_gain = 0.0  # 側鏡頭與前後鏡頭的亮度差（例如 0.15）
+        self.seam_shift = None  # 各鏡頭的校正誤差 [(dx, dz, 旋轉 rad)] * 4（前、後、左、右）
 
     def T(self, x, z):
         return _rot(x, z, self.c, self.s)
@@ -1321,6 +1532,10 @@ class Scene:
         rng = self.rng
         L = L or rng.uniform(4.3, 4.9)
         W = W or rng.uniform(1.72, 1.9)
+        if self.crook:
+            e = rng.uniform(-0.45, 0.45)
+            xc, zc = xc + e * math.cos(ang), zc - e * math.sin(ang)
+            ang += rng.uniform(-0.15, 0.15)
         ca, sa = math.cos(ang), math.sin(ang)
         pts = []
         for (a, b) in ((-W / 2, -L / 2), (W / 2, -L / 2), (W / 2, L / 2), (-W / 2, L / 2)):
@@ -1328,6 +1543,10 @@ class Scene:
         pal = [(228, 228, 226), (175, 177, 182), (32, 32, 36), (150, 28, 30), (40, 62, 120), (110, 110, 112)]
         rgb = pal[rng.integers(len(pal))]
         self.cars.append((pts, rgb, rng.uniform(0.3, 1.2)))
+
+
+def _occ(sc, p):
+    return p if sc.occ_p is None else sc.occ_p
 
 
 def _style_line(sc):
@@ -1362,7 +1581,7 @@ def lay_perp_aisle(sc, side):
             sc.line(xe, z, xb, z)
     for k in range(len(zs) - 1):
         sc.slot([(xe, zs[k]), (xe, zs[k + 1]), (xb, zs[k + 1]), (xb, zs[k])], 'p')
-        if rng.random() < 0.35:
+        if rng.random() < _occ(sc, 0.35):
             sc.car(xe + side * (dp / 2 + rng.uniform(-0.2, 0.4)), 0.5 * (zs[k] + zs[k + 1]) + rng.uniform(-0.15, 0.15),
                    math.pi / 2 + rng.uniform(-0.05, 0.05))
     sc.tags.append('aisle-' + st)
@@ -1389,7 +1608,7 @@ def lay_ego_perp(sc):
     for k in range(len(xs) - 1):
         sc.slot([(xs[k], ze), (xs[k + 1], ze), (xs[k + 1], zb), (xs[k], zb)], 'p')
         mid = 0.5 * (xs[k] + xs[k + 1])
-        if abs(mid - dl) > 0.1 and rng.random() < 0.4:
+        if abs(mid - dl) > 0.1 and rng.random() < _occ(sc, 0.4):
             sc.car(mid + rng.uniform(-0.15, 0.15), 0.5 * (ze + zb) + rng.uniform(-0.3, 0.3), rng.uniform(-0.05, 0.05))
     sc.tags.append('egoperp-' + st)
 
@@ -1433,7 +1652,7 @@ def lay_parallel(sc, side):
                 dx = side if x == xi else -side
                 sc.line(x, z0, x + dx * arm, z0)
         sc.slot([(xi, za), (xi, zb), (xo, zb), (xo, za)], 'l')
-        if rng.random() < 0.4:
+        if rng.random() < _occ(sc, 0.4):
             sc.car(0.5 * (xi + xo) + rng.uniform(-0.1, 0.1), 0.5 * (za + zb) + rng.uniform(-0.5, 0.5),
                    rng.uniform(-0.04, 0.04))
     sc.tags.append('parallel-' + st)
@@ -1452,7 +1671,7 @@ def lay_ego_parallel(sc):
     for (za, zb) in zs:
         sc.line(xi, za, xo, za)
         sc.slot([(xi, za), (xi, zb), (xo, zb), (xo, za)], 'l')
-        if abs(0.5 * (za + zb)) > 1 and rng.random() < 0.4:
+        if abs(0.5 * (za + zb)) > 1 and rng.random() < _occ(sc, 0.4):
             sc.car(dl + rng.uniform(-0.1, 0.1), 0.5 * (za + zb) + rng.uniform(-0.4, 0.4), rng.uniform(-0.04, 0.04))
     sc.line(xi, zs[-1][1], xo, zs[-1][1])
     _sidewalk(sc, xo + rng.uniform(0.1, 0.4), 1)
@@ -1480,7 +1699,7 @@ def lay_angled(sc, side):
     for k in range(len(zs) - 1):
         a, b = zs[k], zs[k + 1]
         sc.slot([(xe, a), (xe, b), (xe + dp * dx, b + dp * dz), (xe + dp * dx, a + dp * dz)], 'a')
-        if rng.random() < 0.3:
+        if rng.random() < _occ(sc, 0.3):
             m = 0.5 * (a + b)
             sc.car(xe + dx * dp * 0.55, m + dz * dp * 0.55, math.atan2(dx, dz))
     sc.tags.append('angled-' + st)
@@ -1509,7 +1728,7 @@ def lay_perp_ahead(sc):
             sc.line(x, ze, x, zb)
     for k in range(len(xs) - 1):
         sc.slot([(xs[k], ze), (xs[k + 1], ze), (xs[k + 1], zb), (xs[k], zb)], 'p')
-        if rng.random() < 0.3:
+        if rng.random() < _occ(sc, 0.3):
             sc.car(0.5 * (xs[k] + xs[k + 1]), ze + sg * (dp / 2 + 0.3), 0.0)
     sc.tags.append('ahead-' + st)
 
@@ -1604,6 +1823,594 @@ def make_scene(rng, kind, w=300, h=350, mpp=0.04, cx=150.0, cy=175.0, style='own
     return sc
 
 
+# ================================================================ 對抗場景（審查用，比原本的合成資料更刁難）
+ADV_KINDS = ['blur', 'seam', 'occl', 'xwalk', 'double', 'curb', 'rot', 'shadow', 'scoot2', 'stopper', 'text',
+             'hatch', 'garage', 'pavers']
+YEL = (225, 185, 50)
+
+
+def _clip_seg_rect(x0, z0, x1, z1, r):
+    """線段裁到矩形 r = (xmin, zmin, xmax, zmax) 內（Liang–Barsky）；完全在外回傳 None。"""
+    dx, dz = x1 - x0, z1 - z0
+    t0, t1 = 0.0, 1.0
+    for p, q in ((-dx, x0 - r[0]), (dx, r[2] - x0), (-dz, z0 - r[1]), (dz, r[3] - z0)):
+        if abs(p) < 1e-12:
+            if q < 0:
+                return None
+            continue
+        t = q / p
+        if p < 0:
+            t0 = max(t0, t)
+        else:
+            t1 = min(t1, t)
+    if t1 <= t0:
+        return None
+    return (x0 + t0 * dx, z0 + t0 * dz, x0 + t1 * dx, z0 + t1 * dz)
+
+
+def _hatch(sc, r, pitch, ang, lw, rgb, border=True, blw=None):
+    """矩形 r 內畫斜線（角度 ang，間距 pitch），border 時加外框。"""
+    ca, sa = math.cos(ang), math.sin(ang)
+    cxr, czr = 0.5 * (r[0] + r[2]), 0.5 * (r[1] + r[3])
+    R = math.hypot(r[2] - r[0], r[3] - r[1])
+    k = -R
+    while k <= R:
+        ox, oz = cxr - sa * k, czr + ca * k
+        s = _clip_seg_rect(ox - ca * R, oz - sa * R, ox + ca * R, oz + sa * R, r)
+        if s is not None:
+            sc.line(*s, lw=lw, rgb=rgb)
+        k += pitch
+    if border:
+        b = blw or lw
+        for (a, c, d, e) in ((r[0], r[1], r[2], r[1]), (r[2], r[1], r[2], r[3]), (r[2], r[3], r[0], r[3]),
+                             (r[0], r[3], r[0], r[1])):
+            sc.line(a, c, d, e, lw=b, rgb=rgb)
+
+
+_SEG7 = {'0': 'abcdef', '1': 'bc', '2': 'abged', '3': 'abgcd', '4': 'fgbc', '5': 'afgcd', '6': 'afgedc',
+         '7': 'abc', '8': 'abcdefg', '9': 'abcdfg'}
+_SEGP = {'a': (0, 1, .6, 1), 'b': (.6, 1, .6, .5), 'c': (.6, .5, .6, 0), 'd': (0, 0, .6, 0), 'e': (0, 0, 0, .5),
+         'f': (0, .5, 0, 1), 'g': (0, .5, .6, .5)}
+
+
+def _glyph(sc, x, z, size, ang, rgb=None, lw=0.1, text=None):
+    """在 (x, z) 畫一個字：數字用 7 段，否則畫個方塊字（橫豎筆畫）。ang = 字頂朝向（0 = +z）。"""
+    rng = sc.rng
+    ux, uz = math.cos(ang), -math.sin(ang)       # 字的右方
+    vx, vz = math.sin(ang), math.cos(ang)        # 字的上方
+
+    def P(u, v):
+        return (x + (u - 0.3) * size * ux + (v - 0.5) * size * vx, z + (u - 0.3) * size * uz + (v - 0.5) * size * vz)
+    segs = []
+    if text is not None and text in _SEG7:
+        for s in _SEG7[text]:
+            segs.append(_SEGP[s])
+    else:
+        for _ in range(rng.integers(2, 5)):
+            v = rng.uniform(0.05, 0.95)
+            a = rng.uniform(-0.1, 0.2)
+            segs.append((a, v, rng.uniform(0.5, 0.9), v))
+        for _ in range(rng.integers(1, 4)):
+            u = rng.uniform(0.0, 0.7)
+            segs.append((u, rng.uniform(0.0, 0.3), u, rng.uniform(0.6, 1.0)))
+    for (u0, v0, u1, v1) in segs:
+        a, b = P(u0, v0), P(u1, v1)
+        sc.line(a[0], a[1], b[0], b[1], lw=lw, rgb=rgb)
+
+
+def _arc(sc, x, z, r, a0, a1, lw, rgb, n=10):
+    for k in range(n):
+        t0 = a0 + (a1 - a0) * k / n
+        t1 = a0 + (a1 - a0) * (k + 1) / n
+        sc.line(x + r * math.cos(t0), z + r * math.sin(t0), x + r * math.cos(t1), z + r * math.sin(t1), lw=lw, rgb=rgb)
+
+
+def _scooter_sym(sc, x, z, size, ang, rgb=(240, 240, 240)):
+    """機車圖示（兩個輪子 + 車身）。"""
+    ca, sa = math.sin(ang), math.cos(ang)
+    for f in (-0.35, 0.35):
+        _arc(sc, x + f * size * ca, z + f * size * sa, 0.15 * size, 0, 2 * math.pi, 0.08, rgb, n=8)
+    sc.line(x - 0.3 * size * ca, z - 0.3 * size * sa, x + 0.3 * size * ca, z + 0.3 * size * sa, lw=0.12, rgb=rgb)
+    sc.line(x, z, x + 0.15 * size * sa, z - 0.15 * size * ca, lw=0.1, rgb=rgb)
+
+
+def _obj(sc, x, z, wd, ln, ang, rgb, smear):
+    ca, sa = math.cos(ang), math.sin(ang)
+    pts = [sc.T(x + a * ca + b * sa, z - a * sa + b * ca)
+           for (a, b) in ((-wd / 2, -ln / 2), (wd / 2, -ln / 2), (wd / 2, ln / 2), (-wd / 2, ln / 2))]
+    sc.objs.append((pts, rgb, smear))
+
+
+def _seg_points(sc, kinds=('p', 'a', 'l')):
+    """真值格的邊（版面座標換回來太麻煩，直接用車身座標的角點）上的隨機點，給遮擋物用。"""
+    out = []
+    for g in sc.slots:
+        if g['kind'] not in kinds:
+            continue
+        p = g['p']
+        for k in range(4):
+            a, b = p[k], p[(k + 1) % 4]
+            out.append((a, b))
+    return out
+
+
+def _shadow_fns(sc, n):
+    """額外陰影：建物硬邊、百葉 / 欄杆條紋、電線桿影子、兩片陰影間的亮縫、樹影斑。"""
+    rng = sc.rng
+    for _ in range(n):
+        t = rng.integers(5)
+        ang = rng.uniform(0, math.pi)
+        ca, sa = math.cos(ang), math.sin(ang)
+        off = rng.uniform(-5, 5)
+        k = rng.uniform(0.35, 0.6)
+        if t == 0:
+            sc.shade.append(lambda X, Z, ca=ca, sa=sa, off=off, k=k:
+                            k / (1 + np.exp(-np.clip((X * ca + Z * sa - off) / 0.05, -50, 50))))
+        elif t == 1:
+            pitch = rng.uniform(0.3, 2.8)
+            duty = rng.uniform(0.5, 0.85)
+            ext = rng.uniform(3, 8)
+
+            def f(X, Z, ca=ca, sa=sa, off=off, k=k, pitch=pitch, duty=duty, ext=ext):
+                d = X * ca + Z * sa - off
+                e = -X * sa + Z * ca
+                ph = np.mod(e / pitch, 1.0)
+                bar = np.clip((duty - np.abs(ph - 0.5) * 2) * pitch / 0.04, 0, 1)   # 暗條，亮縫寬 (1-duty)*pitch
+                return k * bar * (np.abs(d) < ext)
+            sc.shade.append(f)
+        elif t == 2:
+            wid = rng.uniform(0.08, 0.2)
+            L = rng.uniform(4, 10)
+            sep = rng.uniform(0.25, 0.5) if rng.random() < 0.5 else None
+
+            def f(X, Z, ca=ca, sa=sa, off=off, k=k, wid=wid, L=L, sep=sep):
+                d = X * ca + Z * sa - off
+                e = -X * sa + Z * ca
+                m = (np.abs(d) < wid / 2).astype(float)
+                if sep is not None:
+                    m = np.maximum(m, (np.abs(d - sep) < wid / 2).astype(float))
+                return k * m * (np.abs(e) < L / 2)
+            sc.shade.append(f)
+        elif t == 3:
+            gap = rng.uniform(0.1, 0.25)
+            L = rng.uniform(3, 9)
+
+            def f(X, Z, ca=ca, sa=sa, off=off, k=k, gap=gap, L=L):
+                d = X * ca + Z * sa - off
+                e = -X * sa + Z * ca
+                return k * ((np.abs(d) > gap / 2) | (np.abs(e) > L / 2)) * (np.abs(d) < 3)
+            sc.shade.append(f)
+        else:
+            from scipy.ndimage import gaussian_filter
+            m = gaussian_filter((_smooth_noise(rng, sc.h, sc.w, rng.uniform(3, 8)) > rng.uniform(0.2, 0.7)).astype(float),
+                                1.0)
+            sc.shade.append(lambda X, Z, m=m, k=k: k * m)
+
+
+def lay_xwalk(sc):
+    """道路 + 行人穿越道（枕木紋或有邊線的斑馬紋）+ 停止線，旁邊有路邊平行格或停車場走道。"""
+    rng = sc.rng
+    zz = rng.uniform(-1.5, 3.5)
+    W = rng.uniform(3.0, 4.0)
+    zebra_t = rng.integers(2)
+    if zebra_t == 0:          # 枕木紋
+        bw = rng.uniform(0.4, 0.5)
+        x = -8.0
+        while x < 8.0:
+            sc.line(x, zz, x, zz + W, lw=bw, rgb=(235, 235, 235))
+            x += bw + rng.uniform(0.4, 0.6)
+    else:                     # 斑馬紋：邊線 + 45° 斜紋
+        blw = rng.uniform(0.1, 0.2)
+        _hatch(sc, (-8.0, zz, 8.0, zz + W), rng.uniform(0.8, 1.0), math.radians(45 if rng.random() < 0.5 else 135),
+               rng.uniform(0.35, 0.45), (235, 235, 235), border=True, blw=blw)
+    zstop = zz - rng.uniform(1.0, 2.0)
+    lane = rng.uniform(2.8, 3.4)
+    x0 = rng.uniform(-1.8, -1.2)
+    for k in range(-2, 1):
+        x = x0 + k * lane
+        if rng.random() < 0.5:
+            z = rng.uniform(-14, -10)
+            while z < zstop:
+                sc.line(x, z, x, min(z + 4.0, zstop), lw=0.12, rgb=(235, 235, 235))
+                z += 10.0
+        else:
+            sc.line(x, -12, x, zstop, lw=0.12, rgb=(235, 235, 235))
+        sc.line(x, zz + W + 1.5, x, 12, lw=0.12, rgb=(235, 235, 235))
+    sc.line(x0 - 2 * lane, zstop, x0, zstop, lw=rng.uniform(0.3, 0.45), rgb=(240, 240, 240))
+    # 右側：路邊平行格，被穿越道截斷（穿越道前後留 0.5–1 m）
+    xi = rng.uniform(1.4, 2.4)
+    wd = rng.uniform(2.1, 2.5)
+    ln = rng.uniform(5.8, 6.4)
+    xo = xi + wd
+    _sidewalk(sc, xo + rng.uniform(0.1, 0.3), 1)
+    for zs_, ze_, sg in ((zz - rng.uniform(0.5, 1.0), -12.0, -1), (zz + W + rng.uniform(0.5, 1.0), 12.0, 1)):
+        z = zs_
+        while (z + sg * ln - ze_) * sg <= 0:
+            za, zb = sorted((z, z + sg * ln))
+            for (a, b, c, d) in ((xi, za, xo, za), (xi, zb, xo, zb), (xi, za, xi, zb), (xo, za, xo, zb)):
+                sc.line(a, b, c, d)
+            sc.slot([(xi, za), (xi, zb), (xo, zb), (xo, za)], 'l')
+            if rng.random() < 0.3:
+                sc.car(0.5 * (xi + xo), 0.5 * (za + zb) + rng.uniform(-0.4, 0.4), rng.uniform(-0.04, 0.04))
+            z += sg * ln
+    sc.tags.append('xwalk-' + ('sleeper' if zebra_t == 0 else 'zebra'))
+
+
+def lay_double(sc):
+    """雙線分隔的垂直格（線心距 0.25–0.45 m）；另一側是雙黃線 + 車道線（負樣本）。"""
+    rng = sc.rng
+    side = 1 if rng.random() < 0.5 else -1
+    xe = side * rng.uniform(2.3, 3.4)
+    wd = rng.uniform(2.4, 2.7)
+    dp = rng.uniform(5.0, 5.5)
+    gap = rng.uniform(0.25, 0.45)
+    ent = rng.random() < 0.5
+    back = rng.random() < 0.5
+    z0 = rng.uniform(-9.5, -7.0)
+    zs = [z0 + k * wd for k in range(int(17 / wd) + 1)]
+    xb = xe + side * dp
+    if ent:
+        sc.line(xe, zs[0] - gap / 2, xe, zs[-1] + gap / 2)
+    if back:
+        sc.line(xb, zs[0] - gap / 2, xb, zs[-1] + gap / 2)
+    for z in zs:
+        for o in (-gap / 2, gap / 2):
+            sc.line(xe, z + o, xb, z + o)
+        if not ent:                      # 「U」型：每對分隔線在入口端相連
+            sc.line(xe, z - gap / 2, xe, z + gap / 2)
+    for k in range(len(zs) - 1):
+        sc.slot([(xe, zs[k]), (xe, zs[k + 1]), (xb, zs[k + 1]), (xb, zs[k])], 'p')
+        if rng.random() < 0.3:
+            sc.car(xe + side * (dp / 2 + rng.uniform(-0.2, 0.4)), 0.5 * (zs[k] + zs[k + 1]) + rng.uniform(-0.15, 0.15),
+                   math.pi / 2 + rng.uniform(-0.05, 0.05))
+    # 對側：雙黃線 + 白色車道線（間距 2.6–3.4 m），止於停止線
+    xd = -side * rng.uniform(1.6, 2.4)
+    zst = rng.uniform(3.0, 6.0)
+    for o in (-0.1, 0.1):
+        sc.line(xd + o * side, -12, xd + o * side, zst, lw=0.12, rgb=YEL)
+    xl = xd - side * rng.uniform(2.6, 3.4)
+    sc.line(xl, -12, xl, zst, lw=0.12, rgb=(235, 235, 235))
+    if rng.random() < 0.7:
+        sc.line(min(xd, xl) - 1.0, zst, max(xd, xl) + 1.0, zst, lw=rng.uniform(0.3, 0.45), rgb=(240, 240, 240))
+    sc.tags.append('double-' + ('E' if ent else '') + ('B' if back else ''))
+
+
+def lay_curb(sc):
+    """路邊（負樣本）：人行道、紅 / 黃線、路面邊線、機慢車道、車道線、停止線、機車停等區、機車待轉區。"""
+    rng = sc.rng
+    xc = rng.uniform(2.6, 5.0)
+    _sidewalk(sc, xc, 1)
+    cp = rng.integers(3)
+    if cp < 2:                 # 路緣紅線 / 黃線（車道邊緣的實線，有缺口 = 車道出入口）
+        rgb = (190, 45, 45) if cp == 0 else YEL
+        zgap = rng.uniform(-6, 6)
+        for (a, b) in ((-12, zgap - 1.5), (zgap + 1.5, 12)):
+            sc.line(xc - 0.1, a, xc - 0.1, b, lw=rng.uniform(0.1, 0.15), rgb=rgb)
+    xe = xc - rng.uniform(0.3, 1.0)
+    zst = rng.uniform(1.0, 5.0)
+    sc.line(xe, -12, xe, 12, lw=rng.uniform(0.1, 0.15), rgb=(235, 235, 235))    # 路面邊線
+    xl = xe - rng.uniform(2.0, 3.0)                                               # 機慢車優先道
+    xl2 = xl - rng.uniform(3.0, 3.4)
+    for x in (xl, xl2):
+        if rng.random() < 0.5:
+            z = rng.uniform(-16, -12)
+            while z < zst:
+                sc.line(x, z, x, min(z + 4.0, zst), lw=0.12, rgb=(235, 235, 235))
+                z += 10.0
+        else:
+            sc.line(x, -12, x, zst, lw=0.12, rgb=(235, 235, 235))
+    sc.line(xl2 - 0.2, -12, xl2 - 0.2, zst, lw=0.12, rgb=YEL)
+    sc.line(xl2 - 0.4, -12, xl2 - 0.4, zst, lw=0.12, rgb=YEL)
+    slw = rng.uniform(0.3, 0.45)
+    sc.line(xl2, zst, xe, zst, lw=slw, rgb=(240, 240, 240))                          # 汽車停止線
+    if rng.random() < 0.7:                                                          # 機車停等區
+        d = rng.uniform(3.0, 5.0)
+        blw = rng.uniform(0.12, 0.4)
+        sc.line(xl2, zst + d, xe, zst + d, lw=blw, rgb=(240, 240, 240))
+        if rng.random() < 0.5:
+            sc.line(xl2, zst, xl2, zst + d, lw=0.12, rgb=(240, 240, 240))
+            sc.line(xe, zst, xe, zst + d, lw=0.12, rgb=(240, 240, 240))
+        _scooter_sym(sc, 0.5 * (xl + xe), zst + d / 2, rng.uniform(1.2, 1.8), math.pi / 2)
+    if rng.random() < 0.5:                                                          # 機車待轉區
+        bx = xe - rng.uniform(0.3, 0.6)
+        bz = zst + rng.uniform(6.0, 8.0)
+        bd = rng.uniform(1.8, 2.5)
+        bl = rng.uniform(3.0, 6.0)
+        r = (bx - bl, bz, bx, bz + bd)
+        for (a, b, c, e) in ((r[0], r[1], r[2], r[1]), (r[2], r[1], r[2], r[3]), (r[2], r[3], r[0], r[3]),
+                             (r[0], r[3], r[0], r[1])):
+            sc.line(a, b, c, e, lw=0.12, rgb=(240, 240, 240))
+        _scooter_sym(sc, bx - bl / 2, bz + bd / 2, min(1.4, bl * 0.4), math.pi / 2)
+    sc.tags.append('curb')
+
+
+def lay_shadow(sc):
+    """空地（負樣本）：強烈陰影、亮縫、輪胎痕、補土裂縫、伸縮縫、補丁。"""
+    rng = sc.rng
+    _shadow_fns(sc, rng.integers(2, 6))
+    for _ in range(rng.integers(0, 4)):             # 輪胎痕 / 補土裂縫（暗線）
+        a = rng.uniform(0, math.pi)
+        x, z = rng.uniform(-5, 5), rng.uniform(-6, 6)
+        L = rng.uniform(2, 8)
+        sc.line(x - L / 2 * math.cos(a), z - L / 2 * math.sin(a), x + L / 2 * math.cos(a), z + L / 2 * math.sin(a),
+                lw=rng.uniform(0.05, 0.25), rgb=(25, 25, 25), op=rng.uniform(0.3, 0.7))
+    if rng.random() < 0.4:                          # 水泥伸縮縫網格
+        p = rng.uniform(3.0, 5.0)
+        for k in range(-4, 5):
+            sc.line(k * p, -12, k * p, 12, lw=0.02, rgb=(40, 40, 40), op=0.8)
+            sc.line(-12, k * p, 12, k * p, lw=0.02, rgb=(40, 40, 40), op=0.8)
+    for _ in range(rng.integers(0, 3)):             # 補丁（亮 / 暗色塊）
+        x, z = rng.uniform(-5, 5), rng.uniform(-6, 6)
+        a, b = rng.uniform(0.5, 3), rng.uniform(0.5, 3)
+        v = rng.uniform(60, 190)
+        sc.areas.append(([sc.T(x, z), sc.T(x + a, z), sc.T(x + a, z + b), sc.T(x, z + b)], (v, v, v)))
+    sc.tags.append('shadow')
+
+
+def lay_scoot2(sc):
+    """機車格變體（負樣本）：長框無分隔（8–12 m）、T 字分隔、背對背兩排、只有框加字。"""
+    rng = sc.rng
+    for side in ((1, -1) if rng.random() < 0.5 else (1,)):
+        t = rng.integers(4)
+        xi = side * rng.uniform(1.4, 3.0)
+        dp = rng.uniform(1.8, 2.4)
+        xo = xi + side * dp
+        z0 = rng.uniform(-9, -4)
+        L = rng.uniform(8.0, 12.0)
+        if t == 0:                                   # 長框 + 字
+            for (a, b, c, d) in ((xi, z0, xo, z0), (xi, z0 + L, xo, z0 + L), (xi, z0, xi, z0 + L), (xo, z0, xo, z0 + L)):
+                sc.line(a, b, c, d)
+            for k in range(2):
+                _glyph(sc, 0.5 * (xi + xo), z0 + L * (0.35 + 0.3 * k), 0.9, -side * math.pi / 2)
+        elif t == 1:                                 # T 字分隔（每 1 m）
+            sc.line(xi, z0, xi, z0 + L)
+            z = z0
+            while z <= z0 + L:
+                sc.line(xi, z, xi + side * rng.uniform(0.4, 0.7), z)
+                z += rng.uniform(0.9, 1.1)
+        elif t == 2:                                 # 背對背兩排，每排 2 m 深、1 m 寬
+            xm = xo + side * dp
+            for x in (xi, xo, xm):
+                sc.line(x, z0, x, z0 + L)
+            z = z0
+            while z <= z0 + L:
+                sc.line(xi, z, xm, z)
+                z += rng.uniform(0.9, 1.1)
+        else:                                        # 框 + 1 m 分隔，部分磨掉
+            for x in (xi, xo):
+                sc.line(x, z0, x, z0 + L)
+            z = z0
+            while z <= z0 + L:
+                if rng.random() < 0.6:
+                    sc.line(xi, z, xo, z)
+                z += rng.uniform(0.9, 1.1)
+            _scooter_sym(sc, 0.5 * (xi + xo), z0 + L / 2, 1.2, 0.0)
+    sc.tags.append('scoot2')
+
+
+def lay_stopper(sc):
+    """垂直格 + 輪擋（黃色 / 水泥 / 黑黃條，一根 1.5–1.8 m 或兩塊 0.5 m），離底線 0.6–1.0 m。"""
+    rng = sc.rng
+    if rng.random() < 0.6:
+        lay_perp_aisle(sc, 1 if rng.random() < 0.5 else -1)
+    else:
+        lay_perp_ahead(sc)
+    for g in sc.slots:
+        p = g['p']                               # 車身座標：p0,p1 入口，p2,p3 底
+        bx, bz = 0.5 * (p[2][0] + p[3][0]), 0.5 * (p[2][1] + p[3][1])
+        ex, ez = 0.5 * (p[0][0] + p[1][0]), 0.5 * (p[0][1] + p[1][1])
+        D = math.hypot(ex - bx, ez - bz)
+        dx, dz = (ex - bx) / D, (ez - bz) / D
+        d = rng.uniform(0.6, 1.0)
+        cxs, czs = bx + dx * d, bz + dz * d
+        ux, uz = dz, -dx
+        col = [YEL, (200, 200, 195), (230, 200, 40)][rng.integers(3)]
+        lw = rng.uniform(0.12, 0.2)
+        # sc.line 會再轉一次 yaw，所以先轉回版面座標
+        inv = lambda x, z: _rot(x, z, sc.c, -sc.s)
+        if rng.random() < 0.6:
+            hl = rng.uniform(0.75, 0.9)
+            a = inv(cxs - ux * hl, czs - uz * hl)
+            b = inv(cxs + ux * hl, czs + uz * hl)
+            sc.line(a[0], a[1], b[0], b[1], lw=lw, rgb=col)
+        else:
+            for o in (-0.55, 0.55):
+                a = inv(cxs + ux * (o - 0.25), czs + uz * (o - 0.25))
+                b = inv(cxs + ux * (o + 0.25), czs + uz * (o + 0.25))
+                sc.line(a[0], a[1], b[0], b[1], lw=lw, rgb=col)
+    sc.tags.append('stopper')
+
+
+def lay_text(sc):
+    """格內有編號 / 字 / 身障或充電格塗色 + 圖示。"""
+    rng = sc.rng
+    if rng.random() < 0.6:
+        lay_perp_aisle(sc, 1 if rng.random() < 0.5 else -1)
+    else:
+        lay_perp_ahead(sc)
+    inv = lambda x, z: _rot(x, z, sc.c, -sc.s)
+    for g in sc.slots:
+        p = g['p']
+        ex, ez = 0.5 * (p[0][0] + p[1][0]), 0.5 * (p[0][1] + p[1][1])
+        bx, bz = 0.5 * (p[2][0] + p[3][0]), 0.5 * (p[2][1] + p[3][1])
+        ang = math.atan2(ex - bx, ez - bz) + math.atan2(sc.s, sc.c)   # 字頂朝入口（版面座標）
+        t = rng.integers(4)
+        if t == 0:                                   # 編號（兩三位數字）
+            f = rng.uniform(0.15, 0.3)
+            x, z = inv(ex + (bx - ex) * f, ez + (bz - ez) * f)
+            n = rng.integers(2, 4)
+            sz = rng.uniform(0.5, 0.8)
+            ca, sa = math.cos(ang), -math.sin(ang)
+            for k in range(n):
+                o = (k - (n - 1) / 2) * sz * 0.8
+                _glyph(sc, x + o * ca, z + o * sa, sz, ang, text=str(rng.integers(10)), lw=rng.uniform(0.08, 0.12))
+        elif t == 1:                                 # 文字（卸貨、孕婦…）
+            x, z = inv(ex + (bx - ex) * 0.5, ez + (bz - ez) * 0.5)
+            ca, sa = math.cos(ang), -math.sin(ang)
+            for k in range(2):
+                o = (k - 0.5) * 0.9
+                _glyph(sc, x + o * ca, z + o * sa, 0.8, ang)
+        elif t == 2:                                 # 身障 / 充電：塗色 + 白色圖示
+            col = (40, 70, 160) if rng.random() < 0.5 else (50, 140, 70)
+            q = [inv(*v) for v in p]
+            gx = sum(v[0] for v in q) / 4
+            gz = sum(v[1] for v in q) / 4
+            q = [(gx + (v[0] - gx) * 0.93, gz + (v[1] - gz) * 0.93) for v in q]
+            sc.areas.append(([sc.T(*v) for v in q], col))
+            x, z = inv(ex + (bx - ex) * 0.5, ez + (bz - ez) * 0.5)
+            _arc(sc, x, z, 0.4, 0, 2 * math.pi, 0.1, (240, 240, 240), n=10)
+            _glyph(sc, x, z + 0.5, 0.5, ang)
+    sc.tags.append('text')
+
+
+def lay_hatch(sc):
+    """網狀線（黃色交叉斜線框）與白色斜紋禁停區（夾在格子之間）。"""
+    rng = sc.rng
+    side = 1 if rng.random() < 0.5 else -1
+    lay_perp_aisle(sc, side)
+    # 把其中一格改成斜紋禁停區：刪掉真值、在格內畫斜線
+    if len(sc.slots) > 3:
+        k = rng.integers(1, len(sc.slots) - 1)
+        g = sc.slots.pop(k)
+        inv = lambda x, z: _rot(x, z, sc.c, -sc.s)
+        q = [inv(*v) for v in g['p']]
+        xs = [v[0] for v in q]
+        zs = [v[1] for v in q]
+        _hatch(sc, (min(xs), min(zs), max(xs), max(zs)), rng.uniform(0.5, 0.9), math.radians(rng.uniform(30, 60)),
+               rng.uniform(0.1, 0.15), sc.col, border=False)
+    # 對側：黃色網狀線框（2 方向斜線）
+    x0 = -side * rng.uniform(1.5, 2.5)
+    x1 = x0 - side * rng.uniform(3.0, 6.0)
+    z0 = rng.uniform(-6, 0)
+    r = (min(x0, x1), z0, max(x0, x1), z0 + rng.uniform(4, 8))
+    p = rng.uniform(1.0, 2.6)
+    _hatch(sc, r, p, math.radians(45), 0.12, YEL, border=True)
+    _hatch(sc, r, p, math.radians(135), 0.12, YEL, border=False)
+    sc.tags.append('hatch')
+
+
+def lay_garage(sc):
+    """地下室：環氧樹脂地坪、較暗、柱子擋住入口角、燈管倒影（亮條）、格內編號。"""
+    rng = sc.rng
+    sc.base_rgb = (rng.uniform(70, 100), rng.uniform(110, 140), rng.uniform(90, 110)) if rng.random() < 0.6 else \
+        (rng.uniform(110, 140),) * 3
+    sc.dim = rng.uniform(0.55, 0.85)
+    if rng.random() < 0.5:
+        sc.col = YEL
+    side = 1 if rng.random() < 0.5 else -1
+    lay_perp_aisle(sc, side)
+    if rng.random() < 0.5:
+        lay_perp_aisle(sc, -side)
+    # 柱子：每 3 格一根，站在入口角
+    for k, g in enumerate(sc.slots):
+        if k % 3 == 0 and rng.random() < 0.8:
+            inv = _rot(g['p'][0][0], g['p'][0][1], sc.c, -sc.s)
+            _obj(sc, inv[0], inv[1], rng.uniform(0.6, 0.9), rng.uniform(0.6, 0.9), 0.0, (150, 150, 150),
+                 rng.uniform(0.5, 1.5))
+    # 燈管倒影：沿走道方向一排排的亮條
+    for kx in (-1.0, 1.0):
+        z = rng.uniform(-10, -7)
+        while z < 10:
+            x = kx * rng.uniform(0.5, 1.6)
+            sc.line(x, z, x, z + 1.2, lw=rng.uniform(0.12, 0.25), rgb=(245, 245, 240), op=rng.uniform(0.5, 0.9))
+            z += rng.uniform(2.4, 3.2)
+    sc.tags.append('garage')
+
+
+def lay_pavers(sc):
+    """植草磚 / 連鎖磚（負樣本，也是最耗時的輸入）：整片 0.3–0.6 m 間距的亮色格柵，草地或磚縫。"""
+    rng = sc.rng
+    if rng.random() < 0.6:
+        sc.base_rgb = (rng.uniform(50, 80), rng.uniform(80, 115), rng.uniform(40, 65))     # 草
+        rib = (rng.uniform(165, 205),) * 3
+    else:
+        sc.base_rgb = (rng.uniform(60, 90),) * 3                                           # 磚縫
+        rib = (rng.uniform(150, 190), rng.uniform(120, 150), rng.uniform(100, 130))
+    p1, p2 = rng.uniform(0.3, 0.6), rng.uniform(0.3, 0.6)
+    lw = rng.uniform(0.08, 0.14)
+    x0, x1 = (-9, 9) if rng.random() < 0.6 else (rng.uniform(0.8, 2.5), 9)
+    k = x0
+    while k <= x1:
+        sc.line(k, -9, k, 9, lw=lw, rgb=rib)
+        k += p1
+    k = -9
+    while k <= 9:
+        sc.line(x0, k, x1, k, lw=lw, rgb=rib)
+        k += p2
+    sc.tags.append('pavers')
+
+
+def make_adv_scene(rng, kind, w=300, h=350, mpp=0.04, cx=150.0, cy=175.0):
+    sc = Scene(rng, w, h, mpp, cx, cy, 'own')
+    _style_line(sc)
+    base_pick = lambda opts: opts[rng.integers(len(opts))]
+    if kind == 'blur':
+        sc.blur_mul = rng.uniform(2.0, 3.0)
+        sc.base_blur = rng.uniform(0.6, 1.2)
+        b = base_pick(['aisle', 'parallel', 'angled', 'ahead', 'egoperp'])
+    elif kind == 'seam':
+        sc.seam_gain = 0.15
+        sc.seam_shift = [(rng.uniform(-0.1, 0.1), rng.uniform(-0.1, 0.1), math.radians(rng.uniform(-1.2, 1.2)))
+                         for _ in range(4)]
+        b = base_pick(['ahead', 'aisle', 'egoperp', 'angled'])
+    elif kind == 'occl':
+        sc.occ_p = 0.75
+        sc.crook = True
+        sc.yolo_miss = 0.3
+        b = base_pick(['aisle', 'ahead', 'angled'])
+    elif kind == 'rot':
+        yaw = math.radians(rng.uniform(0, 90)) * (1 if rng.random() < 0.5 else -1)
+        sc.c, sc.s = math.cos(yaw), math.sin(yaw)
+        b = base_pick(['aisle', 'parallel', 'angled', 'ahead'])
+    else:
+        b = None
+    if b == 'aisle':
+        lay_perp_aisle(sc, 1 if rng.random() < 0.5 else -1)
+    elif b == 'parallel':
+        lay_parallel(sc, 1 if rng.random() < 0.5 else -1)
+    elif b == 'angled':
+        lay_angled(sc, 1 if rng.random() < 0.5 else -1)
+    elif b == 'ahead':
+        lay_perp_ahead(sc)
+    elif b == 'egoperp':
+        lay_ego_perp(sc)
+    elif kind == 'xwalk':
+        lay_xwalk(sc)
+    elif kind == 'double':
+        lay_double(sc)
+    elif kind == 'curb':
+        lay_curb(sc)
+    elif kind == 'shadow':
+        lay_shadow(sc)
+    elif kind == 'scoot2':
+        lay_scoot2(sc)
+    elif kind == 'stopper':
+        lay_stopper(sc)
+    elif kind == 'text':
+        lay_text(sc)
+    elif kind == 'hatch':
+        lay_hatch(sc)
+    elif kind == 'garage':
+        lay_garage(sc)
+    elif kind == 'pavers':
+        lay_pavers(sc)
+    if kind == 'occl':                               # 沒有車輛框的遮擋物（行人、推車）壓在格線上
+        segs = _seg_points(sc)
+        for _ in range(rng.integers(2, 6)):
+            if not segs:
+                break
+            a, bb = segs[rng.integers(len(segs))]
+            f = rng.uniform(0.1, 0.9)
+            x, z = _rot(a[0] + (bb[0] - a[0]) * f, a[1] + (bb[1] - a[1]) * f, sc.c, -sc.s)
+            _obj(sc, x, z, rng.uniform(0.4, 0.8), rng.uniform(0.4, 0.9), rng.uniform(0, 3),
+                 tuple(rng.uniform(30, 200, 3)), rng.uniform(0.3, 1.2))
+    if kind in ('shadow', 'curb'):
+        _shadow_fns(sc, rng.integers(0, 3))
+    if b is not None:
+        sc.tags.insert(0, kind)
+    return sc
+
+
 # ---------------------------------------------------------------- 繪製
 def _smooth_noise(rng, h, w, cells):
     from scipy.ndimage import zoom
@@ -1691,6 +2498,8 @@ def render(sc):
         base = np.array([rng.uniform(80, 110), rng.uniform(115, 140), rng.uniform(95, 115)])  # 地下室環氧樹脂
     else:
         base = np.array([rng.uniform(95, 125)] * 3) * np.array([1.0, 0.98, 0.94])
+    if sc.base_rgb is not None:
+        base = np.array(sc.base_rgb, float)
     img = np.zeros((h, w, 3)) + base
     lf = _smooth_noise(rng, h, w, 40) * rng.uniform(5, 14) + _smooth_noise(rng, h, w, 8) * rng.uniform(2, 6)
     img += lf[:, :, None]
@@ -1733,6 +2542,13 @@ def render(sc):
         else:
             sh = gaussian_filter((_smooth_noise(rng, h, w, 25) > 0.6).astype(float), 2)
         img *= (1 - rng.uniform(0.3, 0.55) * sh)[:, :, None]
+    for f in sc.shade:
+        img *= (1 - f(X, Z))[:, :, None]
+    for pts, rgb, sm in sc.objs:          # 沒有車輛框的立體物
+        cov = _poly_cov(X, Z, _ccw(_car_hull(pts, sm)))
+        img[cov] = np.array(rgb, float) * 0.85 + rng.normal(0, 8, (int(cov.sum()), 3))
+        cov2 = _poly_cov(X, Z, _ccw(pts))
+        img[cov2] = np.array(rgb, float) + rng.normal(0, 5, (int(cov2.sum()), 3))
     for pts, rgb, sm in sc.cars:          # 車輛（含往外拖曳的立體變形）
         hull = _car_hull(pts, sm)
         halo = _poly_cov(X, Z, _ccw(_grow(hull, 0.15)))
@@ -1750,14 +2566,34 @@ def render(sc):
         for (b0, b1, a0) in ((0.55, 0.72, 0.08), (0.18, 0.30, 0.10)):   # 前後擋風玻璃
             win = _poly_cov(X, Z, _ccw([at(a0, b0), at(1 - a0, b0), at(1 - a0, b1), at(a0, b1)]))
             img[win] = col * 0.25 + 20 + rng.normal(0, 5, (int(win.sum()), 3))
+    img *= sc.dim
     if sc.style == 'own':
         ax = np.abs(X) - EGO_HX              # 接縫：各鏡頭亮度 / 白平衡不同
         reg = np.where((Z >= 0) & (Z - EGO_HZ >= ax), 0,
                        np.where((Z < 0) & (-Z - EGO_HZ >= ax), 1, np.where(X < 0, 2, 3)))
+        if sc.seam_shift is not None:        # 各鏡頭的校正誤差：地面投影平移 + 繞鏡頭旋轉
+            from scipy.ndimage import map_coordinates
+            cams = ((0.0, 2.35), (0.0, -2.4), (-1.0, 0.85), (1.0, 0.85))
+            out_img = img.copy()
+            for r, ((dx, dz, rot), (px_, pz_)) in enumerate(zip(sc.seam_shift, cams)):
+                m = reg == r
+                cr, sr = math.cos(rot), math.sin(rot)
+                Xs = px_ + (X[m] - px_) * cr - (Z[m] - pz_) * sr + dx
+                Zs = pz_ + (X[m] - px_) * sr + (Z[m] - pz_) * cr + dz
+                ii = Xs / mpp + cx - 0.5
+                jj = cy - Zs / mpp - 0.5
+                for ch in range(3):
+                    out_img[:, :, ch][m] = map_coordinates(img[:, :, ch], [jj, ii], order=1, mode='nearest')
+            img = out_img
         gains = rng.uniform(0.8, 1.2, 4)[:, None] * rng.uniform(0.95, 1.05, (4, 3))
+        if sc.seam_gain:
+            g0 = float(np.mean(gains))
+            gains = np.array([1.0, 1.0, 1.0 + sc.seam_gain, 1.0 - sc.seam_gain])[:, None] * np.ones((4, 3)) * g0
         img *= gains[reg]
+        if sc.base_blur > 0:
+            img = np.stack([gaussian_filter(img[:, :, c], sc.base_blur) for c in range(3)], 2)
         dr = np.hypot(np.maximum(np.abs(X) - EGO_HX, 0), np.maximum(np.abs(Z) - EGO_HZ, 0))
-        k = rng.uniform(0.7, 1.5)            # 越遠越糊
+        k = rng.uniform(0.7, 1.5) * sc.blur_mul  # 越遠越糊
         b1 = np.stack([gaussian_filter(img[:, :, c], 0.8 * k) for c in range(3)], 2)
         b2 = np.stack([gaussian_filter(img[:, :, c], 1.6 * k) for c in range(3)], 2)
         w1 = np.clip((dr - 2.0) / 2.0, 0, 1)
@@ -1787,7 +2623,7 @@ def render(sc):
         hull = _car_hull(pts, sm)
         xs = [p[0] for p in hull]
         zs = [p[1] for p in hull]
-        if rng.random() < 0.1:
+        if rng.random() < sc.yolo_miss:
             continue
         j = lambda: rng.uniform(-0.25, 0.15)
         vehicles.append([min(xs) - j(), min(zs) - j(), max(xs) + j(), max(zs) + j()])
@@ -2036,6 +2872,27 @@ FIXTURES = [
 ]
 
 
+ADV_FIXTURES = [
+    # (名稱, 對抗場景類型, 序號)；種子 = adv_seed(類型, 序號)。neg = 不該有任何格子
+    ('adv_scoot2_t', 'scoot2', 6),       # 機車格 T 字分隔（舊版 3 格誤報）
+    ('adv_scoot2_box', 'scoot2', 19),    # 機車格框 + 部分分隔磨掉（舊版 3 格誤報）
+    ('adv_xwalk', 'xwalk', 2),           # 車道線止於停止線 + 行人穿越道（舊版誤報垂直格）
+    ('adv_curb', 'curb', 8),             # 機車停等區（舊版誤報垂直格）
+    ('adv_pavers', 'pavers', 1),         # 植草磚格柵（舊版在自車周圍誤報一格；整片紋理，提早結束）
+    ('adv_pavers_part', 'pavers', 2),    # 半邊植草磚（不會提早結束，最耗時的輸入）
+    ('adv_shadow', 'shadow', 19),        # 空地 + 陰影亮縫（舊版誤報斜角格）
+    ('adv_hatch', 'hatch', 14),          # 網狀線 + 斜紋禁停區（舊版誤報斜角格）
+    ('adv_text', 'text', 1),             # 格內編號 / 文字
+    ('adv_garage', 'garage', 10),        # 地下室、柱子擋住入口角（舊版鋸齒斜格、類型錯）
+    ('adv_rot', 'rot', 9),               # 車頭與走道夾角大
+    ('adv_seam', 'seam', 3),             # 15 % 接縫亮度差 + 各鏡頭校正誤差
+    ('adv_blur', 'blur', 13),            # 遠處重度模糊
+    ('adv_stopper', 'stopper', 28),      # 輪擋
+    ('adv_double', 'double', 1),         # 雙線分隔 + 對側雙黃線
+    ('adv_occl', 'occl', 18),            # 停歪的車、漏框、行人壓線
+]
+
+
 def _slot_json(d):
     return {'p': [float(v) for v in d['p']], 'kind': d['kind'], 'occupied': bool(d['occupied']),
             'conf': float(d.get('conf', 1.0))}
@@ -2064,6 +2921,12 @@ def cmd_fixtures():
         ki = SCENE_KINDS.index(kind)
         seed = 1000 * ki + s + (0 if var == '300' else 500000)
         sc, rgb, det, dets = run_scene(seed, kind, var)
+        r = evaluate(sc, dets)
+        _write_fixture(name, rgb, sc.mpp, sc.cx, sc.cy, [EGO_EXCL], sc.vehicles, sc.slots, dets,
+                       {'tp': len(r['tp']), 'fp': len(r['fp']), 'fn': len(r['fn'])})
+        print(f"{name}: {len(dets)} slots, tp={len(r['tp'])} fp={len(r['fp'])} fn={len(r['fn'])} tags={sc.tags}")
+    for (name, kind, s) in ADV_FIXTURES:
+        sc, rgb, det, dets = run_adv_scene(adv_seed(kind, s), kind)
         r = evaluate(sc, dets)
         _write_fixture(name, rgb, sc.mpp, sc.cx, sc.cy, [EGO_EXCL], sc.vehicles, sc.slots, dets,
                        {'tp': len(r['tp']), 'fp': len(r['fp']), 'fn': len(r['fn'])})
@@ -2159,6 +3022,111 @@ def cmd_eval(n, variant='300', verbose=False):
     return stats
 
 
+def run_adv_scene(seed, kind, variant='300'):
+    rng = np.random.default_rng(seed)
+    sc = make_adv_scene(rng, kind, **VARIANTS[variant])
+    rgb = render(sc)
+    det = Detector()
+    dets = det.detect(rgb, sc.mpp, sc.cx, sc.cy, [EGO_EXCL], sc.vehicles)
+    return sc, rgb, det, dets
+
+
+def adv_seed(kind, s, variant='300'):
+    return 7000000 + 1000 * ADV_KINDS.index(kind) + s + (0 if variant == '300' else 500000)
+
+
+def cmd_adv(n, variant='300', kinds=None, verbose=False, preview=False):
+    """對抗場景評估：每種場景 n 張，印出召回、誤報、角點誤差、類型 / 入口 / 佔用錯誤。"""
+    tot = {'tp': 0, 'fp': 0, 'fn': 0}
+    for kind in ADV_KINDS:
+        if kinds and kind not in kinds:
+            continue
+        tp = fp = fn = kb = eb = ob = 0
+        ee = []
+        bad = []
+        for s in range(n):
+            seed = adv_seed(kind, s, variant)
+            sc, rgb, det, dets = run_adv_scene(seed, kind, variant)
+            r = evaluate(sc, dets)
+            tp += len(r['tp'])
+            fp += len(r['fp'])
+            fn += len(r['fn'])
+            for m in r['tp']:
+                kb += not m['kind_ok']
+                eb += not m['ent_ok']
+                ob += not m['occ_ok']
+                ee.extend(e for is_ent, e in m['errs'] if is_ent)
+            if r['fp']:
+                bad.append(s)
+            if verbose and (r['fp'] or r['fn']):
+                print(f"    {kind}#{s} tags={sc.tags} tp={len(r['tp'])} fp={len(r['fp'])} fn={len(r['fn'])} "
+                      f"fpk={[d['kind'] for d in r['fp']]}")
+            if preview and (r['fp'] or r['fn'] or s < 2):
+                os.makedirs(os.path.join(SCRATCH, 'adv'), exist_ok=True)
+                overlay(rgb, sc, dets, os.path.join(SCRATCH, 'adv', f'{variant}_{kind}_{s}.png'), det)
+        ee = np.array(ee)
+        print(f"  {kind:8s} tp={tp:4d} fp={fp:3d} fn={fn:4d}  R={tp / max(1, tp + fn):.3f} P={tp / max(1, tp + fp):.3f}  "
+              f"ent err med={_pct(ee, 50):.3f} <=0.25m {np.mean(ee <= 0.25) if len(ee) else float('nan'):.3f}  "
+              f"kind_bad={kb} ent_bad={eb} occ_bad={ob}  fp_scenes={bad[:12]}")
+        for k in tot:
+            tot[k] += {'tp': tp, 'fp': fp, 'fn': fn}[k]
+    print(f"  TOTAL tp={tot['tp']} fp={tot['fp']} fn={tot['fn']} R={tot['tp'] / max(1, tot['tp'] + tot['fn']):.3f} "
+          f"P={tot['tp'] / max(1, tot['tp'] + tot['fp']):.3f}")
+
+
+def cmd_dump(n, variant, outdir):
+    """把對抗場景與原本的合成場景（每種 n 張）連同原型輸出寫成 PNG + JSON，給 Kotlin 一致性比對用。"""
+    from PIL import Image
+    os.makedirs(outdir, exist_ok=True)
+    jobs = [(k, s, True) for k in ADV_KINDS for s in range(n)] + [(k, s, False) for k in SCENE_KINDS for s in range(n)]
+    for kind, s, adv in jobs:
+        if adv:
+            sc, rgb, det, dets = run_adv_scene(adv_seed(kind, s, variant), kind, variant)
+        else:
+            sc, rgb, det, dets = run_scene(1000 * SCENE_KINDS.index(kind) + s + (0 if variant == '300' else 500000),
+                                           kind, variant)
+        name = f"{'adv_' if adv else ''}{kind}_{variant}_{s}"
+        Image.fromarray(rgb).save(os.path.join(outdir, name + '.png'))
+        js = {'name': name, 'w': int(rgb.shape[1]), 'h': int(rgb.shape[0]), 'mpp': sc.mpp, 'cx': sc.cx, 'cy': sc.cy,
+              'exclude': [EGO_EXCL], 'vehicles': [[float(v) for v in r] for r in sc.vehicles],
+              'proto': [_slot_json(d) for d in dets]}
+        with open(os.path.join(outdir, name + '.json'), 'w') as f:
+            json.dump(js, f)
+    print(f'{len(jobs)} scenes -> {outdir}')
+
+
+def cmd_parity(outdir):
+    """比對 dump 目錄裡 Kotlin 輸出（*.kt.json）與原型輸出。"""
+    names = sorted(f[:-5] for f in os.listdir(outdir) if f.endswith('.json') and not f.endswith('.kt.json'))
+    bad = 0
+    worst = 0.0
+    times = []
+    for nm in names:
+        p = json.load(open(os.path.join(outdir, nm + '.json')))['proto']
+        kp = os.path.join(outdir, nm + '.kt.json')
+        if not os.path.exists(kp):
+            continue
+        kt = json.load(open(kp))
+        times.append(kt['ms'])
+        k = kt['slots']
+        ok = len(p) == len(k)
+        if ok:
+            for a in p:
+                m = [b for b in k if b['kind'] == a['kind'] and b['occupied'] == a['occupied'] and
+                     max(abs(x - y) for x, y in zip(a['p'], b['p'])) <= 0.02 and abs(a['conf'] - b['conf']) <= 0.01]
+                if not m:
+                    ok = False
+                    break
+                worst = max(worst, min(max(abs(x - y) for x, y in zip(a['p'], b['p'])) for b in m))
+        if not ok:
+            bad += 1
+            print('MISMATCH', nm, 'proto', [(d['kind'], [round(v, 2) for v in d['p']]) for d in p],
+                  'kotlin', [(d['kind'], [round(v, 2) for v in d['p']]) for d in k])
+    t = np.array(times)
+    print(f'{len(times)} compared, {bad} mismatched, worst corner diff {worst:.4f} m; kotlin ms median {np.median(t):.2f} '
+          f'p90 {np.percentile(t, 90):.2f} max {t.max():.2f}')
+
+
 def cmd_preview(n, variant='300', kinds=None, seeds=None):
     os.makedirs(SCRATCH, exist_ok=True)
     for ki, kind in enumerate(SCENE_KINDS):
@@ -2185,6 +3153,16 @@ if __name__ == '__main__':
         kinds = sys.argv[4].split(',') if len(sys.argv) > 4 else None
         seeds = [int(v) for v in sys.argv[5].split(',')] if len(sys.argv) > 5 else None
         cmd_preview(n, var, kinds, seeds)
+    elif cmd == 'adv':
+        n = int(sys.argv[2]) if len(sys.argv) > 2 else 20
+        args = [a for a in sys.argv[3:] if not a.startswith('-')]
+        var = args[0] if args else '300'
+        kinds = args[1].split(',') if len(args) > 1 else None
+        cmd_adv(n, var, kinds, verbose='-v' in sys.argv, preview='-p' in sys.argv)
+    elif cmd == 'dump':
+        cmd_dump(int(sys.argv[2]), sys.argv[3], sys.argv[4])
+    elif cmd == 'parity':
+        cmd_parity(sys.argv[2])
     elif cmd == 'real':
         cmd_real()
     elif cmd == 'fixtures':
