@@ -84,11 +84,15 @@
     [-5.25, 5.25].forEach(function (x) { seg(x, -120, 120); });
   })();
 
-  function makeCar(color, ego) {
+  var DIM = { car: [1.85, 4.6], truck: [2.3, 7.0], bus: [2.5, 11.0], moto: [0.7, 1.9] };   // 寬、長（m）
+  function makeCar(color, ego, type) {
+    var d = DIM[type] || DIM.car, two = type === 'moto';
     var g = new THREE.Group(), paint = new THREE.MeshStandardMaterial({ color: color, metalness: 0.3, roughness: 0.45 });
-    var b = new THREE.Mesh(new THREE.BoxGeometry(1.85, 0.55, 4.6), paint); b.position.y = 0.55; g.add(b);
-    var c = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.5, 2.2), new THREE.MeshStandardMaterial({ color: 0x0c161d, roughness: 0.1 }));
-    c.position.set(0, 1.08, 0.15); g.add(c);
+    var b = new THREE.Mesh(new THREE.BoxGeometry(d[0], two ? 0.9 : 0.55, d[1]), paint); b.position.y = 0.55; g.add(b);
+    if (!two) {
+      var c = new THREE.Mesh(new THREE.BoxGeometry(d[0] - 0.25, 0.5, Math.min(2.2, d[1] * 0.48)), new THREE.MeshStandardMaterial({ color: 0x0c161d, roughness: 0.1 }));
+      c.position.set(0, 1.08, 0.15); g.add(c);
+    }
     if (ego) { paint.emissive = new THREE.Color(0x38e1ff); paint.emissiveIntensity = 0.12; }
     return g;
   }
@@ -101,7 +105,7 @@
     for (var i = 0; i < objs.length; i++) {
       var o = objs[i], m = others[o.id];
       if (!m) {
-        m = makeCar(0x1f7fae, false);
+        m = makeCar(o.t === 'moto' ? 0xd9822b : 0x1f7fae, false, o.t);
         var el = document.createElement('div');
         el.className = 'car-tag';
         el.textContent = '#' + o.id;
@@ -141,13 +145,43 @@
   function zones(cx) { return { L: [cx - 5.25, Z_MIN, cx - 1.75, Z_MAX], R: [cx + 1.75, Z_MIN, cx + 5.25, Z_MAX] }; }
   function blink(t, a, b) { return t >= a && t <= b && (t * 1000) % 800 < 400; }
 
-  /** 一台車 → 是否在盲點、後方來車 TTC。 */
+  var EGO_HW = 0.925;
+  function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+  /**
+   * 一台車 → 在哪一側、是否在盲點、後方來車 TTC（LaneChangeAssist 的簡化版）：車道線決定的內緣夾在
+   * 自車側面外 0.55–0.85 m；機車另有「鑽車縫」帶（自車側面外 0.2 m 到車道線，只看並排到後保桿後 3 m）。
+   */
   function assess(o, laneL, laneR) {
-    var front = o.z + 2.25, rear = o.z - 2.25, side = o.x < laneL ? 'L' : o.x > laneR ? 'R' : null;
-    if (!side) return null;
-    var inZone = front >= Z_MIN && rear <= Z_MAX, range = -EGO_HL - front, ttc = null;
-    if (range > 0 && o.vz > 1 && range / o.vz < 3.5) ttc = range / o.vz;
-    return { side: side, zone: inZone, ttc: ttc };
+    var two = o.t === 'moto', hl = (DIM[o.t] || DIM.car)[1] / 2;
+    var front = o.z + hl, rear = o.z - hl;
+    for (var s = 0; s < 2; s++) {
+      var sx = s === 0 ? -o.x : o.x, own = Math.max(0, s === 0 ? -laneL : laneR);
+      var innerCar = clamp(own - 0.3, EGO_HW + 0.55, EGO_HW + 0.85), innerTwo = EGO_HW + 0.2;
+      var outer = Math.max(own, EGO_HW) + 3.5 + 0.6;
+      var innerAdj = two ? Math.max(innerTwo, Math.min(own - 0.3, innerCar)) : innerCar;
+      var band = sx > outer ? 0 : sx >= innerAdj ? 1 : (two && sx >= innerTwo) ? 2 : 0;
+      if (!band) continue;
+      var back = band === 1 ? Z_MIN : -EGO_HL - 3;
+      var inZone = front >= back && rear <= Z_MAX, range = -EGO_HL - front, ttc = null;
+      if (range > 0 && o.vz > 1 && range / o.vz < 3.5) ttc = range / o.vz;
+      return { side: s === 0 ? 'L' : 'R', zone: inZone, ttc: ttc, squeeze: band === 2 };
+    }
+    return null;
+  }
+
+  /** 沿換道路徑往前推 3 s：會不會碰到目標車道上的車（同 LaneChangeAssist.pathConflict）。 */
+  function pathConflict(objs, side, target, len, ego) {
+    var v = Math.max(ego, 3), tTot = len / v, sg = side === 'L' ? -1 : 1;
+    for (var i = 0; i < objs.length; i++) {
+      var o = objs[i], d0 = DIM[o.t] || DIM.car, sx = sg * o.x;
+      if (sx < (o.t === 'moto' ? EGO_HW + 0.2 : EGO_HW + 0.55)) continue;
+      var gapX = EGO_HW + d0[0] / 2 + 0.3, gapZ = EGO_HL + d0[1] / 2 + 1.5 + 0.3 * Math.abs(o.vz || 0);
+      for (var t = 0; t <= 3.0001; t += 0.25) {
+        var u = Math.min(1, t / tTot), d = target * u * u * u * (10 - 15 * u + 6 * u * u);
+        if (Math.abs(o.x - d) < gapX && Math.abs(o.z + (o.vz || 0) * t) < gapZ) return true;
+      }
+    }
+    return false;
   }
 
   // ---------- 情境（每個 t 秒循環） ----------
@@ -172,6 +206,16 @@
     } },
     stale: { name: '資料中斷（1.2 s 後收起）', dur: 8, run: function (t) {
       return { ego: 16.7, objs: [{ id: 3, t: 'car', x: -3.5, z: -4, vz: 0 }], turn: 'L', drift: 0, stop: t > 3 };
+    } },
+    squeeze: { name: '機車鑽車縫', dur: 8, run: function (t) {
+      // 自車靠右（左線在 −2.45）、20 km/h；機車從後方鑽進自車與左線之間，+5 m/s；第 1.5 s 起打左燈
+      return { ego: 5.6, objs: [{ id: 21, t: 'moto', x: -1.7, z: -15 + 5 * t, vz: 5 },
+        { id: 22, t: 'car', x: -4.3, z: -6, vz: 0 }], turn: blink(t, 1.5, 7.6) ? 'L' : null, drift: 0, lx: -0.7 };
+    } },
+    frontBlock: { name: '目標車道前方並行車', dur: 8, run: function (t) {
+      // 左車道的車在前車門以前（盲點區外）同速並行：盲點不亮，但打左燈時路徑不可行
+      return { ego: 16.7, objs: [{ id: 31, t: 'car', x: -3.5, z: 4.6 + 0.4 * Math.sin(t), vz: 0 }],
+        turn: blink(t, 1, 7) ? 'L' : null, drift: 0 };
     } },
     none: { name: '沒有 lca 欄位', dur: 6, run: function (t) {
       return { ego: 16.7, objs: [{ id: 2, t: 'car', x: -3.5, z: -5 + t, vz: 1 }], turn: null, drift: 0, noLca: true };
@@ -212,7 +256,7 @@
     if (f.stop && lastP) return;   // 不再送新 payload：lca3d.js 應在 1.2 s 後收起
     laneX = f.lx || 0;
     lanes.position.x = laneX;
-    var laneL = laneX - 1.75, laneR = laneX + 1.75, L = 0, R = 0, threat = null;
+    var laneL = laneX - 1.75, laneR = laneX + 1.75, L = 0, R = 0, threat = null, sqL = false, sqR = false;
     if (f.turn) hold = { t: now, side: f.turn };
     var turn = now - hold.t < 1200 ? hold.side : null;
     var intent = turn || (f.driftOn ? 'R' : null);
@@ -220,17 +264,22 @@
       var a = assess(f.objs[i], laneL, laneR);
       if (!a) continue;
       var lv = a.zone || a.ttc !== null ? 1 : 0;
-      if (lv && (intent === a.side || (a.ttc !== null && a.ttc < 2))) lv = 2;
+      if (lv && (intent === a.side || (a.ttc !== null && a.ttc < 2 && f.objs[i].vz >= 2))) lv = 2;
       if (a.side === 'L') L = Math.max(L, lv); else R = Math.max(R, lv);
+      if (lv && a.squeeze) { if (a.side === 'L') sqL = true; else sqR = true; }
       if (a.ttc !== null && (!threat || a.ttc < threat.ttc)) threat = { id: f.objs[i].id, ttc: +a.ttc.toFixed(2) };
     }
-    var path = null;
+    var path = null, conflict = false;
     if (intent) {
-      var phi = f.drift ? -Math.asin(f.drift / f.ego) : 0;
-      path = lanePath(intent === 'L' ? laneX - 3.5 : laneX + 3.5, phi, Math.max(15, f.ego * 4));
+      var phi = f.drift ? -Math.asin(f.drift / f.ego) : 0, len = Math.max(15, f.ego * 4), target = intent === 'L' ? laneX - 3.5 : laneX + 3.5;
+      path = lanePath(target, phi, len);
+      conflict = pathConflict(f.objs, intent, target, len, f.ego);
     }
-    var lca = { L: L, R: R, intent: intent, path: path, pathOk: !(intent === 'L' ? L === 2 : intent === 'R' ? R === 2 : false),
-      threat: threat, zones: zones(laneX) };
+    var zs = zones(laneX);
+    if (sqL) zs.L[2] = Math.max(zs.L[2], -(EGO_HW + 0.2));   // 鑽車縫：盲點區往內延伸到自車側面
+    if (sqR) zs.R[0] = Math.min(zs.R[0], EGO_HW + 0.2);
+    var lca = { L: L, R: R, intent: intent, path: path,
+      pathOk: !conflict && !(intent === 'L' ? L === 2 : intent === 'R' ? R === 2 : false), threat: threat, zones: zs };
     lastP = { objs: f.objs, lca: f.noLca ? undefined : lca };
     syncObjs(f.objs);
     info.textContent = f.noLca ? '（payload 沒有 lca）' :

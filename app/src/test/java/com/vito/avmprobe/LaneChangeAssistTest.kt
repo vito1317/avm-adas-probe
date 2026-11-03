@@ -121,9 +121,153 @@ class LaneChangeAssistTest {
         assertEquals(0, feed(d, listOf(car(4, -3.5f, -3f, -8f)), 0, 5, ego = null).L)
         val e = LaneChangeAssist()
         assertEquals(1, feed(e, listOf(car(5, -3.5f, -3f, 0f)), 0, 5, ego = null).L)
-        // 自車低速爬行（< 3 m/s）時，旁邊停住的車仍提示
+        // 自車低速爬行（塞車，< 3 m/s）時，旁邊停住的車平常不亮（不然整段塞車兩側一直亮、蓋掉鑽車縫的機車）…
         val f = LaneChangeAssist()
-        assertEquals(1, feed(f, listOf(car(6, 3.4f, -3f, -1f, sog = 0f)), 0, 5, ego = 1f).R)
+        assertEquals(0, feed(f, listOf(car(6, 3.4f, -3f, -1f, sog = 0f)), 0, 5, ego = 1f).R)
+        // …但打方向燈往它那邊 → 危險
+        assertEquals(2, feed(f, listOf(car(6, 3.4f, -3f, -1f, sog = 0f)), 500, 4, turn = 'R', ego = 1f).R)
+        // 正被超越（> 10 km/h）但還在車旁：平常不亮，打燈往它那邊 → 危險（切回去會擦到）
+        val g = LaneChangeAssist()
+        assertEquals(0, feed(g, listOf(car(7, -3.5f, -2f, -4.2f, sog = 12.5f)), 0, 4).L)
+        assertEquals(2, feed(g, listOf(car(7, -3.5f, -2f, -4.2f, sog = 12.5f)), 400, 4, turn = 'L').L)
+        // 速度還不確定的新軌跡（svz 大）不因為估出 −4 m/s 就被當成「正被超越」而抑制
+        val h = LaneChangeAssist()
+        val young = Track(8, "car", -3.5f, -3f, 0f, -4.0f, 800, 4, true, 1.8f, 4.5f, 12.7f, svz = 2.5f)
+        assertEquals(1, feed(h, listOf(young), 0, 4).L)
+    }
+
+    @Test
+    fun reversingDisablesWarnings() {
+        // 倒車經過路邊停車：停著的車相對自車往前 1.5 m/s，看起來就像「後方來車」
+        val parked = listOf(car(1, 2.7f, -6f, 1.5f), car(2, 2.7f, -1f, 1.5f))
+        val a = LaneChangeAssist()
+        val s = feed(a, parked, 0, 6, ego = -1.5f)        // 車速帶負號 = 倒車
+        assertEquals(0, s.R)
+        assertTrue(s.reversing)
+        val b = LaneChangeAssist()
+        var t: LcaState? = null
+        for (i in 0 until 6) t = b.update(parked, i * 100L, null, null, 'R', null, null, reverse = true)   // 只知道排檔
+        assertEquals(0, t!!.R)
+        assertNull(t.intent)
+        assertNull(t.path)
+        // 不知道在倒車（GPS 只有速率）：無法分辨，會警示 —— 整合端要傳排檔
+        val c = LaneChangeAssist()
+        assertTrue(feed(c, parked, 0, 6, ego = 1.5f).R >= 1)
+    }
+
+    @Test
+    fun squeezingTwoWheelerBetweenEgoAndLaneLine() {
+        // 台灣常見：機車從後方鑽進自車與車道線之間（自車靠右，左線在 −2.45）
+        val lanes = Pair<Float?, Float?>(-2.45f, 1.05f)
+        val moto = { z: Float, vz: Float -> Track(3, "moto", -1.7f, z, 0f, vz, 3000, 8, true, 0.7f, 1.9f, 10f, svz = 0.5f) }
+        val a = LaneChangeAssist()
+        var s = feed(a, listOf(moto(-14f, 5f)), 0, 3, lane = lanes, ego = 5.6f)
+        assertEquals("後方 14 m、+5 m/s 鑽縫機車：來車（TTC 2.1 s）", 1, s.L)
+        assertEquals(3, s.threatId)
+        s = feed(a, listOf(moto(-1f, 5f)), 300, 3, lane = lanes, ego = 5.6f)
+        assertEquals("並排：盲點", 1, s.L)
+        assertEquals("畫出來的盲點區延伸到自車側面", -(LaneChangeAssist.EGO_HW + 0.2f), s.zoneL[2], 1e-4f)
+        s = feed(a, listOf(moto(-1f, 5f)), 600, 3, lane = lanes, ego = 5.6f, turn = 'L')
+        assertEquals("打左燈：危險", 2, s.L)
+        assertFalse(s.pathOk)
+        // 同一台機車停在自車正後方偏左 1.3 m、5 m 外跟車：不在並排帶，也沒接近 → 不亮
+        val b = LaneChangeAssist()
+        assertEquals(0, feed(b, listOf(moto(-8f, 0f)), 0, 5, lane = lanes, ego = 5.6f).L)
+        // 汽車不會擠在自車與車道線之間：同一個位置的汽車軌跡（多半是定位誤差）不算鑽縫
+        val car = LaneChangeAssist()
+        assertEquals(0, feed(car, listOf(car(4, -1.3f, -1f, 0f)), 0, 5, lane = lanes).L)
+    }
+
+    @Test
+    fun wrongLaneLineDoesNotShiftZones() {
+        // 3 m 車道、自車置中：先正常 1 s，接著最近的左線被旁邊的車擋住，RoadTracker 報成再外一條（−4.5）
+        val lca = LaneChangeAssist()
+        val adj = listOf(car(1, -3.0f, -3f, 0.5f))
+        var s: LcaState? = null
+        for (i in 0 until 10) s = lca.update(adj, i * 100L, -1.5f, 1.5f, null, null, 16.7f)
+        assertEquals(1, s!!.L)
+        for (i in 10 until 60) {
+            s = lca.update(adj, i * 100L, -4.5f, 1.5f, null, null, 16.7f)
+            assertEquals("錯線 t=${i * 100} 盲點區不能整個移走", 1, s.L)
+            assertEquals(-1.5f, s.zoneL[2], 0.2f)
+            assertNull("錯線不能變成偏移意圖", s.intent)
+        }
+        // 地上補丁貼著車身被當成左線（−0.95）時亮時不亮
+        val b = LaneChangeAssist()
+        for (i in 0 until 60) {
+            val l = if (i > 10 && i % 3 == 0) -0.95f else -1.75f
+            s = b.update(emptyList(), i * 100L, l, 1.75f, null, null, 16.7f)
+            assertNull("假線 t=${i * 100}", s.intent)
+            assertEquals(-1.75f, s.zoneL[2], 0.15f)
+        }
+        // 只有一條錯線（右線報成 4.875）且沒有別的：不採用，1.5 s 後改用預設車道
+        val c = LaneChangeAssist()
+        for (i in 0 until 10) s = c.update(emptyList(), i * 100L, -1.625f, 1.625f, null, null, 16.7f)
+        for (i in 10 until 40) s = c.update(emptyList(), i * 100L, null, 4.875f, null, null, 16.7f)
+        assertFalse(s!!.laneOk)
+        assertEquals(1.75f, s.zoneR[0], 1e-4f)
+    }
+
+    @Test
+    fun laneWidthIsLearnedEvenIfFirstFrameHadOneLine() {
+        // 3 m 車道。第一筆只有左線（右線剛好掉了）→ 用預設寬度 3.5 初始化；之後要從兩條線學到 3 m，
+        // 左線再被擋掉、只剩右線時中心不能跳 0.25 m 以上，也不能冒出假的偏移意圖
+        val lca = LaneChangeAssist()
+        var s = lca.update(emptyList(), 0, -1.5f, null, null, null, 16.7f)
+        var t = 100L
+        repeat(20) { s = lca.update(emptyList(), t, -1.5f + (it % 2) * 0.01f, 1.5f, null, null, 16.7f); t += 100 }
+        assertEquals(3.0f, s.laneW, 0.05f)
+        repeat(20) {
+            s = lca.update(emptyList(), t, null, 1.5f + (it % 2) * 0.01f, null, null, 16.7f)
+            assertNull("t=$t", s.intent)
+            assertEquals(-1.5f, s.zoneL[2], 0.1f)
+            t += 100
+        }
+    }
+
+    @Test
+    fun pathConflictWithCarAheadInTargetLane() {
+        // 左車道的車在前車門以前（盲點區外）、同速並行：盲點不亮，但換過去會切到它屁股 → 路徑不可行
+        val a = LaneChangeAssist()
+        var s = feed(a, listOf(car(1, -3.5f, 4.5f, 0f, sog = 16.7f)), 0, 4, turn = 'L')
+        assertEquals(0, s.L)
+        assertFalse(s.pathOk)
+        // 同一台車在前方 20 m，或比自車快 3 m/s、已在前方 6 m（越拉越遠）：可行
+        val b = LaneChangeAssist()
+        assertTrue(feed(b, listOf(car(1, -3.5f, 20f, 0f, sog = 16.7f)), 0, 4, turn = 'L').pathOk)
+        val c = LaneChangeAssist()
+        assertTrue(feed(c, listOf(car(1, -3.5f, 6f, 3f, sog = 19.7f)), 0, 4, turn = 'L').pathOk)
+        // 後方 16 m（盲點區外）、慢 1.5 m/s 越拉越遠：可行；後方 9 m、快 4 m/s 趕上來：不可行（也會因 TTC 亮）
+        val d = LaneChangeAssist()
+        assertTrue(feed(d, listOf(car(1, -3.5f, -16f, -1.5f, sog = 15.2f)), 0, 4, turn = 'L').pathOk)
+        val e = LaneChangeAssist()
+        assertFalse(feed(e, listOf(car(1, -3.5f, -9f, 4f, sog = 20.7f)), 0, 4, turn = 'L').pathOk)
+        // 右邊的車不影響往左換
+        val f = LaneChangeAssist()
+        assertTrue(feed(f, listOf(car(1, 3.5f, 2f, 0f, sog = 16.7f)), 0, 4, turn = 'L').pathOk)
+        // 自己車道正前方的車是跟車距離的問題，不算換道衝突
+        val g = LaneChangeAssist()
+        assertTrue(feed(g, listOf(car(1, 0f, 7f, 0f, sog = 16.7f)), 0, 4, turn = 'L').pathOk)
+    }
+
+    @Test
+    fun pathTargetAfterCrossingTheLine() {
+        // 打左燈換道：跨過線之後燈還亮著，路徑目標要是剛進入的車道，不是再下一條
+        val lca = LaneChangeAssist()
+        var t = 0L
+        var x = 0.0       // 自車相對原車道中心的位置（往左為負）
+        var s: LcaState?
+        repeat(60) {
+            if (it >= 10) x -= 0.06    // 0.6 m/s 往左
+            var l = -1.75 - x
+            var r = 1.75 - x
+            if (l > 0) { r = l; l -= 3.5 }
+            s = lca.update(emptyList(), t, l.toFloat(), r.toFloat(), 'L', null, null)   // 沒車速 → 路徑沿車頭方向，終點 x = 目標
+            val end = s!!.path!!.last()[0]
+            val newLaneCentre = (-3.5 - x).toFloat()
+            assertEquals("t=$t 自車 x=$x", newLaneCentre, end, 0.3f)
+            t += 100
+        }
     }
 
     @Test
@@ -278,7 +422,8 @@ class LaneChangeAssistTest {
             assertTrue("$n 一級延遲 ${a.latMean(1)}", a.latMean(1) < 1.0)
             assertTrue("$n 誤報率 ${a.faRate}", a.faRate < 0.03)
         }
-        for (n in listOf("左後來車 +10km/h", "左後來車 +30km/h", "打左燈+盲點有車", "未打燈左偏+盲點有車", "後→側鏡頭交接 +5")) {
+        // 「後→側鏡頭交接 +5」只有 5 km/h 接近：設計上不靠 TTC 升紅燈（< 7 km/h 只亮琥珀），不列入
+        for (n in listOf("左後來車 +10km/h", "左後來車 +30km/h", "打左燈+盲點有車", "未打燈左偏+盲點有車")) {
             val a = r(n)
             assertTrue("$n 二級漏報 ${a.misses(2)}/${a.onsets(2)}", a.misses(2) <= a.onsets(2) / 10)
             // +30 km/h：後方 15 m 才看得到，第一眼 TTC 就只剩 ~1.3 s；要 3–4 次偵測才估得出接近速度
@@ -286,5 +431,38 @@ class LaneChangeAssistTest {
         }
         assertTrue(r("打左燈+盲點有車").pathOkAgree > 0.9)
         assertTrue(r("未打燈左偏 無來車").intentMiss <= 2)
+    }
+
+    @Test
+    fun scenarioSafetyReview() {
+        println("\n=== 安全審查：獨立需求（必須/不該亮），每情境 25 個亂數種子 ===")
+        val res = (LcaScenarios.all() + LcaScenarios.hard()).associate { it.name to LcaScenarios.evaluate(it) }
+        for (a in res.values) println(a.reqRow())
+        fun r(n: String) = res.getValue(n)
+
+        for ((n, a) in res) {
+            // 漏報（危險）：必須亮的整段沒亮——只有感測距離極限的情境（+50 km/h 來車在 15 m 處才看得到）容許少數
+            val ep1 = if (n.contains("+50")) 2 else 0
+            val ep2 = when { n.contains("+50") -> 4; n.contains("煞車") -> 2; else -> 1 }
+            assertTrue("$n 必須一級漏段 ${a.reqMissEp(1)}/${a.reqEp(1)}", a.reqMissEp(1) <= ep1)
+            assertTrue("$n 必須二級漏段 ${a.reqMissEp(2)}/${a.reqEp(2)}", a.reqMissEp(2) <= ep2)
+            assertTrue("$n 必須一級漏時 ${a.reqMissRate(1)}", a.reqMissRate(1) < 0.25)
+            assertTrue("$n 危險卻顯示可行 ${a.badPathOk}", a.badPathOk < 0.01)
+            // 擾人：不該亮卻亮（不知道排檔的倒車是已知限制，另外記錄）
+            if (n == "倒車經過路邊停車 不知排檔") continue
+            assertTrue("$n 不該亮一級 ${a.faReq(1)}", a.faReq(1) < 0.015)
+            assertTrue("$n 不該亮二級 ${a.faReq(2)}", a.faReq(2) < 0.015)
+        }
+        // 這次審查修掉的缺陷（括號內是修之前）
+        assertEquals("鑽車縫機車（19/25 段漏報）", 0, r("機車鑽縫 左 自車靠右").reqMissEp(1))
+        assertEquals("右側鑽車縫（1/25）", 0, r("機車鑽縫 右 不打燈").reqMissEp(1))
+        assertTrue("車道線錯一條（98% 漏報）", r("車道線 漏近線報遠線(3m道)").reqMissRate(1) < 0.02)
+        assertEquals("知道排檔的倒車（48% 一級、28% 二級誤報）", 0.0, r("倒車經過路邊停車 知道排檔").faReq(1) + r("倒車經過路邊停車 知道排檔").faReq(2), 0.0)
+        assertTrue("塞車時靜止車讓兩側一直亮（50%）", r("停滯車陣 機車鑽縫").extraOn < 0.15)
+        assertTrue("目標車道前方並行車：路徑仍顯示可行（98%）", r("打左燈 左前方並行車").pathOkShare < 0.1)
+        assertTrue("目標車道前方遠車：路徑可行", r("打左燈 左前方遠車").pathOkShare > 0.9)
+        // 已知限制：GPS 只有速率、又不知道排檔時倒車，路邊停的車看起來就像後方來車
+        println("已知限制 倒車不知排檔：不該亮 一級 %.1f%% 二級 %.1f%%".format(
+            r("倒車經過路邊停車 不知排檔").faReq(1) * 100, r("倒車經過路邊停車 不知排檔").faReq(2) * 100))
     }
 }

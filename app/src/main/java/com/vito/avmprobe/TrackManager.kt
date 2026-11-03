@@ -5,6 +5,7 @@ import kotlin.math.cos
 import kotlin.math.hypot
 import kotlin.math.ln
 import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.sin
 import kotlin.math.sqrt
 
@@ -100,6 +101,10 @@ class TrackManager(
         }
 
         private const val GATE = 13.8            // 馬氏距離平方門檻（2 自由度 99.9%）
+        private const val HUBER = 4.0            // 馬氏距離平方超過這個（2σ）就放大量測誤差
+        private const val HUBER_HITS = 5         // 至少命中這麼多次（已收斂）才做
+        private const val COVER_R = 8.0          // 「該看得到」的範圍：偵測率高的距離內
+        private val COS_COVER = cos(Math.toRadians(80.0))
         private const val MAX_JUMP = 8.0         // 再怎麼不確定，一次也不跳超過 8 m
         private const val TENTATIVE_MS = 1000L   // 候選軌跡 1 s 內沒第二次命中就丟
         private const val COAST_MS = 1200L       // 確認軌跡沒看到 1.2 s 就刪
@@ -126,9 +131,11 @@ class TrackManager(
         var type = ""
         var cam = ""
         var dead = false
+        /** 連續幾次「鏡頭該看得到卻沒看到」。 */
+        var miss = 0
     }
 
-    private class Cand(val di: Int, val tr: T, val cost: Double, val m: DoubleArray)
+    private class Cand(val di: Int, val tr: T, val cost: Double, val m: DoubleArray, val d2: Double)
 
     private val tracks = ArrayList<T>()
     private var nextId = 1
@@ -147,10 +154,15 @@ class TrackManager(
     }
 
     /**
-     * dets：自上次呼叫後新產生的偵測（通常是一顆鏡頭的結果）。egoSpeedMps：GPS 車速，可為 null。
-     * egoYawRate：自車橫擺角速度 rad/s（+ = 左轉），有方向盤角/陀螺儀時才傳。回傳所有軌跡（含候選，confirmed=false）。
+     * dets：自上次呼叫後新產生的偵測（通常是一顆鏡頭的結果）。egoSpeedMps：車速 m/s，可為 null；
+     * 知道在倒車（排檔 R）時傳負值（GPS 只有速率，分不出前進倒退）。
+     * egoYawRate：自車橫擺角速度 rad/s（+ = 左轉），有方向盤角/陀螺儀時才傳。
+     * cam：這批偵測來自哪顆鏡頭——**沒偵測到東西時也要傳**，追蹤器才知道「該看到卻沒看到」，
+     * 兩個誤報湊成的假軌跡才能很快刪掉（不傳就只靠逾時）。回傳所有軌跡（含候選，confirmed=false）。
      */
-    fun update(dets: List<Det>, nowMs: Long, egoSpeedMps: Float?, egoYawRate: Float? = null): List<Track> {
+    fun update(
+        dets: List<Det>, nowMs: Long, egoSpeedMps: Float?, egoYawRate: Float? = null, cam: String? = null
+    ): List<Track> {
         if (lastMs == Long.MIN_VALUE) lastMs = nowMs
         val dt = (nowMs - lastMs).coerceAtLeast(0L) / 1000.0
         if (dt > 0) {
@@ -158,16 +170,20 @@ class TrackManager(
             for (tr in tracks) predict(tr, dt, rot)
             lastMs = nowMs
         }
-        val ego = egoSpeedMps?.takeIf { it.isFinite() && it >= 0f }?.toDouble()
+        val ego = egoSpeedMps?.takeIf { it.isFinite() }?.toDouble()
 
         val groups = LinkedHashMap<String, ArrayList<Det>>()
+        if (cam != null) groups[cam] = ArrayList()
         for (d in dets) if (d.x.isFinite() && d.z.isFinite()) groups.getOrPut(d.cam) { ArrayList() }.add(d)
-        for ((cam, list) in groups) {
-            val sig = signature(list)
-            if (lastSig[cam] == sig && nowMs - (lastSigAt[cam] ?: Long.MIN_VALUE / 2) < 3000) continue  // 重送的舊結果
-            lastSig[cam] = sig
-            lastSigAt[cam] = nowMs
-            associate(list, nowMs, ego)
+        for ((c, list) in groups) {
+            if (list.isNotEmpty()) {
+                val sig = signature(list)
+                if (lastSig[c] == sig && nowMs - (lastSigAt[c] ?: Long.MIN_VALUE / 2) < 3000) continue  // 重送的舊結果
+                lastSig[c] = sig
+                lastSigAt[c] = nowMs
+            }
+            val hit = associate(list, nowMs, ego)
+            countMisses(c, hit)
         }
         // 三角錐是靜止物：相對速度 = −自車速度（虛擬量測）
         if (ego != null) for (tr in tracks) if (tr.group == G_CONE) kalman(tr, 2, 3, 0.0, -ego, 0.0, 0.0, 0.36, 0.0, 0.36)
@@ -250,8 +266,10 @@ class TrackManager(
     private fun compatible(tr: T, g: Int, t: String): Boolean =
         tr.group == g && (g != G_OTHER || tr.type == t)
 
-    private fun associate(list: List<Det>, now: Long, ego: Double?) {
+    /** 回傳這批偵測更新到的軌跡。 */
+    private fun associate(list: List<Det>, now: Long, ego: Double?): Set<T> {
         val n = list.size
+        if (n == 0) return emptySet()
         val m = Array(n) { DoubleArray(6) }
         for (i in 0 until n) measurement(list[i], list[i].t, now, m[i])
         val cands = ArrayList<Cand>()
@@ -272,7 +290,7 @@ class TrackManager(
                 if (det <= 1e-12) continue
                 val d2 = (y0 * y0 * s11 - 2 * y0 * y1 * s01 + y1 * y1 * s00) / det
                 if (d2 > GATE) continue
-                cands.add(Cand(i, tr, d2 + ln(det) - if (tr.confirmed) 1.0 else 0.0, mi))
+                cands.add(Cand(i, tr, d2 + ln(det) - if (tr.confirmed) 1.0 else 0.0, mi, d2))
             }
         }
         cands.sortBy { it.cost }
@@ -284,10 +302,55 @@ class TrackManager(
             usedT.add(c.tr)
             val mi = c.m
             val tr = c.tr
-            kalman(tr, 0, 1, mi[0], mi[1], tr.s[2] * mi[5], tr.s[3] * mi[5], mi[2], mi[3], mi[4])
+            // 穩健更新（Huber）：已收斂的軌跡遇到偏離超過 2σ 的量測就把 R 放大，偶發的大距離誤差不會把軌跡一次拉走；
+            // 新軌跡不做（速度還沒收斂，大偏差多半是真的，壓下去反而跟不上，例如快速經過的路邊停車）
+            val f = if (c.d2 > HUBER && tr.hits >= HUBER_HITS) min(c.d2 / HUBER, 10.0) else 1.0
+            kalman(tr, 0, 1, mi[0], mi[1], tr.s[2] * mi[5], tr.s[3] * mi[5], mi[2] * f, mi[3] * f, mi[4] * f)
             hit(tr, list[c.di], now, ego)
         }
-        for (i in 0 until n) if (!usedD[i]) birth(list[i], m[i], now, ego)
+        for (i in 0 until n) if (!usedD[i]) birth(list[i], m[i], now, ego)?.let { usedT.add(it) }
+        return usedT
+    }
+
+    /**
+     * 這顆鏡頭該看得到（離鏡頭 1.5–8 m、在魚眼中央 160° 內、沒被自己車身擋住）卻沒更新到的軌跡 → miss + 1。
+     * 只用來早點刪掉證據很少的軌跡（候選、只有 2–3 次命中的確認軌跡）。
+     */
+    private fun countMisses(cam: String, hit: Set<T>) {
+        val cp = camPos[cam] ?: return
+        if (cp.size < 4) return
+        for (tr in tracks) {
+            if (tr.dead) continue
+            if (tr in hit) { tr.miss = 0; continue }
+            val dx = tr.s[0] - cp[0]
+            val dz = tr.s[1] - cp[1]
+            val d = hypot(dx, dz)
+            if (d < 1.5 || d > COVER_R) continue
+            if ((dx * cp[2] + dz * cp[3]) / d < COS_COVER) continue
+            if (segHitsEgo(cp[0].toDouble(), cp[1].toDouble(), tr.s[0], tr.s[1])) continue
+            tr.miss++
+        }
+    }
+
+    /** 線段（鏡頭 → 點）穿過自車車身（內縮 0.1 m）。 */
+    private fun segHitsEgo(x0: Double, z0: Double, x1: Double, z1: Double): Boolean {
+        val a = EGO_HW - 0.1
+        val b = EGO_HL - 0.1
+        var t0 = 0.0
+        var t1 = 1.0
+        val dx = x1 - x0
+        val dz = z1 - z0
+        val p = doubleArrayOf(-dx, dx, -dz, dz)
+        val q = doubleArrayOf(x0 + a, a - x0, z0 + b, b - z0)
+        for (i in 0..3) {
+            if (p[i] == 0.0) {
+                if (q[i] < 0) return false
+            } else {
+                val r = q[i] / p[i]
+                if (p[i] < 0) { if (r > t1) return false; if (r > t0) t0 = r } else { if (r < t0) return false; if (r < t1) t1 = r }
+            }
+        }
+        return t0 < t1 - 1e-9
     }
 
     /** 第 2 次命中就確認；但兩點算出的運動不合理（多半是兩個誤報剛好連上）時要第 3 次命中。 */
@@ -319,12 +382,19 @@ class TrackManager(
         tr.type = best
     }
 
-    private fun birth(d: Det, mi: DoubleArray, now: Long, ego: Double?) {
+    private fun birth(d: Det, mi: DoubleArray, now: Long, ego: Double?): T? {
         val g = group(d.t)
-        if (abs(mi[0]) < EGO_HW + 0.05 && abs(mi[1]) < EGO_HL + 0.05) return   // 自己的車身
+        if (abs(mi[0]) < EGO_HW + 0.05 && abs(mi[1]) < EGO_HL + 0.05) return null   // 自己的車身
         val near = birthNear(g)
         for (tr in tracks) {
-            if (!tr.dead && tr.group == g && hypot(tr.s[0] - mi[0], tr.s[1] - mi[1]) < near) return
+            if (tr.dead || tr.group != g) continue
+            if (hypot(tr.s[0] - mi[0], tr.s[1] - mi[1]) < near) return null
+            // 汽車類：落在既有軌跡的車身範圍裡（大客車/卡車 7–11 m 長，不同鏡頭看到的框中心可以差好幾公尺）。
+            // 二輪/行人不套用：並排騎/走的兩個要分得開
+            if (g == G_VEH) {
+                val sz = size(tr.type)
+                if (abs(tr.s[0] - mi[0]) < sz[0] / 2 + 0.6 && abs(tr.s[1] - mi[1]) < sz[1] / 2 + 1.0) return null
+            }
         }
         val tr = T(nextId++, g, now)
         val e = ego ?: 0.0
@@ -336,8 +406,8 @@ class TrackManager(
         when (g) {
             G_CONE -> { vz0 = -e; svx = if (ego != null) 1.0 else 4.0; svz = svx }
             G_PED -> { vz0 = -e; svx = if (ego != null) 2.5 else 4.0; svz = svx }
-            G_VEH, G_TWO -> { vz0 = 0.0; svx = 3.0; svz = max(7.0, 0.6 * e) }
-            else -> { vz0 = 0.0; svx = 5.0; svz = max(7.0, 0.6 * e) }
+            G_VEH, G_TWO -> { vz0 = 0.0; svx = 3.0; svz = max(7.0, 0.6 * abs(e)) }
+            else -> { vz0 = 0.0; svx = 5.0; svz = max(7.0, 0.6 * abs(e)) }
         }
         tr.s[0] = mi[0]; tr.s[1] = mi[1]; tr.s[2] = 0.0; tr.s[3] = vz0
         tr.p.fill(0.0)
@@ -346,6 +416,7 @@ class TrackManager(
         tr.cam = d.cam
         vote(tr, d)
         tracks.add(tr)
+        return tr
     }
 
     // ---------------- 卡爾曼 ----------------
@@ -454,6 +525,9 @@ class TrackManager(
             }
             val sd = sqrt(max(tr.p[0] + tr.p[5], 0.0) / 2)
             if (unseen > limit || hypot(tr.s[0], tr.s[1]) > 40 || (tr.confirmed && sd > 6)) tr.dead = true
+            // 證據很少的軌跡，鏡頭明明該看到卻連續沒看到 → 多半是兩個誤報湊成的，早點刪
+            if (!tr.confirmed && tr.miss >= 2) tr.dead = true
+            if (tr.confirmed && tr.hits <= 3 && tr.miss >= 3) tr.dead = true
         }
         // 同一物件長出兩條確認軌跡（例如鏡頭交接時量測跳太多）→ 留舊 id，狀態取最近更新的那條
         for (i in tracks.indices) {
@@ -462,7 +536,11 @@ class TrackManager(
             for (j in i + 1 until tracks.size) {
                 val b = tracks[j]
                 if (b.dead || !b.confirmed || b.group != a.group) continue
-                if (hypot(a.s[0] - b.s[0], a.s[1] - b.s[1]) > mergeNear(a.group)) continue
+                val dx = abs(a.s[0] - b.s[0])
+                val dz = abs(a.s[1] - b.s[1])
+                // 很近，或是長車（大客車）縱向重疊一半以上
+                val overlap = a.group == G_VEH && dx < 1.2 && dz < (size(a.type)[1] + size(b.type)[1]) / 4
+                if (hypot(dx, dz) > mergeNear(a.group) && !overlap) continue
                 if (hypot(a.s[2] - b.s[2], a.s[3] - b.s[3]) > 3.0) continue
                 val keep = if (a.id < b.id) a else b
                 val drop = if (keep === a) b else a
@@ -473,6 +551,7 @@ class TrackManager(
                     keep.cam = drop.cam
                 }
                 keep.hits += drop.hits
+                keep.miss = min(keep.miss, drop.miss)
                 drop.dead = true
             }
         }

@@ -7,6 +7,7 @@
  * lca = payload.lca：{ L, R, intent, path: [[x,z],...]|null, pathOk, threat: {id, ttc}|null, zones: {L:[xMin,zMin,xMax,zMax], R:[...]} }
  * objs = payload.objs（帶 id、x、z 公尺，z = 前方）。座標：場景 x = x、場景 z = −z。
  * lca 不存在或 1.2 s 沒換新物件 → 全部收起來。
+ * 有換道意圖但 pathOk = false、該側又沒有盲點/來車等級時（目標車道前方有並行車）：該側顯示「目標車道有車」。
  */
 (function () {
   'use strict';
@@ -18,7 +19,7 @@
   var PERIOD = 2.2;        // 箭紋間距（m）
   var FLOW = 2.0;          // 箭紋流動速度（m/s）
   var MAXV = 512;          // 路徑最多取樣點
-  var TAG_H = { truck: 3.9, bus: 3.9 };
+  var TAG_H = { truck: 3.9, bus: 3.9, moto: 2.4, bigbike: 2.4, bike: 2.4 };
 
   var T = null, group = null, hud = null, inited = false;
   var C = {};
@@ -316,14 +317,17 @@
     return null;
   }
 
-  function updBadge(b, side, lv, closing) {
-    var text = lv === 2 ? '危險' : lv === 1 ? (closing ? '後方來車' : '盲點有車') : '';
+  // blocked：要往這側換道，但預測路徑會碰到目標車道上的車（例如前車門以前、盲點區外的並行車）
+  function updBadge(b, side, lv, closing, blocked) {
+    var text = lv === 2 ? '危險' : blocked ? '目標車道有車' : lv === 1 ? (closing ? '後方來車' : '盲點有車') : '';
+    var show = lv > 0 || blocked;
     if (lv === b.lv && text === b.text) return;
     b.lv = lv; b.text = text;
-    b.el.hidden = lv === 0;
+    b.el.hidden = !show;
     b.el.className = 'lca-side lca-' + side.toLowerCase() + (lv === 2 ? ' lv2' : '');
     b.tx.textContent = text;
-    b.el.setAttribute('aria-label', lv === 0 ? '' : (side === 'L' ? '左側' : '右側') + (lv === 2 ? '危險，請勿變換車道' : text));
+    b.el.setAttribute('aria-label', !show ? '' : (side === 'L' ? '左側' : '右側') +
+      (lv === 2 ? '危險，請勿變換車道' : blocked ? '目標車道有車，請勿切入' : text));
   }
 
   function updZone(z, rect, lv, dt, now) {
@@ -358,8 +362,9 @@
 
     var to = live ? threatSide(lca, objs) : null;
     var ttc = live && lca.threat && num(lca.threat.ttc) ? lca.threat.ttc : null;
-    updBadge(badge.L, 'L', L, !!to && to.x < 0);
-    updBadge(badge.R, 'R', R, !!to && to.x >= 0);
+    var blocked = live && lca.path && lca.pathOk === false ? lca.intent : null;
+    updBadge(badge.L, 'L', L, !!to && to.x < 0, blocked === 'L');
+    updBadge(badge.R, 'R', R, !!to && to.x >= 0, blocked === 'R');
 
     // 路徑
     var path = live && lca.path && lca.path.length >= 2 ? lca.path : null;
