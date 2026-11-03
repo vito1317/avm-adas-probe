@@ -41,7 +41,8 @@ class SignalProbeActivity : AppCompatActivity() {
         private const val MAX_ACTIONS = 600
         private val KEYWORDS = Regex(
             "turn|lamp|light|signal|blink|flash|indicat|canbus|can_|\\.can\\.|carinfo|car_info|mcu|" +
-                "reverse|backcar|back_car|zhuan|steer|angle|wheel|track|guide|radar|door|gear|speed|acc_",
+                "reverse|backcar|back_car|zhuan|steer|angle|wheel|track|guide|radar|pdc|park|ultrason|" +
+                "sensor|distance|obstacle|leida|door|gear|speed|acc_",
             RegexOption.IGNORE_CASE
         )
         private val ACTION_LIKE = Regex("^[A-Za-z][\\w]*(\\.[\\w]+){2,}$")
@@ -73,7 +74,8 @@ class SignalProbeActivity : AppCompatActivity() {
         })
         col.addView(TextView(this).apply {
             text = "按「開始監聽」後 60 秒內：左轉燈打 5 秒→關，右轉燈打 5 秒→關，" +
-                "（安全、停好的話）打倒車檔→方向盤左右轉到底各一次→回 P。全景360 跳出來沒關係，" +
+                "（安全、停好的話）打倒車檔→方向盤左右轉到底各一次→請人站在車尾 1 m 內讓倒車雷達響幾秒" +
+                "（前雷達也一樣，在車頭前）→回 P。全景360 跳出來沒關係，" +
                 "60 秒後回到這頁按「存檔」，把檔案傳給開發者。"
             textSize = 14f
             setPadding(0, 8, 0, 8)
