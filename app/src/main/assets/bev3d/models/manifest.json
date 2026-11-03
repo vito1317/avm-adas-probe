@@ -1,0 +1,283 @@
+{
+ "car": [
+  {
+   "file": "car_taxi.glb",
+   "length": 4.55,
+   "width": 2.027,
+   "height": 1.401,
+   "tris": 7122,
+   "paint": true,
+   "anim": [],
+   "tint": false,
+   "paintTex": true,
+   "draws": 4,
+   "kb": 430.8
+  },
+  {
+   "file": "car_sedan.glb",
+   "length": 4.697,
+   "width": 1.884,
+   "height": 1.45,
+   "tris": 11307,
+   "paint": true,
+   "anim": [],
+   "tint": true,
+   "paintTex": false,
+   "draws": 3,
+   "kb": 365.7
+  },
+  {
+   "file": "car_logan.glb",
+   "length": 4.247,
+   "width": 1.952,
+   "height": 1.747,
+   "tris": 11755,
+   "paint": true,
+   "anim": [],
+   "tint": true,
+   "paintTex": true,
+   "draws": 5,
+   "kb": 885.1
+  },
+  {
+   "file": "car_hatch.glb",
+   "length": 4.1,
+   "width": 1.805,
+   "height": 1.401,
+   "tris": 6808,
+   "paint": true,
+   "anim": [],
+   "tint": true,
+   "paintTex": true,
+   "draws": 4,
+   "kb": 402.4
+  },
+  {
+   "file": "suv_evoque.glb",
+   "length": 4.355,
+   "width": 2.036,
+   "height": 1.648,
+   "tris": 11754,
+   "paint": true,
+   "anim": [],
+   "tint": true,
+   "paintTex": true,
+   "draws": 5,
+   "kb": 471.8
+  },
+  {
+   "file": "suv_generic.glb",
+   "length": 4.61,
+   "width": 2.067,
+   "height": 1.733,
+   "tris": 7951,
+   "paint": true,
+   "anim": [],
+   "tint": false,
+   "paintTex": true,
+   "draws": 4,
+   "kb": 437.9
+  }
+ ],
+ "van": [
+  {
+   "file": "van_minivan.glb",
+   "length": 4.7,
+   "width": 1.907,
+   "height": 1.799,
+   "tris": 7450,
+   "paint": true,
+   "anim": [],
+   "tint": true,
+   "paintTex": true,
+   "draws": 4,
+   "kb": 419.4
+  },
+  {
+   "file": "van_postvan.glb",
+   "length": 5.34,
+   "width": 2.185,
+   "height": 1.977,
+   "tris": 6031,
+   "paint": true,
+   "anim": [],
+   "tint": false,
+   "paintTex": true,
+   "draws": 4,
+   "kb": 428.7
+  }
+ ],
+ "truck": [
+  {
+   "file": "truck.glb",
+   "length": 5.5,
+   "width": 2.0,
+   "height": 3.3,
+   "tris": 14520,
+   "paint": true,
+   "anim": [],
+   "tint": false,
+   "paintTex": true,
+   "draws": 1,
+   "kb": 963.7
+  }
+ ],
+ "bus": [
+  {
+   "file": "bus.glb",
+   "length": 12.0,
+   "width": 2.84,
+   "height": 3.0,
+   "tris": 12735,
+   "paint": true,
+   "anim": [],
+   "tint": false,
+   "paintTex": true,
+   "draws": 5,
+   "kb": 570.6
+  },
+  {
+   "file": "bus_city.glb",
+   "length": 12.0,
+   "width": 2.75,
+   "height": 3.05,
+   "tris": 9058,
+   "paint": true,
+   "anim": [],
+   "tint": true,
+   "paintTex": true,
+   "draws": 5,
+   "kb": 564.9
+  }
+ ],
+ "moto": [
+  {
+   "file": "scooter_rider.glb",
+   "length": 1.77,
+   "width": 0.747,
+   "height": 1.746,
+   "tris": 11437,
+   "paint": true,
+   "anim": [],
+   "tint": true,
+   "paintTex": true,
+   "draws": 7,
+   "kb": 556.0
+  }
+ ],
+ "bigbike": [
+  {
+   "file": "bigbike_rider.glb",
+   "length": 2.05,
+   "width": 0.724,
+   "height": 1.664,
+   "tris": 11814,
+   "paint": true,
+   "anim": [],
+   "tint": false,
+   "paintTex": true,
+   "draws": 7,
+   "kb": 466.6
+  }
+ ],
+ "bike": [
+  {
+   "file": "bicycle_rider.glb",
+   "length": 1.75,
+   "width": 0.704,
+   "height": 1.78,
+   "tris": 11161,
+   "paint": true,
+   "anim": [],
+   "tint": true,
+   "paintTex": false,
+   "draws": 4,
+   "kb": 452.6
+  }
+ ],
+ "ped": [
+  {
+   "file": "ped_man.glb",
+   "length": 0.433,
+   "width": 0.579,
+   "height": 1.804,
+   "tris": 7836,
+   "paint": false,
+   "anim": [
+    "walk",
+    "idle"
+   ],
+   "tint": false,
+   "paintTex": false,
+   "walkSpeed": 1.02,
+   "draws": 2,
+   "kb": 562.5
+  },
+  {
+   "file": "ped_woman.glb",
+   "length": 0.437,
+   "width": 0.508,
+   "height": 1.743,
+   "tris": 8732,
+   "paint": false,
+   "anim": [
+    "walk",
+    "idle"
+   ],
+   "tint": false,
+   "paintTex": false,
+   "walkSpeed": 1.22,
+   "draws": 2,
+   "kb": 572.9
+  },
+  {
+   "file": "ped_worker.glb",
+   "length": 0.429,
+   "width": 0.579,
+   "height": 1.83,
+   "tris": 8058,
+   "paint": false,
+   "anim": [
+    "walk",
+    "idle"
+   ],
+   "tint": false,
+   "paintTex": false,
+   "walkSpeed": 1.02,
+   "draws": 2,
+   "kb": 474.1
+  },
+  {
+   "file": "ped_child.glb",
+   "length": 0.318,
+   "width": 0.45,
+   "height": 1.428,
+   "tris": 6660,
+   "paint": false,
+   "anim": [
+    "walk",
+    "idle"
+   ],
+   "tint": false,
+   "paintTex": false,
+   "walkSpeed": 0.8,
+   "draws": 1,
+   "kb": 397.9
+  }
+ ],
+ "cone": [
+  {
+   "file": "cone.glb",
+   "length": 0.384,
+   "width": 0.384,
+   "height": 0.7,
+   "tris": 1136,
+   "paint": true,
+   "anim": [],
+   "tint": false,
+   "paintTex": true,
+   "draws": 1,
+   "kb": 89.4
+  }
+ ]
+}
