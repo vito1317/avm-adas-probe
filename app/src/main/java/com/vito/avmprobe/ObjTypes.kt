@@ -1,5 +1,21 @@
 package com.vito.avmprobe
 
+import org.json.JSONArray
+import org.json.JSONObject
+
+/** 停車格 → 3D 面板 JSON：p 為 8 個公尺座標（入口邊在前），k 種類，o 是否有車。flip 時整組轉 180°。 */
+fun slotsJson(slots: List<ParkingSlot>, flip: Boolean): JSONArray {
+    val s = if (flip) -1f else 1f
+    val arr = JSONArray()
+    for (sl in slots) {
+        val p = JSONArray()
+        for (v in sl.p) p.put(Math.round(v * s * 100f) / 100.0)
+        arr.put(JSONObject().put("p", p).put("k", sl.kind.toString())
+            .put("o", if (sl.occupied) 1 else 0).put("c", Math.round(sl.conf * 100f) / 100.0))
+    }
+    return arr
+}
+
 /**
  * 模型類別名稱 → 3D 面板物件種類。用名稱對應（不寫死 COCO 編號），換模型只要附上 labels 檔。
  * 種類：car 轎車、van 箱型車、truck 卡車、bus 公車、moto 機車、bigbike 重機、bike 腳踏車、

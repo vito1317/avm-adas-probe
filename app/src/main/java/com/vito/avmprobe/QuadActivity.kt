@@ -95,6 +95,10 @@ class QuadActivity : AppCompatActivity(), CameraQuadSource.Listener {
     private val roadEx = RoadExtractor()
     private val roadTrack = RoadTracker()
     private val coneDet = ConeDetector()
+    private val slotDet = ParkingSlotDetector()
+    private val slotTrack = SlotTracker()
+    private var slots: List<ParkingSlot> = emptyList()
+    private var slotsAt = 0L
     private var lut: IntArray? = null
     private var lutKey = 0L
     private var bevArgb = IntArray(0)
@@ -443,15 +447,22 @@ class QuadActivity : AppCompatActivity(), CameraQuadSource.Listener {
         val cx = g.bev.originX.toFloat()
         val cy = g.bev.originY.toFloat()
 
+        val ego = floatArrayOf(-EGO_HW - 0.15f, -EGO_HL - 0.15f, EGO_HW + 0.15f, EGO_HL + 0.15f)
         val excl = ArrayList<FloatArray>()
-        excl.add(floatArrayOf(-EGO_HW - 0.15f, -EGO_HL - 0.15f, EGO_HW + 0.15f, EGO_HL + 0.15f))
+        val vehicles = ArrayList<FloatArray>()
+        excl.add(ego)
         for (o in currentObjects(now)) {
             val hl = HALF[o.t] ?: continue
-            excl.add(floatArrayOf(o.x - hl[0], o.z - hl[1], o.x + hl[0], o.z + hl[1]))
+            val r = floatArrayOf(o.x - hl[0], o.z - hl[1], o.x + hl[0], o.z + hl[1])
+            excl.add(r)
+            if (o.t == "car" || o.t == "van" || o.t == "truck" || o.t == "bus") vehicles.add(r)
         }
 
         cones = coneDet.detect(bevArgb, bw, bh, mpp, cx, cy, excl)
         conesAt = now
+        // 停車格的線常被停著的車蓋住，車子另外傳進去判斷「有車」，不當排除區
+        slots = slotTrack.update(slotDet.detect(bevArgb, bw, bh, mpp, cx, cy, listOf(ego), vehicles), now)
+        slotsAt = now
         val mode = prefs.groundMode
         if (mode == AppPrefs.GROUND_VIRTUAL) {
             road = roadTrack.update(roadEx.extract(bevArgb, bw, bh, mpp, cx, cy, excl), now)
@@ -504,6 +515,7 @@ class QuadActivity : AppCompatActivity(), CameraQuadSource.Listener {
                 .put("el", rd.edgeL?.let { r2(it) } ?: JSONObject.NULL)
                 .put("er", rd.edgeR?.let { r2(it) } ?: JSONObject.NULL))
         }
+        if (now - slotsAt < BEV_TTL_MS && slots.isNotEmpty()) p.put("slots", slotsJson(slots, false))
         val t = tl
         if (t != null && now - t.at < TL_TTL_MS) {
             p.put("tl", JSONObject().put("s", t.s).put("c", r2(t.c)).put("ax", r2(t.ax)))

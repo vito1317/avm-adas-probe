@@ -83,6 +83,8 @@ class ScreenCaptureService : Service() {
     private val coneDet = ConeDetector()
     private val roadEx = RoadExtractor()
     private val roadTrack = RoadTracker()
+    private val slotDet = ParkingSlotDetector()
+    private val slotTrack = SlotTracker()
 
     @Volatile private var busy = false
     @Volatile private var saveRequested = false
@@ -268,6 +270,7 @@ class ScreenCaptureService : Service() {
             val mode = prefs.groundMode
             var groundUrl: String? = null
             var road: JSONObject? = null
+            var slotsArr: JSONArray? = null
             val ground = if (roiValid) buildGround(bmp, roiCap) else null
             if (ground != null) {
                 val gw = ground.width
@@ -292,6 +295,13 @@ class ScreenCaptureService : Service() {
                     val rr = roadTrack.update(roadEx.extract(groundArgb, gw, gh, gmpp, gcx, gcy, gx), System.currentTimeMillis())
                     road = roadJson(rr, flip)
                 }
+                // 停車格：車子另外傳（線常被停著的車蓋住），只排除車子圖示與導引線
+                val veh = gx.subList(3, gx.size)
+                val sl = slotTrack.update(
+                    slotDet.detect(groundArgb, gw, gh, gmpp, gcx, gcy, gx.subList(0, 3), veh),
+                    System.currentTimeMillis()
+                )
+                if (sl.isNotEmpty()) slotsArr = slotsJson(sl, flip)
                 if (mode == AppPrefs.GROUND_REAL) {
                     jpegBuf.reset()
                     ground.compress(Bitmap.CompressFormat.JPEG, 60, jpegBuf)
@@ -325,6 +335,7 @@ class ScreenCaptureService : Service() {
                         .put("eng", det.engineName).put("res", det.inputSize))
                 groundUrl?.let { payload.put("ground", it) }
                 road?.let { payload.put("road", it) }
+                slotsArr?.let { payload.put("slots", it) }
                 tl?.let { payload.put("tl", it) }
                 p.push(payload.toString())
             }
