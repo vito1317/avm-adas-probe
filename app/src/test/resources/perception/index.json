@@ -10,5 +10,14 @@
   "road_alley_0",
   "road_urban_screen_0",
   "road_cones_screen_0"
+ ],
+ "curve": [
+  "curve_straight",
+  "curve_right_r50",
+  "curve_left_r50",
+  "curve_right_r30",
+  "curve_left_r30",
+  "curve_right_r200",
+  "curve_short_r30"
  ]
 }

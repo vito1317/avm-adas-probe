@@ -10,10 +10,27 @@ import kotlin.math.min
 import kotlin.math.sin
 import kotlin.math.sqrt
 
-/** 一條地面標線（車體座標，公尺）。kind：'w' 白、'y' 黃、'r' 紅色路緣漆。 */
+/**
+ * 一條地面標線（車體座標，公尺）。kind：'w' 白、'y' 黃、'r' 紅色路緣漆。
+ *
+ * [k] 是 (x1,z1)→(x2,z2) 這段弧的曲率（1/m），0 = 直線，半徑 = 1/|k|。定義（跟前端同一套）：
+ *
+ *   φ = atan2(x2−x1, z2−z1)，弦方向 u = (sin φ, cos φ)、法向 n = (cos φ, −sin φ)；
+ *   s 從弦中點沿 u 起算，弦長 L，弧線 = 弦上對應點 + d(s)·n，其中
+ *
+ *       d(s) = (k / 2) · ((L/2)² − s²)
+ *
+ * 所以 s = ±L/2（兩端點）時 d = 0（弧一定通過兩個端點）、k = 0 退化成直線、
+ * 弧高（中點垂距）= k·L²/8。**k > 0 代表弧在中間往 n 的方向凸**：對接近縱向的線
+ * （φ ≈ 0，u 指向前方、n 指向右方）就是中間往右凸，也就是圓心落在左邊（左彎）。
+ *
+ * 端點順序對調時 u、n 同時反向、s² 不變，所以同一條實體弧線的 [k] 要變號。
+ */
 data class RoadLine(
     val kind: Char, val dashed: Boolean,
-    val x1: Float, val z1: Float, val x2: Float, val z2: Float, val conf: Float
+    val x1: Float, val z1: Float, val x2: Float, val z2: Float, val conf: Float,
+    /** 曲率 1/m，0 = 直線 */
+    val k: Float = 0f
 )
 
 /** edgeL < 0 < edgeR：左右路緣（路面邊界）的 x；找不到就是 null。ms = 這次花的時間。 */
@@ -25,7 +42,7 @@ data class RoadResult(val lines: List<RoadLine>, val edgeL: Float?, val edgeR: F
  * 1. 灰階 opening（只用有效像素）做 top-hat：比 0.44 m 窄的亮東西才算，車身、圖示這種大塊亮面不會變成線。
  * 2. 白：中性色 + top-hat + 周圍是灰色路面 + 旁邊沒有三角錐橘；黃：比周圍黃（色度對比）；紅：色相 0–5°。
  * 3. 8 連通元件：細長的沿自己方向 ±8° 投票，T/L 形（車道線接停止線）全角度投票。
- * 4. Hough 取峰 → 兩次 PCA 重新擬合 → 量漆寬、去重複 → 投影切段（空隙 > 0.6 m）→ 虛實線判斷。
+ * 4. Hough 取峰 → 兩次 PCA 重新擬合 → 二次（彎道）擬合 → 量漆寬、去重複 → 投影切段（空隙 > 0.6 m）→ 虛實線判斷。
  * 5. 路緣：車旁路面取色模型，每 0.25 m 一列往外掃，取最密集的 0.4 m 群。
  * 所有暫存陣列都留在物件裡重複用；同一個 instance 不要多執行緒同時呼叫。
  */
@@ -70,6 +87,26 @@ class RoadExtractor {
         private const val CLUTTER_MAX = 0.25
         private const val EDGE_MIN_ROWS = 4
         private const val EDGE_ROWS = 33
+
+        // ── 二次（彎道）擬合：門檻寧可嚴，寧可畫直線也不要畫出假彎道 ──
+        /** 內點沿線跨度；俯視圖只有 ±7 m，不到 3 m 的二次項純粹在擬合漆邊雜訊 */
+        private const val CURVE_MIN_SPAN = 3.0
+        /** 內點數下限（3 個參數＋F 檢定要有自由度；0.12 m 寬的漆在 0.04 m/px 下 3 m 就有上百點） */
+        private const val CURVE_MIN_PTS = 40
+        /** 二次項的 F 檢定門檻；相鄰像素殘差高度相關，有效樣本數遠小於點數，所以拉高 */
+        private const val CURVE_F = 50.0
+        /** 弧高下限（m）：小於這個等於畫不出來，0.03 m 不到一個像素 */
+        private const val CURVE_SAG_M = 0.03
+        /**
+         * 曲率下限（半徑 150 m）。拼出來的俯視圖本身會歪：量過合成資料 292 條直線，
+         * 假曲率最大 |k| = 0.0044（R = 229 m），門檻壓在它上面約 1.5 倍。
+         * 反正半徑 > 150 m 的彎在 ±7 m 的俯視圖裡畫成直線也看不出差別。
+         */
+        private const val CURVE_MIN_K = 1.0 / 150.0
+        /** 曲率上限：市區彎道半徑通常 > 15 m，|k| > 1/10 幾乎都是雜訊 → 退回直線 */
+        private const val CURVE_MAX_K = 0.1
+        /** 擬合輪數（第一輪 + 兩輪沿弧重收內點）；第三輪跟第二輪差 < 1%，再多沒意義 */
+        private const val CURVE_PASSES = 3
 
         private val COS_T = DoubleArray(180) { cos(Math.toRadians((it - 90).toDouble())) }
         private val SIN_T = DoubleArray(180) { sin(Math.toRadians((it - 90).toDouble())) }
@@ -142,7 +179,9 @@ class RoadExtractor {
 
     private class Cand(
         val kind: Int, val dashed: Boolean, val phi: Double, val phiDeg: Double, val off: Double,
-        val s0: Double, val s1: Double, val conf: Double, val wd: Double
+        val s0: Double, val s1: Double, val conf: Double, val wd: Double,
+        /** 曲率 1/m（0 = 直線）與兩端在法向上的偏移（k = 0 時就等於 off） */
+        val k: Double, val e0: Double, val e1: Double
     )
 
     private val found = ArrayList<Cand>()
@@ -362,9 +401,9 @@ class RoadExtractor {
             lines.add(
                 RoadLine(
                     "wyr"[L.kind - 1], L.dashed,
-                    (L.off * c + L.s0 * s).toFloat(), (-L.off * s + L.s0 * c).toFloat(),
-                    (L.off * c + L.s1 * s).toFloat(), (-L.off * s + L.s1 * c).toFloat(),
-                    min(1.0, L.conf).toFloat()
+                    (L.e0 * c + L.s0 * s).toFloat(), (-L.e0 * s + L.s0 * c).toFloat(),
+                    (L.e1 * c + L.s1 * s).toFloat(), (-L.e1 * s + L.s1 * c).toFloat(),
+                    min(1.0, L.conf).toFloat(), L.k.toFloat()
                 )
             )
         }
@@ -676,6 +715,106 @@ class RoadExtractor {
         return cnt
     }
 
+    // ── 二次（彎道）擬合的結果：曲率與兩端的法向偏移 ──
+    private var curvK = 0.0
+    private var curvE0 = 0.0
+    private var curvE1 = 0.0
+
+    /**
+     * 直線（PCA）擬合之後，對同一組內點再做一次二次擬合：局部座標 s 沿線方向、e 沿法向，
+     * 最小平方解 e = a0 + a1·s' + a2·s'²（s' = s − s̄，正規方程用 Cramer 解）。
+     * 跑三輪：第一輪用直線帶子選的內點，之後沿擬合出來的弧重新收內點再擬一次
+     * （直線帶子只有 ±BAND，會把彎道兩端的漆切掉一半，第一輪的曲率一定偏小）。
+     *
+     * 回報的 [curvK] 是「以兩端點的弦為基準」的曲率：弧高 h = 弧中點相對弦中點、沿法向的位移，
+     * k = 8h / L²（小偏折下 = −2·a2，因為 a2 > 0 的拋物線中間是凹向 −n 的）。
+     * 跟 Python _quad_curve 同一套算式。任何一關不過就 k = 0、兩端退回直線。
+     */
+    private fun curveFit(c: Double, s: Double, d: Double, s0: Double, s1: Double) {
+        curvK = 0.0
+        curvE0 = d
+        curvE1 = d
+        var n = 0
+        var ssum = 0.0
+        var smin = Double.MAX_VALUE
+        var smax = -Double.MAX_VALUE
+        for (q in 0 until kN) if (kSel[q]) {
+            val v = kX[q] * s + kZ[q] * c
+            ssum += v
+            if (v < smin) smin = v
+            if (v > smax) smax = v
+            n++
+        }
+        if (n < CURVE_MIN_PTS || smax - smin < CURVE_MIN_SPAN) return
+        val sb = ssum / n
+        var a0 = 0.0
+        var a1 = 0.0
+        var a2 = 0.0
+        for (pass in 0 until CURVE_PASSES) {
+            var S0 = 0.0; var S1 = 0.0; var S2 = 0.0; var S3 = 0.0; var S4 = 0.0
+            var T0 = 0.0; var T1 = 0.0; var T2 = 0.0; var E2 = 0.0
+            var cnt = 0
+            for (q in 0 until kN) {
+                val sv = kX[q] * s + kZ[q] * c
+                val ev = kX[q] * c - kZ[q] * s - d
+                val u = sv - sb
+                val inB = if (pass == 0) kSel[q]
+                else !kClaim[q] && sv >= smin && sv <= smax &&
+                    abs(ev - (a0 + a1 * u + a2 * u * u)) <= BAND
+                if (!inB) continue
+                val u2 = u * u
+                S0 += 1.0; S1 += u; S2 += u2; S3 += u2 * u; S4 += u2 * u2
+                T0 += ev; T1 += u * ev; T2 += u2 * ev
+                E2 += ev * ev
+                cnt++
+            }
+            if (cnt < CURVE_MIN_PTS) return
+            // 3×3 正規方程（對稱），Cramer
+            val det = S0 * (S2 * S4 - S3 * S3) - S1 * (S1 * S4 - S3 * S2) + S2 * (S1 * S3 - S2 * S2)
+            val detL = S0 * S2 - S1 * S1
+            if (det == 0.0 || detL == 0.0) return
+            a0 = (T0 * (S2 * S4 - S3 * S3) - S1 * (T1 * S4 - S3 * T2) + S2 * (T1 * S3 - S2 * T2)) / det
+            a1 = (S0 * (T1 * S4 - S3 * T2) - T0 * (S1 * S4 - S3 * S2) + S2 * (S1 * T2 - T1 * S2)) / det
+            a2 = (S0 * (S2 * T2 - T1 * S3) - S1 * (S1 * T2 - T1 * S2) + T0 * (S1 * S3 - S2 * S2)) / det
+            // 巢狀的一次模型（同一組點）當對照組
+            val b1 = (S0 * T1 - T0 * S1) / detL
+            val b0 = (T0 * S2 - S1 * T1) / detL
+            val rssQ = E2 - (a0 * T0 + a1 * T1 + a2 * T2)
+            val rssL = E2 - (b0 * T0 + b1 * T1)
+            if (!(rssQ > 0.0) || !(rssL > rssQ)) return
+            if (abs(2.0 * a2) > CURVE_MAX_K) return
+            // 二次項的 F 檢定只對最後一輪（收斂後）做：前幾輪的內點被直線帶子切掉一半，殘差本來就假
+            if (pass == CURVE_PASSES - 1 && (rssL - rssQ) * (cnt - 3) < CURVE_F * rssQ) return
+        }
+        // 換算成「以兩端點的弦為基準」的曲率
+        val sm = (s0 + s1) / 2.0
+        val u0 = s0 - sb
+        val u1 = s1 - sb
+        val um = sm - sb
+        val e0 = d + a0 + a1 * u0 + a2 * u0 * u0
+        val e1 = d + a0 + a1 * u1 + a2 * u1 * u1
+        val em = d + a0 + a1 * um + a2 * um * um
+        val ax = e0 * c + s0 * s
+        val az = -e0 * s + s0 * c
+        val bx = e1 * c + s1 * s
+        val bz = -e1 * s + s1 * c
+        val mx = em * c + sm * s
+        val mz = -em * s + sm * c
+        val vx = bx - ax
+        val vz = bz - az
+        val len = sqrt(vx * vx + vz * vz)
+        if (len < CURVE_MIN_SPAN) return
+        val pc = atan2(vx, vz)
+        val nx = cos(pc)
+        val nz = -sin(pc)
+        val hh = (mx - (ax + bx) / 2.0) * nx + (mz - (az + bz) / 2.0) * nz
+        val kk = 8.0 * hh / (len * len)
+        if (abs(hh) < CURVE_SAG_M || abs(kk) < CURVE_MIN_K || abs(kk) > CURVE_MAX_K) return
+        curvK = kk
+        curvE0 = e0
+        curvE1 = e1
+    }
+
     private fun selectBand(c: Double, s: Double, d: Double, band: Double): Int {
         var cnt = 0
         for (q in 0 until kN) {
@@ -806,6 +945,8 @@ class RoadExtractor {
                 rowDirty[bk] = true
                 continue
             }
+            // 同一組內點再做一次二次擬合（彎道）；不可靠就 k = 0、兩端退回直線
+            curveFit(c, s, d, segA[0], segB[segN - 1])
             // 漆寬：±0.30 m 內未認領像素的橫向分佈，從中心往外找連續區
             java.util.Arrays.fill(hist, 0)
             for (q in 0 until kN) {
@@ -904,7 +1045,7 @@ class RoadExtractor {
                 if (abs(r2) >= 0.35 && abs(r2) <= 0.80 && s2 >= s0all && s2 <= s1all) nb++
             }
             if (nb * m * m > CLUTTER_MAX * 0.9 * (s1all - s0all)) continue
-            found.add(Cand(kind, dashed, phi, phiDeg, d, s0all, s1all, covered / 4.0, wd))
+            found.add(Cand(kind, dashed, phi, phiDeg, d, s0all, s1all, covered / 4.0, wd, curvK, curvE0, curvE1))
         }
     }
 
@@ -1031,11 +1172,13 @@ class RoadExtractor {
 /**
  * 時間平滑：每次 extract 之後呼叫一次。線用（種類、角度、橫向位移、軸向範圍）追蹤，
  * 最近 5 次裡至少 2 次有對到才輸出，800 ms 沒對到就丟；路緣 EMA，1.5 s 沒值就變 null。
+ * 曲率 k 跟角度、偏移同一套 α 做 EMA，但**不**參與配對：彎道偵測本來就會在直線與彎之間跳，
+ * 拿曲率差當配對條件只會把同一條線拆成兩條軌跡（而且剛好在轉彎時拆）。
  */
 class RoadTracker {
     private class Track(
         val kind: Char, var ang: Double, var off: Double, var sMin: Double, var sMax: Double,
-        var conf: Double, var dashP: Double, var last: Long, var hist: Int
+        var conf: Double, var dashP: Double, var k: Double, var last: Long, var hist: Int
     )
 
     private val tracks = ArrayList<Track>()
@@ -1068,6 +1211,8 @@ class RoadTracker {
             val off = L.x1 * c - L.z1 * s
             val sa = L.x1 * s + L.z1 * c
             val sb = L.x2 * s + L.z2 * c
+            // 角度被折回 [−90,90) 時 u、n 會反向（軌跡一律沿 +s 走），曲率跟著變號
+            val kk = if (sa <= sb) L.k.toDouble() else -L.k.toDouble()
             var bestI = -1
             var bestCost = Double.MAX_VALUE
             for (ti in 0 until nOld) {
@@ -1085,7 +1230,7 @@ class RoadTracker {
             }
             if (bestI < 0) {
                 tracks.add(Track(L.kind, ang, off, min(sa, sb), max(sa, sb), L.conf.toDouble(),
-                    if (L.dashed) 1.0 else 0.0, nowMs, 1))
+                    if (L.dashed) 1.0 else 0.0, kk, nowMs, 1))
                 continue
             }
             used[bestI] = true
@@ -1095,12 +1240,14 @@ class RoadTracker {
             val o2 = if (flip) -off else off
             val lo = if (flip) -max(sa, sb) else min(sa, sb)
             val hi = if (flip) -min(sa, sb) else max(sa, sb)
+            val k2 = if (flip) -kk else kk
             t.ang += ALPHA * (a2 - t.ang)
             t.off += ALPHA * (o2 - t.off)
             t.sMin += ALPHA * (lo - t.sMin)
             t.sMax += ALPHA * (hi - t.sMax)
             t.conf += ALPHA * (L.conf - t.conf)
             t.dashP += ALPHA * ((if (L.dashed) 1.0 else 0.0) - t.dashP)
+            t.k += ALPHA * (k2 - t.k)
             if (t.ang >= 90.0) { t.ang -= 180.0; flipTrack(t) } else if (t.ang < -90.0) { t.ang += 180.0; flipTrack(t) }
             t.last = nowMs
             t.hist = t.hist or 1
@@ -1123,7 +1270,7 @@ class RoadTracker {
                     t.kind, t.dashP >= 0.5,
                     (t.off * c + t.sMin * s).toFloat(), (-t.off * s + t.sMin * c).toFloat(),
                     (t.off * c + t.sMax * s).toFloat(), (-t.off * s + t.sMax * c).toFloat(),
-                    t.conf.toFloat()
+                    t.conf.toFloat(), t.k.toFloat()
                 )
             )
         }
@@ -1135,6 +1282,7 @@ class RoadTracker {
         val a = -t.sMax
         t.sMax = -t.sMin
         t.sMin = a
+        t.k = -t.k          // 方向反轉 → 法向跟著反轉 → 曲率變號
     }
 
     fun reset() {

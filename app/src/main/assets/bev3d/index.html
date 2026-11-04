@@ -319,20 +319,26 @@
     var phi = Math.atan2(dx, dz);
     if (phi >= HALF) phi -= Math.PI; else if (phi < -HALF) phi += Math.PI;
     var sn = Math.sin(phi), cs = Math.cos(phi), a = l.x1 * sn + l.z1 * cs, b = l.x2 * sn + l.z2 * cs;
+    // kv = 曲率（1/m）。端點順序決定方向，a > b 時代表 s 軸被反過來存，曲率要跟著變號。
+    var kv = typeof l.kv === 'number' && isFinite(l.kv) ? l.kv : 0;
+    if (a > b) kv = -kv;
     return { k: LINE_C[l.k] ? l.k : 'w', d: !!l.d, phi: phi, rho: ((l.x1 + l.x2) * cs - (l.z1 + l.z2) * sn) / 2,
-      s0: Math.min(a, b), s1: Math.max(a, b), c: typeof l.c === 'number' && isFinite(l.c) ? l.c : 1 };
+      s0: Math.min(a, b), s1: Math.max(a, b), kv: kv,
+      c: typeof l.c === 'number' && isFinite(l.c) ? l.c : 1 };
   }
   function flipLine(tr) {   // 同一條線換成反方向表示（φ ± 180°）
     var s = tr.tphi >= 0 ? -Math.PI : Math.PI, a;
     tr.tphi += s; tr.phi += s;
     tr.trho = -tr.trho; tr.rho = -tr.rho;
+    tr.tkv = -tr.tkv; tr.kv = -tr.kv;   // 方向反過來，弧的凸向也反過來
     a = tr.ts0; tr.ts0 = -tr.ts1; tr.ts1 = -a;
     a = tr.s0; tr.s0 = -tr.s1; tr.s1 = -a;
     tr.tph = mod(tr.ts0, PERIOD); tr.ph = mod(tr.s0, PERIOD);
   }
   function aimLine(tr, o, fl, dp, now) {
     tr.tphi += dp;
-    if (fl) { tr.trho = -o.rho; tr.ts0 = -o.s1; tr.ts1 = -o.s0; } else { tr.trho = o.rho; tr.ts0 = o.s0; tr.ts1 = o.s1; }
+    if (fl) { tr.trho = -o.rho; tr.ts0 = -o.s1; tr.ts1 = -o.s0; tr.tkv = -o.kv; }
+    else { tr.trho = o.rho; tr.ts0 = o.s0; tr.ts1 = o.s1; tr.tkv = o.kv; }
     tr.tph = mod(tr.ts0, PERIOD);   // 虛線以偵測段起點為錨
     tr.d = o.d; tr.tc = o.c; tr.seen = now;
     if (tr.tphi >= HALF || tr.tphi < -HALF) flipLine(tr);
@@ -364,6 +370,7 @@
       var nt = { k: obs[i].k, tphi: obs[i].phi, fade: 0, mesh: null, built: null };
       aimLine(nt, obs[i], false, 0, now);
       nt.phi = nt.tphi; nt.rho = nt.trho; nt.s0 = nt.ts0; nt.s1 = nt.ts1; nt.ph = nt.tph; nt.c = nt.tc;
+      nt.kv = nt.tkv;
       lineTracks.push(nt);
     }
   }
@@ -383,10 +390,19 @@
     road.add(m);
     return m;
   }
-  function putQuad(arr, q, a, b, rho, sn, cs, hw) {
-    // 中心點 P(s) = ρn + s·d；場景 Z = −z
-    var o = q * 12, px = rho * cs, pz = -rho * sn;
-    var ax = px + a * sn, az = pz + a * cs, bx = px + b * sn, bz = pz + b * cs, ex = cs * hw, ez = -sn * hw;
+  // 弧線相對弦的法向偏移：d(s) = (kv/2)·((L/2)² − (s−sm)²)，s = 沿線方向、sm = 弦中點。
+  // 兩端點處 d = 0（弧通過端點），中間鼓起 kv·L²/8，kv = 0 就是直線。
+  function arcD(kv, s, sm, half) {
+    if (!kv) return 0;
+    var t = s - sm;
+    return kv * 0.5 * (half * half - t * t);
+  }
+  function putQuad(arr, q, a, b, rho, sn, cs, hw, da, db) {
+    // 中心點 P(s) = (ρ + d(s))·n + s·u；場景 Z = −z
+    var o = q * 12;
+    var pax = (rho + (da || 0)) * cs, paz = -(rho + (da || 0)) * sn;
+    var pbx = (rho + (db || 0)) * cs, pbz = -(rho + (db || 0)) * sn;
+    var ax = pax + a * sn, az = paz + a * cs, bx = pbx + b * sn, bz = pbz + b * cs, ex = cs * hw, ez = -sn * hw;
     arr[o] = ax - ex; arr[o + 1] = LINE_Y; arr[o + 2] = -(az - ez);
     arr[o + 3] = ax + ex; arr[o + 4] = LINE_Y; arr[o + 5] = -(az + ez);
     arr[o + 6] = bx - ex; arr[o + 7] = LINE_Y; arr[o + 8] = -(bz - ez);
@@ -396,9 +412,11 @@
     var b = tr.built;
     if (b && b.w === w && b.d === tr.d && b.lon === lon && Math.abs(b.phi - tr.phi) < 0.0025 &&
       Math.abs(b.rho - tr.rho) < 0.015 && Math.abs(b.s0 - tr.s0) < 0.05 && Math.abs(b.s1 - tr.s1) < 0.05 &&
+      Math.abs(b.kv - tr.kv) < 0.0008 &&
       (!tr.d || Math.abs(b.ph - tr.ph) < 0.04)) return;   // 變化不明顯就不重建
     if (!b) b = tr.built = {};
     b.w = w; b.d = tr.d; b.lon = lon; b.phi = tr.phi; b.rho = tr.rho; b.s0 = tr.s0; b.s1 = tr.s1; b.ph = tr.ph;
+    b.kv = tr.kv;
     var sn = Math.sin(tr.phi), cs = Math.cos(tr.phi), lo = tr.s0, hi = tr.s1, nq = 0;
     // 縱向線只往外延一小段。俯視圖只看得到車身周圍幾公尺，以前延到前後 40 m，
     // 角度差 1° 到 40 m 外就偏 0.7 m，幾何沒校正時整個畫面都是橫跨全場的假線。
@@ -410,11 +428,21 @@
       lo -= ex; hi += ex;
     }
     var geo = tr.mesh.geometry, arr = geo.attributes.position.array;
-    if (!tr.d) putQuad(arr, nq++, lo, hi, tr.rho, sn, cs, w / 2);
-    else {
+    // 弧以弦為基準：s 從弦中點算，兩端點 d = 0
+    var sm = (tr.s0 + tr.s1) / 2, half = Math.abs(tr.s1 - tr.s0) / 2, kv = tr.kv || 0;
+    if (!tr.d) {
+      // 實線：依弧高決定要切幾段（弧高 1 cm 以內一段就夠，上限留給虛線用的格數）
+      var sag = Math.abs(kv) * (hi - lo) * (hi - lo) / 8;
+      var nSeg = Math.max(1, Math.min(MAXQ, Math.ceil(sag / 0.01)));
+      for (var i = 0; i < nSeg; i++) {
+        var sa = lo + (hi - lo) * i / nSeg, sb = lo + (hi - lo) * (i + 1) / nSeg;
+        putQuad(arr, nq++, sa, sb, tr.rho, sn, cs, w / 2, arcD(kv, sa, sm, half), arcD(kv, sb, sm, half));
+      }
+    } else {
+      // 虛線：每一段實線本身夠短（4 m），用兩端的偏移近似就行
       for (var st = tr.ph + Math.floor((lo - tr.ph) / PERIOD) * PERIOD; st < hi && nq < MAXQ; st += PERIOD) {
         var a = Math.max(st, lo), e = Math.min(st + DASH, hi);   // 實 4 m、空 6 m
-        if (e - a > 0.05) putQuad(arr, nq++, a, e, tr.rho, sn, cs, w / 2);
+        if (e - a > 0.05) putQuad(arr, nq++, a, e, tr.rho, sn, cs, w / 2, arcD(kv, a, sm, half), arcD(kv, e, sm, half));
       }
     }
     geo.attributes.position.needsUpdate = true;
@@ -449,6 +477,7 @@
       tr.rho += (tr.trho - tr.rho) * k;
       tr.s0 += (tr.ts0 - tr.s0) * k;
       tr.s1 += (tr.ts1 - tr.s1) * k;
+      tr.kv += (tr.tkv - tr.kv) * k;
       tr.c += (tr.tc - tr.c) * k;
       tr.ph = mod(tr.ph + (mod(tr.tph - tr.ph + PERIOD / 2, PERIOD) - PERIOD / 2) * k, PERIOD);
     }

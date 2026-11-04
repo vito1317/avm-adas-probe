@@ -11,9 +11,11 @@ import org.junit.Test
 import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.cos
+import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sin
+import kotlin.math.sqrt
 
 /** 測試資料：tools/perception_proto.py fixtures 產生的 PNG + JSON（GT 與 Python 原型輸出）。 */
 internal object PerceptionFixtures {
@@ -44,6 +46,11 @@ internal object PerceptionFixtures {
 
     fun roadNames(): List<String> {
         val a = json("index.json").getJSONArray("road")
+        return (0 until a.length()).map { a.getString(it) }
+    }
+
+    fun curveNames(): List<String> {
+        val a = json("index.json").getJSONArray("curve")
         return (0 until a.length()).map { a.getString(it) }
     }
 
@@ -113,6 +120,33 @@ class RoadExtractorTest {
         return doc to r
     }
 
+    /**
+     * 彎道：曲率的正負與大小。正負錯了彎道會畫成鏡像，而且不會有人發現，所以一定要釘住。
+     * 約定：k 是「以兩端點的弦為基準、往法向凸為正」，所以**向右彎的路 k 是負的**
+     * （向右彎的弧相對自己的弦是往左凸）。
+     */
+    @Test
+    fun recoversCurvature() {
+        var checked = 0
+        for (name in F.curveNames()) {
+            val (doc, r) = run(name)
+            val want = doc.getDouble("want")
+            assertEquals("$name 應該只找到一條線", 1, r.lines.size)
+            val got = r.lines[0].k.toDouble()
+            if (want == 0.0) {
+                assertEquals("$name 直線不可以生出曲率", 0.0, got, 1e-9)
+            } else if (name.endsWith("r200") || name.startsWith("curve_short")) {
+                // 太緩（弧高小於門檻）或跨度太短：寧可回直線，也不要擬合雜訊
+                assertEquals("$name 應該退回直線", 0.0, got, 1e-9)
+            } else {
+                assertTrue("$name 曲率正負錯了：want $want got $got", want * got > 0)
+                assertEquals("$name 曲率大小", want, got, abs(want) * 0.15)
+                checked++
+            }
+        }
+        assertTrue("沒有任何彎道樣本被驗到", checked >= 4)
+    }
+
     @Test
     fun matchesGroundTruth() {
         var nGt = 0
@@ -164,6 +198,8 @@ class RoadExtractorTest {
                     assertEquals("$name[$i] $key", p.getDouble(key), v.toDouble(), 0.02)
                 }
                 assertEquals("$name[$i] conf", p.getDouble("c"), L.conf.toDouble(), 0.02)
+                // 合成場景的線全是直的；曲率要跟 Python 一樣是 0
+                assertEquals("$name[$i] 曲率", p.getDouble("curv"), L.k.toDouble(), 1e-4)
             }
             for (key in listOf("edgeL", "edgeR")) {
                 val pv = F.optD(py, key)
@@ -199,6 +235,172 @@ class RoadExtractorTest {
             val med = F.median(t)
             println("RoadExtractor.extract 300x350 [$name]：中位數 %.2f ms（50 次，暖機 30 次），每次配置約 %d bytes".format(med, alloc))
             assertTrue("太慢：$med ms", med < 100.0)
+        }
+    }
+
+    // ───── 彎道（RoadLine.k） ─────
+    //
+    // 曲率的大小與正負由 curve_* fixture（recoversCurvature / matchesPythonPrototype）釘住。
+    // 這裡再自己畫幾張乾淨的合成圖，補「什麼時候不可以擬合」：直線、短線、斷續歪斜的雜訊。
+    // 畫法跟 tools/perception_proto.py 的 synth_arc 一樣（同樣的視野、漆寬、顏色、一個像素寬的覆蓋率漸層）。
+
+    private val CV_W = 300
+    private val CV_H = 350
+    private val CV_MPP = 0.04f
+    private val CV_CX = 150f
+    private val CV_CY = 175f
+    private val CV_HALF_W = 0.06
+    private val CV_ROAD = doubleArrayOf(100.0, 100.0, 100.0)
+    private val CV_PAINT = doubleArrayOf(228.0, 228.0, 222.0)
+    private val EGO = listOf(floatArrayOf(-0.925f, -2.42f, 0.925f, 2.42f))
+
+    /** cov(x, z) ∈ [0,1] 的覆蓋率 → 柏油與漆的線性混色（floor(v+0.5)，跟 Python 一致）。 */
+    private fun renderBev(cov: (Double, Double) -> Double): PerceptionFixtures.Img {
+        val m = CV_MPP.toDouble()
+        val ox = CV_CX.toDouble()
+        val oy = CV_CY.toDouble()
+        val argb = IntArray(CV_W * CV_H)
+        for (j in 0 until CV_H) {
+            val z = (oy - (j + 0.5)) * m
+            for (i in 0 until CV_W) {
+                val x = (i + 0.5 - ox) * m
+                val c = cov(x, z).coerceIn(0.0, 1.0)
+                var v = 0xFF shl 24
+                for (ch in 0..2) {
+                    val q = floor(CV_ROAD[ch] + (CV_PAINT[ch] - CV_ROAD[ch]) * c + 0.5).toInt()
+                    v = v or (q shl (16 - 8 * ch))
+                }
+                argb[j * CV_W + i] = v
+            }
+        }
+        return PerceptionFixtures.Img(argb, CV_W, CV_H)
+    }
+
+    /** 半徑 R 的弧（R > 0：圓心在 +x 側；R = 0：直線），畫在 |z| ≤ zhalf 的範圍。 */
+    private fun synthArc(R: Double, x0: Double, zhalf: Double): PerceptionFixtures.Img {
+        val m = CV_MPP.toDouble()
+        return renderBev { x, z ->
+            if (abs(z) > zhalf) 0.0
+            else {
+                val dist = if (R == 0.0) abs(x - x0) else {
+                    val dx = x - (x0 + R)
+                    abs(sqrt(dx * dx + z * z) - abs(R))
+                }
+                (0.5 + (CV_HALF_W - dist) / m).coerceIn(0.0, 1.0)
+            }
+        }
+    }
+
+    private fun extractCv(img: PerceptionFixtures.Img) =
+        RoadExtractor().extract(img.argb, img.w, img.h, CV_MPP, CV_CX, CV_CY, EGO)
+
+    /** 依 RoadLine.k 的定義取弧上的點：t ∈ [−1,1] 對應 s = t·L/2，d(s) = (k/2)((L/2)² − s²)。 */
+    private fun arcPoint(L: RoadLine, t: Double): DoubleArray {
+        val vx = (L.x2 - L.x1).toDouble()
+        val vz = (L.z2 - L.z1).toDouble()
+        val len = sqrt(vx * vx + vz * vz)
+        val phi = atan2(vx, vz)
+        val hl = len / 2.0
+        val s = t * hl
+        val d = L.k / 2.0 * (hl * hl - s * s)
+        return doubleArrayOf(
+            (L.x1 + L.x2) / 2.0 + sin(phi) * s + cos(phi) * d,
+            (L.z1 + L.z2) / 2.0 + cos(phi) * s - sin(phi) * d
+        )
+    }
+
+    @Test
+    fun arcDefinitionPassesEndpointsAndSagitta() {
+        // 縱向線、k > 0 → 弧在中間往 n（對 φ=0 就是 +x／右邊）凸，弧高 = k·L²/8
+        val L = RoadLine('w', false, 1.0f, -3f, 1.0f, 3f, 1f, 0.05f)
+        val a = arcPoint(L, -1.0)
+        val b = arcPoint(L, 1.0)
+        assertEquals("弧要通過端點 1", L.x1.toDouble(), a[0], 1e-9)
+        assertEquals("弧要通過端點 1", L.z1.toDouble(), a[1], 1e-9)
+        assertEquals("弧要通過端點 2", L.x2.toDouble(), b[0], 1e-9)
+        assertEquals("弧要通過端點 2", L.z2.toDouble(), b[1], 1e-9)
+        val mid = arcPoint(L, 0.0)
+        assertEquals("弧高 = k·L²/8", 1.0 + L.k.toDouble() * 36.0 / 8.0, mid[0], 1e-9)
+        assertEquals("弧高 ≈ 0.225 m", 1.225, mid[0], 1e-6)
+        assertEquals(0.0, mid[1], 1e-9)
+        // k = 0 就是直線
+        val S = RoadLine('w', false, 1.0f, -3f, 1.0f, 3f, 1f)
+        assertEquals(1.0, arcPoint(S, 0.0)[0], 1e-9)
+        assertEquals(1.0, arcPoint(S, 0.5)[0], 1e-9)
+    }
+
+    @Test
+    fun arcSignFlipsWhenEndpointsSwap() {
+        val a = RoadLine('w', false, 1.0f, -3f, 1.2f, 3f, 1f, 0.04f)
+        val b = RoadLine('w', false, a.x2, a.z2, a.x1, a.z1, 1f, -a.k)
+        // 端點對調 + k 變號 = 同一條實體弧線
+        for (t in listOf(-1.0, -0.5, 0.0, 0.3, 1.0)) {
+            val p = arcPoint(a, t)
+            val q = arcPoint(b, -t)
+            assertEquals("t=$t x", p[0], q[0], 1e-9)
+            assertEquals("t=$t z", p[1], q[1], 1e-9)
+        }
+        // 同樣的端點但 k 不變號 → 畫出來不一樣（確認測試有在管符號）
+        val wrong = RoadLine('w', false, a.x2, a.z2, a.x1, a.z1, 1f, a.k)
+        assertTrue(abs(arcPoint(a, 0.0)[0] - arcPoint(wrong, 0.0)[0]) > 0.1)
+    }
+
+    @Test
+    fun straightLineStaysStraight() {
+        // 位置、方向都不影響：直線就是直線
+        for (x0 in listOf(-2.5, 1.5, 2.0, 3.5)) {
+            val r = extractCv(synthArc(0.0, x0, 3.0))
+            assertTrue("x0=$x0 應該找得到線", r.lines.isNotEmpty())
+            for (L in r.lines) assertEquals("直線不可以有曲率 ($L)", 0f, L.k, 0f)
+        }
+        // 很緩的彎（R = 200 m，6 m 的弧高只有 0.0225 m）寧可畫直線
+        for (L in extractCv(synthArc(200.0, 2.0, 3.0)).lines) assertEquals(0f, L.k, 0f)
+        // 跨度太短（2.4 m）也不擬合
+        for (L in extractCv(synthArc(30.0, 2.0, 1.2)).lines) assertEquals(0f, L.k, 0f)
+    }
+
+    /** 固定種子的 LCG，讓雜訊測試每次都一樣。 */
+    private class Rnd(private var s: Long) {
+        fun next(): Double {
+            s = s * 6364136223846793005L + 1442695040888963407L
+            return ((s ushr 11).toDouble() + 0.5) / 9007199254740992.0
+        }
+
+        fun sym() = next() * 2.0 - 1.0
+    }
+
+    @Test
+    fun noiseNeverProducesCurvature() {
+        val m = CV_MPP.toDouble()
+        for (seed in 1L..6L) {
+            val g = Rnd(seed * 7919L)
+            // (a) 散落的小亮點
+            val spots = Array(400) { doubleArrayOf(g.sym() * 5.5, g.sym() * 6.5, 0.05 + 0.06 * g.next()) }
+            for (L in extractCv(renderBev { x, z ->
+                var c = 0.0
+                for (p in spots) {
+                    val d = sqrt((x - p[0]) * (x - p[0]) + (z - p[1]) * (z - p[1]))
+                    c = max(c, (0.5 + (p[2] - d) / m).coerceIn(0.0, 1.0))
+                }
+                c
+            }).lines) assertEquals("散點雜訊不可以生出彎度 ($L)", 0f, L.k, 0f)
+
+            // (b) 斷續 + 橫向亂抖的「線」：最容易被二次項硬擬出一個假彎道
+            val nd = 14
+            val off = DoubleArray(nd) { g.sym() * 0.15 }
+            val skew = g.sym() * 0.08
+            for (L in extractCv(renderBev { x, z ->
+                val t = (z + 7.0) / 1.0
+                val k = floor(t).toInt()
+                if (k < 0 || k >= nd || t - k > 0.55) 0.0
+                else (0.5 + (CV_HALF_W - abs(x - (1.8 + off[k] + skew * z))) / m).coerceIn(0.0, 1.0)
+            }).lines) assertEquals("斷續歪斜的雜訊不可以生出彎度 ($L)", 0f, L.k, 0f)
+
+            // (c) 一小段短線（1.4 m）
+            for (L in extractCv(renderBev { x, z ->
+                if (abs(z - 1.0) > 0.7) 0.0
+                else (0.5 + (CV_HALF_W - abs(x - 2.2)) / m).coerceIn(0.0, 1.0)
+            }).lines) assertEquals("短線不可以生出彎度 ($L)", 0f, L.k, 0f)
         }
     }
 
@@ -253,5 +455,37 @@ class RoadExtractorTest {
         val L = r.lines[0]
         assertEquals(4.02, (L.z1 + L.z2) / 2.0, 0.03)
         assertFalse(L.dashed)
+    }
+
+    @Test
+    fun trackerSmoothsCurvature() {
+        val tr = RoadTracker()
+        fun curved(k: Float) = RoadLine('w', false, 1.7f, -5f, 1.7f, 5f, 1f, k)
+        tr.update(RoadResult(listOf(curved(0f)), null, null, 5), 0)
+        val a = tr.update(RoadResult(listOf(curved(0.04f)), null, null, 5), 100)
+        // EMA α=0.35：0 + 0.35×0.04 = 0.014
+        assertEquals(1, a.lines.size)
+        assertEquals(0.014f, a.lines[0].k, 1e-5f)
+        val b = tr.update(RoadResult(listOf(curved(0.04f)), null, null, 5), 200)
+        assertEquals(0.0231f, b.lines[0].k, 1e-4f)
+        // 曲率差很大也不可以把同一條線拆成兩軌
+        val c = tr.update(RoadResult(listOf(curved(-0.06f)), null, null, 5), 300)
+        assertEquals("曲率差異不可以造成分裂", 1, c.lines.size)
+        assertTrue(c.lines[0].k < b.lines[0].k)
+    }
+
+    @Test
+    fun trackerFlipsCurvatureWithDirection() {
+        // 同一條弧，端點順序對調（k 也跟著變號）送進來，應該併進同一軌、曲率不會互相抵銷
+        val tr = RoadTracker()
+        val fwd = RoadLine('w', false, 1.7f, -5f, 1.9f, 5f, 1f, 0.05f)
+        val rev = RoadLine('w', false, 1.9f, 5f, 1.7f, -5f, 1f, -0.05f)
+        tr.update(RoadResult(listOf(fwd), null, null, 5), 0)
+        val a = tr.update(RoadResult(listOf(rev), null, null, 5), 100)
+        assertEquals(1, a.lines.size)
+        assertEquals("兩種表示法的曲率要一致", 0.05, abs(a.lines[0].k).toDouble(), 1e-4)
+        // 輸出的端點順序決定符號：端點 1 的 z 比較小 → 跟 fwd 同向 → k > 0
+        assertTrue(a.lines[0].z1 < a.lines[0].z2)
+        assertTrue(a.lines[0].k > 0f)
     }
 }

@@ -17,6 +17,7 @@ SPEC = 規格書 §3 的參考演算法（調參前）；TUNED / CONE / TL = 調
   python3 tools/perception_proto.py score [--n 8] [--variant both|spec|tuned] [--out DIR]   # 合成資料評分
   python3 tools/perception_proto.py tl [--n 800]                                            # 紅綠燈燈色
   python3 tools/perception_proto.py fixtures --out app/src/test/resources/perception        # JVM 測試資料
+  python3 tools/perception_proto.py curve [--out k.json]                                    # 合成彎道的曲率回復
   python3 tools/perception_proto.py sample --kinds urban:7 [--variant screen] --out a.png   # 存一張合成 BEV
   python3 tools/perception_proto.py real --img 13.jpg --corners x0,y0,x1,y1,x2,y2,x3,y3 \\
       --view W,H,mpp,cx,cy --out DIR      # 車機螢幕照：四角（左上、右上、右下、左下）校正後跑一遍
@@ -103,6 +104,8 @@ TUNED = dict(
     hough='tuned', dBin=0.05, voteWin=8, supportM=0.8, band1=0.10, band=0.08, maxLines=8, maxIter=40,
     gapM=0.6, minSeg=0.5, minCovered=0.8, dashed='tuned', solidM=5.0, dashGapM=1.5, thickM=0.25, dupM=0.17, dupDeg=4.0,
     edge='tuned', madC=3, edgeMinRows=4, edgePrune=0.0, clutterMax=0.25, minFill=0.25, wideM=0.30, coneNearM=0.25,
+    # 二次（彎道）擬合：門檻寧可嚴，寧可畫直線也不要畫出假彎道
+    curveSpanM=3.0, curveMinPts=40, curveF=50.0, curveSagM=0.03, curveMinK=1.0 / 150.0, curveMaxK=0.1,
 )
 
 
@@ -364,12 +367,100 @@ def _observable(use, w, h, mpp, cx, cy, c, s, d, s0, s1):
     return n, ok
 
 
-def _line_out(phi, d, s0, s1, kind, dashed, conf):
+CURVE_PASSES = 3        # 二次擬合的輪數（第一輪 + 兩輪沿弧重收內點）
+
+
+def _quad_curve(X, Z, claimed, inl, c, s, d, s0, s1, P):
+    """
+    直線（PCA）擬合之後的二次（彎道）擬合；跟 Kotlin RoadExtractor.curveFit 同一套算式。
+    局部座標 s 沿線、e 沿法向，最小平方解 e = a0 + a1·s' + a2·s'²（s' = s − s̄，Cramer）。
+    跑三輪：第一輪用直線帶子的內點，之後沿擬合出來的弧重新收內點再擬一次（直線帶子只有 ±band，
+    會把彎道兩端的漆切掉一半，第一輪的曲率一定偏小）。第三輪跟第二輪差 < 1%，所以只跑三輪。
+    回傳 (k, e0, e1)：k 是以兩端點的弦為基準的曲率 8h/L²（h = 弧高），不可靠時 k=0、e0=e1=d。
+    """
+    if P.get('curveSpanM', 0.0) <= 0:
+        return 0.0, d, d
+    S = X * s + Z * c
+    E = X * c - Z * s - d
+    si = S[inl]
+    n = len(si)
+    if n < P['curveMinPts']:
+        return 0.0, d, d
+    smin, smax = float(si.min()), float(si.max())
+    if smax - smin < P['curveSpanM']:
+        return 0.0, d, d
+    sb = float(np.sum(si)) / n
+    a0 = a1 = a2 = 0.0
+    sel = inl
+    for p_ in range(CURVE_PASSES):
+        if p_ >= 1:
+            uu = S - sb
+            sel = (~claimed) & (S >= smin) & (S <= smax) & (np.abs(E - (a0 + a1 * uu + a2 * uu * uu)) <= P['band'])
+        u = S[sel] - sb
+        e = E[sel]
+        cnt = len(u)
+        if cnt < P['curveMinPts']:
+            return 0.0, d, d
+        u2 = u * u
+        S0 = float(cnt)
+        S1 = float(np.sum(u))
+        S2 = float(np.sum(u2))
+        S3 = float(np.sum(u2 * u))
+        S4 = float(np.sum(u2 * u2))
+        T0 = float(np.sum(e))
+        T1 = float(np.sum(u * e))
+        T2 = float(np.sum(u2 * e))
+        E2 = float(np.sum(e * e))
+        det = S0 * (S2 * S4 - S3 * S3) - S1 * (S1 * S4 - S3 * S2) + S2 * (S1 * S3 - S2 * S2)
+        detL = S0 * S2 - S1 * S1
+        if det == 0.0 or detL == 0.0:
+            return 0.0, d, d
+        a0 = (T0 * (S2 * S4 - S3 * S3) - S1 * (T1 * S4 - S3 * T2) + S2 * (T1 * S3 - S2 * T2)) / det
+        a1 = (S0 * (T1 * S4 - S3 * T2) - T0 * (S1 * S4 - S3 * S2) + S2 * (S1 * T2 - T1 * S2)) / det
+        a2 = (S0 * (S2 * T2 - T1 * S3) - S1 * (S1 * T2 - T1 * S2) + T0 * (S1 * S3 - S2 * S2)) / det
+        b1 = (S0 * T1 - T0 * S1) / detL
+        b0 = (T0 * S2 - S1 * T1) / detL
+        rssQ = E2 - (a0 * T0 + a1 * T1 + a2 * T2)
+        rssL = E2 - (b0 * T0 + b1 * T1)
+        if not (rssQ > 0.0) or not (rssL > rssQ):
+            return 0.0, d, d
+        if abs(2.0 * a2) > P['curveMaxK']:
+            return 0.0, d, d
+        # 二次項的 F 檢定只對最後一輪（收斂後）做：前幾輪的內點被直線帶子切掉一半，殘差本來就假
+        if p_ == CURVE_PASSES - 1 and (rssL - rssQ) * (cnt - 3) < P['curveF'] * rssQ:
+            return 0.0, d, d
+    # 換算成「以兩端點的弦為基準」的曲率
+    sm = (s0 + s1) / 2.0
+    u0, u1, um = s0 - sb, s1 - sb, sm - sb
+    e0 = d + a0 + a1 * u0 + a2 * u0 * u0
+    e1 = d + a0 + a1 * u1 + a2 * u1 * u1
+    em = d + a0 + a1 * um + a2 * um * um
+    ax, az = e0 * c + s0 * s, -e0 * s + s0 * c
+    bx, bz = e1 * c + s1 * s, -e1 * s + s1 * c
+    mx, mz = em * c + sm * s, -em * s + sm * c
+    vx, vz = bx - ax, bz - az
+    ln = math.sqrt(vx * vx + vz * vz)
+    if ln < P['curveSpanM']:
+        return 0.0, d, d
+    pc = math.atan2(vx, vz)
+    nx, nz = math.cos(pc), -math.sin(pc)
+    hh = (mx - (ax + bx) / 2.0) * nx + (mz - (az + bz) / 2.0) * nz
+    kk = 8.0 * hh / (ln * ln)
+    if abs(hh) < P['curveSagM'] or not (P['curveMinK'] <= abs(kk) <= P['curveMaxK']):
+        return 0.0, d, d
+    return kk, e0, e1
+
+
+def _line_out(phi, d, s0, s1, kind, dashed, conf, curv=0.0, e0=None, e1=None):
     c, s = math.cos(phi), math.sin(phi)
+    if e0 is None:
+        e0 = d
+    if e1 is None:
+        e1 = d
     return dict(k='wyr'[kind - 1], d=bool(dashed),
-                x1=d * c + s0 * s, z1=-d * s + s0 * c,
-                x2=d * c + s1 * s, z2=-d * s + s1 * c, c=min(1.0, conf),
-                phi=math.degrees(phi), off=d)
+                x1=e0 * c + s0 * s, z1=-e0 * s + s0 * c,
+                x2=e1 * c + s1 * s, z2=-e1 * s + s1 * c, c=min(1.0, conf),
+                phi=math.degrees(phi), off=d, curv=curv)
 
 
 def _lines_tuned(X, Z, C, lk, mode, cphi, w, h, mpp, cx, cy, use, P, CA=None):
@@ -447,6 +538,8 @@ def _lines_tuned(X, Z, C, lk, mode, cphi, w, h, mpp, cx, cy, use, P, CA=None):
             unvote(inl)
             acc[k, r - 1:r + 2] = 0
             continue
+        # 同一組內點再做一次二次擬合（彎道）；不可靠就 k=0、兩端退回直線
+        curv, ce0, ce1 = _quad_curve(X, Z, claimed, inl, c, s, d, segs[0][0], segs[-1][1], P)
         # 這條線實際的漆寬：±0.30 m 內未認領像素的橫向分佈，從中心往外找連續區（雙黃線中間有縫會停）
         rr_ = X * c - Z * s - d
         near = ~claimed & (np.abs(rr_) < 0.30)
@@ -512,7 +605,7 @@ def _lines_tuned(X, Z, C, lk, mode, cphi, w, h, mpp, cx, cy, use, P, CA=None):
             nb_ = int(np.sum((np.abs(r2) >= 0.35) & (np.abs(r2) <= 0.80) & (s2 >= segs[0][0]) & (s2 <= segs[-1][1])))
             if nb_ * mpp * mpp > P['clutterMax'] * 0.9 * (segs[-1][1] - segs[0][0]):
                 continue
-        ln = _line_out(phi, d, segs[0][0], segs[-1][1], kind, dashed, covered / 4.0)
+        ln = _line_out(phi, d, segs[0][0], segs[-1][1], kind, dashed, covered / 4.0, curv, ce0, ce1)
         ln['wd'] = wd
         lines.append(ln)
     # 斑馬紋：比一般標線粗、又跟某條細標線平行 → 不是車道線
@@ -1721,9 +1814,72 @@ def run_eval(n, variants, out=None, kinds=None, exmodes=('ego', 'veh')):
     return samples
 
 
+# ─────────────────────── 彎道：合成弧線 + 曲率回復 ───────────────────────
+#
+# 這組樣本故意畫得乾乾淨淨（純灰柏油 + 一條弧），只量「二次擬合把曲率還原得多準」。
+# RoadExtractorTest.kt 用同一份程式碼在 Kotlin 端重畫同一張圖，兩邊的 k 必須一致。
+
+CURVE_VIEW = (0.04, 300, 350, 150.0, 175.0)     # 跟 VIEW_MAIN 同一組
+CURVE_HALF_W = 0.06                             # 漆半寬（m）
+CURVE_ROAD = (100, 100, 100)
+CURVE_PAINT = (228, 228, 222)
+# name, 半徑 R（m，正 = 圓心在 +x 側 = 右彎；0 = 直線）, 線在 z=0 的 x, |z| 上限
+CURVE_CASES = [
+    ('straight', 0.0, 2.0, 3.0),
+    ('right_r50', 50.0, 2.0, 3.0),
+    ('left_r50', -50.0, 2.0, 3.0),
+    # R=30 只畫 ±2 m：±0.08 m 的內點帶子裝得下的最大偏離是 |k|·L²/12，6 m 的 R=30 會超過 → 線會被切斷
+    ('right_r30', 30.0, 2.0, 2.0),
+    ('left_r30', -30.0, 2.0, 2.0),
+    ('right_r200', 200.0, 2.0, 3.0),     # 弧高 0.0225 m < curveSagM → 應該回 0
+    ('short_r30', 30.0, 2.0, 1.2),       # 跨度 2.4 m < curveSpanM → 應該回 0
+]
+
+
+def synth_arc(R, x0, zhalf, view=CURVE_VIEW):
+    """
+    一條半徑 R 的弧（R > 0：圓心在 +x 側；R = 0：直線）畫在純色柏油上，回傳 uint8 HxWx3。
+    漆邊用一個像素寬的覆蓋率漸層（真實俯視圖本來就是糊的）：候選遮罩是二值的，
+    漆邊沒有次像素資訊的話，3 px 寬的線的質心會整個卡在像素格上，曲率一定量不準。
+    """
+    mpp, w, h, cx, cy = view
+    m = f32(mpp)
+    xs, zs = pix_coords(w, h, m, f32(cx), f32(cy))
+    X = np.broadcast_to(xs[None, :], (h, w))
+    Z = np.broadcast_to(zs[:, None], (h, w))
+    if R == 0.0:
+        dist = np.abs(X - x0)
+    else:
+        dx = X - (x0 + R)
+        dist = np.abs(np.sqrt(dx * dx + Z * Z) - abs(R))
+    cov = np.clip(0.5 + (CURVE_HALF_W - dist) / m, 0.0, 1.0) * (np.abs(Z) <= zhalf)
+    road = np.array(CURVE_ROAD, np.float64)
+    paint = np.array(CURVE_PAINT, np.float64)
+    return np.floor(road + (paint - road) * cov[..., None] + 0.5).astype(np.uint8)
+
+
+def run_curve(out=None):
+    """合成弧線的曲率回復；輸出可以直接貼進 RoadExtractorTest.kt 的期望值表。"""
+    mpp, w, h, cx, cy = CURVE_VIEW
+    rows = []
+    for name, R, x0, zhalf in CURVE_CASES:
+        img = synth_arc(R, x0, zhalf)
+        res = road_extract(to_int32(pack(img)).ravel(), w, h, mpp, cx, cy, [EGO_RECT])
+        # 幾何曲率 1/R（右彎為正）；弧的定義是「往法向凸為正」，所以期望值要變號
+        want = 0.0 if R == 0.0 else -1.0 / R
+        got = [L['curv'] for L in res['lines']]
+        rows.append(dict(name=name, R=R, x0=x0, zhalf=zhalf, want=want, lines=len(res['lines']), curv=got))
+        print(f'{name:12s} R={R:7.1f} want k={want:+.5f}  lines={len(res["lines"])}  '
+              f'k={["%+.6f" % q for q in got]}', flush=True)
+    if out:
+        with open(out, 'w') as f:
+            json.dump(rows, f, indent=1)
+    return rows
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('cmd', choices=['score', 'tl', 'fixtures', 'real', 'sample'])
+    ap.add_argument('cmd', choices=['score', 'tl', 'fixtures', 'real', 'sample', 'curve'])
     ap.add_argument('--n', type=int, default=8)
     ap.add_argument('--variant', default='both')
     ap.add_argument('--kinds', default=None)
@@ -1743,6 +1899,8 @@ def main():
         tl_eval(a.n)
     elif a.cmd == 'fixtures':
         write_fixtures(a.out)
+    elif a.cmd == 'curve':
+        run_curve(a.out)
     elif a.cmd == 'real':
         run_real(a.img, a.corners, a.out, a.view)
 
@@ -1874,13 +2032,29 @@ def write_fixtures(out):
             doc = dict(
                 name=name, seed=seed - 1, w=w, h=h, mpp=mpp, cx=cx, cy=cy, exclude=ex,
                 gt=dict(lines=gt['lines'], ignore=gt['ignore'], edgeL=gt['edgeL'], edgeR=gt['edgeR'], cones=gt['cones']),
-                py=dict(lines=[{q: L[q] for q in ('k', 'd', 'x1', 'z1', 'x2', 'z2', 'c', 'phi', 'off')} for L in res['lines']],
+                py=dict(lines=[{q: L[q] for q in ('k', 'd', 'x1', 'z1', 'x2', 'z2', 'c', 'phi', 'off', 'curv')} for L in res['lines']],
                         edgeL=res['edgeL'], edgeR=res['edgeR'], cones=cones))
             with open(os.path.join(out, name + '.json'), 'w') as f:
                 json.dump(doc, f, indent=1)
             index.append(name)
             got += 1
             print('fixture', name, 'seed', seed - 1, len(res['lines']), 'lines', len(cones), 'cones', flush=True)
+    # 彎道：JVM 那邊要能釘住「曲率的大小與正負」，不然彎道畫成鏡像也沒人發現
+    curves = []
+    mpp, w, h, cx, cy = CURVE_VIEW
+    for name, R, x0, zhalf in CURVE_CASES:
+        img = synth_arc(R, x0, zhalf)
+        res = road_extract(to_int32(pack(img)).ravel(), w, h, mpp, cx, cy, [EGO_RECT])
+        fn = 'curve_' + name
+        Image.fromarray(img).save(os.path.join(out, fn + '.png'), optimize=True)
+        doc = dict(name=fn, w=w, h=h, mpp=mpp, cx=cx, cy=cy, exclude=[EGO_RECT],
+                   R=R, want=(0.0 if R == 0.0 else -1.0 / R),
+                   py=dict(lines=[{q: L[q] for q in ('k', 'd', 'x1', 'z1', 'x2', 'z2', 'c', 'phi', 'off', 'curv')}
+                                  for L in res['lines']]))
+        with open(os.path.join(out, fn + '.json'), 'w') as f:
+            json.dump(doc, f, indent=1)
+        curves.append(fn)
+        print('fixture', fn, 'want %+.5f' % doc['want'], 'got', ['%+.6f' % L['curv'] for L in res['lines']], flush=True)
     # 紅綠燈：一張拼圖 + 每格的框、真值、Python 結果
     rng = np.random.default_rng(4242)
     crops = []
@@ -1910,7 +2084,7 @@ def write_fixtures(out):
     with open(os.path.join(out, 'tl_atlas.json'), 'w') as f:
         json.dump(dict(items=items), f, indent=1)
     with open(os.path.join(out, 'index.json'), 'w') as f:
-        json.dump(dict(road=index), f, indent=1)
+        json.dump(dict(road=index, curve=curves), f, indent=1)
     print('tl crops', len(items), 'py correct', sum(it['py'] == it['state'] for it in items))
 
 

@@ -679,7 +679,7 @@ class QuadActivity : AppCompatActivity(), CameraQuadSource.Listener {
             for (l in rd.lines) {
                 lines.put(JSONObject().put("k", l.kind.toString()).put("d", if (l.dashed) 1 else 0)
                     .put("x1", r2(l.x1)).put("z1", r2(l.z1)).put("x2", r2(l.x2)).put("z2", r2(l.z2))
-                    .put("c", r2(l.conf)))
+                    .put("c", r2(l.conf)).put("kv", r4(l.k)))
             }
             p.put("road", JSONObject().put("lines", lines)
                 .put("el", rd.edgeL?.let { r2(it) } ?: JSONObject.NULL)
@@ -760,6 +760,9 @@ class QuadActivity : AppCompatActivity(), CameraQuadSource.Listener {
     }
 
     private fun r2(f: Float): Double = Math.round(f * 100f) / 100.0
+
+    /** 曲率是 0.0x 量級（半徑 30 m → 0.033），捨到小數 2 位會整個變 0 */
+    private fun r4(f: Float): Double = Math.round(f * 10000f) / 10000.0
 
     private fun ema(prev: Float, v: Float) = if (prev == 0f) v else prev * 0.8f + v * 0.2f
 
