@@ -40,6 +40,9 @@ class ParkingSlotDetectorTest {
         )
         private val SYNTH = BASE + ADV_NEG + ADV_POS
         private val REAL = listOf("real8", "real13", "real13_painted")
+        // 實車車機存下來的原始四分割 → 自家 BEV：自己停在格子裡、格內漆著車位號碼「565」、
+        // 格線緊貼自車排除區。合成場景生不出這種組合，但實車就是這樣（v0.4.4 之前這兩張是 0 格）。
+        private val QUAD = listOf("quad_garage1", "quad_garage2")
         private val NEGATIVE = listOf("road", "scooter", "real8", "real13") + ADV_NEG
 
         /**
@@ -177,7 +180,7 @@ class ParkingSlotDetectorTest {
 
     @Test
     fun matchesPrototype() {
-        for (name in SYNTH + REAL) {
+        for (name in SYNTH + REAL + QUAD) {
             val f = load(name)
             val out = run(f)
             assertEquals("$name: 格數與原型不同", f.proto.size, out.size)
@@ -188,6 +191,28 @@ class ParkingSlotDetectorTest {
                 }
                 if (m == null) fail("$name: 原型的 ${ps.kind} ${ps.p.joinToString()} 在 Kotlin 輸出中找不到：${out.map { it.p.joinToString() }}")
             }
+        }
+    }
+
+    /**
+     * 實車地下室：自己停在格子裡，格內漆著車位號碼。
+     * 三個把這一格刷掉的原因（延長線假交叉、號碼被當成機車格 T 字、號碼灌爆格內雜線比例）
+     * 只要回來任何一個，這裡就會變 0 格。
+     */
+    @Test
+    fun realGarageSlotFound() {
+        for (name in QUAD) {
+            val f = load(name)
+            val out = run(f)
+            assertTrue("$name: 應該找得到自己停的那一格，實際 ${out.size} 格", out.isNotEmpty())
+            val s = out.first()
+            val xs = (0 until 4).map { s.p[it * 2] }
+            val zs = (0 until 4).map { s.p[it * 2 + 1] }
+            val wd = xs.max() - xs.min()
+            val ln = zs.max() - zs.min()
+            assertTrue("$name: 寬度 $wd 不像停車格", wd in 2.0f..3.2f)
+            assertTrue("$name: 長度 $ln 不像停車格", ln in 4.5f..7.0f)
+            assertTrue("$name: 自車就在格子裡，應該標成有車", s.occupied)
         }
     }
 

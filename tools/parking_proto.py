@@ -85,6 +85,8 @@ PERP_TOL_DEG = 15.0     # 垂直判定容差
 DEPTH_DEF = 5.5         # 垂直 / 斜角格預設深度（沿長邊）
 DEPTH_PAR = 6.0         # 平行格預設長度
 LANE_LEN = 7.0          # 單側格長邊超過此長度 → 車道線
+CROSS_REACH = 1.2       # 橫線自身線段可以離交點多遠（m）：超過就不是真的橫過這個格子
+GLYPH_M = 0.60          # 遮罩連通元件的外接框兩個方向都小於這個值 → 字形（車位號碼、箭頭、污漬），不是標線
 RUN_GAP = 1.0           # 沿線走時可跨過的間隙（磨損、被車擋）
 END_GAP = 0.8           # 端點後至少這麼長沒有線才算「真的結束」
 EXT_MISS = 2            # 線頭延伸時可容許連續沒命中的取樣點數
@@ -154,6 +156,62 @@ class Line:
 
     def __init__(self, cx, cz, ux, uz, pieces, n):
         self.cx, self.cz, self.ux, self.uz, self.pieces, self.n = cx, cz, ux, uz, pieces, n
+
+
+def _glyph_mask(M, mpp):
+    """脊線遮罩裡「兩個方向都小於 GLYPH_M」的連通元件 → 字形。
+
+    停車格裡常常直接漆著車位號碼（實車地下室擷取就是「565」），箭頭、補土、油漬也一樣。
+    這些東西會讓「格內有沒有東西」的檢查誤判成機車格的 T 字或格內橫線，把好好的格子刷掉。
+    實測那張擷取：干擾物最大 0.12 x 0.36 m，而最小的真標線元件是 1.00 m —— 中間空得很。
+    8 連通，和 Kotlin 端同一條規則（元件集合與走訪順序無關，所以兩邊結果一致）。
+    """
+    h, w = M.shape
+    flat = M.reshape(-1)
+    lab = np.full(h * w, -1, np.int32)
+    G = np.zeros(h * w, bool)
+    lim = GLYPH_M / mpp
+    stack = np.empty(h * w, np.int32)
+    cells = np.empty(h * w, np.int32)
+    nlab = 0
+    for p0 in range(h * w):
+        if not flat[p0] or lab[p0] >= 0:
+            continue
+        lab[p0] = nlab
+        stack[0] = p0
+        sp = 1
+        nc = 0
+        i0 = i1 = p0 % w
+        j0 = j1 = p0 // w
+        while sp > 0:
+            sp -= 1
+            p = stack[sp]
+            cells[nc] = p
+            nc += 1
+            i = p % w
+            j = p // w
+            if i < i0: i0 = i
+            if i > i1: i1 = i
+            if j < j0: j0 = j
+            if j > j1: j1 = j
+            for dj in (-1, 0, 1):
+                nj = j + dj
+                if nj < 0 or nj >= h:
+                    continue
+                for di in (-1, 0, 1):
+                    ni = i + di
+                    if ni < 0 or ni >= w:
+                        continue
+                    q = nj * w + ni
+                    if flat[q] and lab[q] < 0:
+                        lab[q] = nlab
+                        stack[sp] = q
+                        sp += 1
+        nlab += 1
+        if (i1 - i0 + 1) < lim and (j1 - j0 + 1) < lim:
+            G[cells[:nc]] = True
+    return G.reshape(h, w)
+
 
 
 class Detector:
@@ -235,9 +293,21 @@ class Detector:
         for dj in (-1, 0, 1):
             for di in (-1, 0, 1):
                 D |= _shift(M, di, dj, False)
+        # 字形遮罩要在「沒膨脹的脊線」上算：膨脹會把號碼的筆畫和旁邊的標線串成同一個元件。
+        # 算完再各自膨脹，只有「附近完全沒有結構標線」的像素才算字形。
+        Gm = _glyph_mask(M, mpp)
+        self.Gm = Gm
+        GD = np.zeros((h, w), bool)
+        SD = np.zeros((h, w), bool)
+        Ms = M & ~Gm
+        for dj in (-1, 0, 1):
+            for di in (-1, 0, 1):
+                GD |= _shift(Gm, di, dj, False)
+                SD |= _shift(Ms, di, dj, False)
+        self.G = GD & ~SD
         return vis, M, C, K, D
 
-    # ------------------------------------------------------------ Hough + 貪婪線段
+# ------------------------------------------------------------ Hough + 貪婪線段
     def _lines(self, C, K, w, h, mpp, cx, cy):
         js, iis = np.nonzero(C)              # row-major 順序
         kk = K[js, iis]
@@ -484,7 +554,7 @@ class Detector:
             if v == 0 or (v == 2 and (strict or not D[j, i])):
                 continue
             vis += 1
-            if D[j, i]:
+            if D[j, i] and not (strict and self.G[j, i]):
                 hit += 1
         return hit, vis, n
 
@@ -693,6 +763,17 @@ class Detector:
             PA = intersect(A, Cl)
             PB = intersect(B, Cl)
             if PA is None or PB is None:
+                continue
+            # intersect() 算的是無限長直線的交點：兩公尺外一條 1 m 的斜線延伸過來照樣有交點，
+            # 會把格子從中間切成兩半（實車地下室擷取就是這樣掉的）。要求橫線自己的線段
+            # 真的伸到交點附近；被停著的車擋掉一段還是過得了（pieces 的首尾涵蓋整段）。
+            tc0 = Cl.pieces[0][0]
+            tc1 = max(q[1] for q in Cl.pieces)
+            reach = 0.0
+            for P in (PA, PB):
+                tc = (P[0] - Cl.cx) * Cl.ux + (P[1] - Cl.cz) * Cl.uz
+                reach = max(reach, tc0 - tc, tc - tc1)
+            if reach > CROSS_REACH:
                 continue
             tA = (PA[0] - F.ox) * ux + (PA[1] - F.oz) * uz
             tB = (PB[0] - F.ox) * ux + (PB[1] - F.oz) * uz
@@ -1004,7 +1085,11 @@ class Detector:
         return m / n if n >= 30 else 0.0
 
     def _clutter(self, quad):
-        """格內（往中心縮 15 %）看得到的像素中，標線遮罩 M 的比例；草叢、樹影拖曳的雜線會很高。每 2 px 取樣。"""
+        """格內（往中心縮 15 %）看得到的像素中，標線遮罩 M 的比例；草叢、樹影拖曳的雜線會很高。每 2 px 取樣。
+
+        字形（車位號碼、箭頭、污漬）不算雜線：自己停在格子裡的時候，格內九成以上是自車排除區，
+        剩下那一小條如果剛好有車位號碼，比例就會爆掉 —— 實測 15.1 m² 的格子只看得到 4 %，
+        6 個遮罩點全是漆上去的號碼。斜紋禁停區的斜線是細長的，不會被當成字形，照樣擋得下來。"""
         gx = 0.25 * (quad[0][0] + quad[1][0] + quad[2][0] + quad[3][0])
         gz = 0.25 * (quad[0][1] + quad[1][1] + quad[2][1] + quad[3][1])
         q = [(gx + (x - gx) * 0.85, gz + (z - gz) * 0.85) for (x, z) in quad]
@@ -1016,13 +1101,11 @@ class Detector:
         i1 = min(self.w - 1, math.floor(max(xs) / self.mpp + self.cx))
         j0 = max(0, math.floor(self.cy - max(zs) / self.mpp))
         j1 = min(self.h - 1, math.floor(self.cy - min(zs) / self.mpp))
-        st, M = self.state, self.M
+        st, M, G = self.state, self.M, self.Gm
         n = m = 0
         for j in range(j0, j1 + 1, 2):
             z = (self.cy - (j + 0.5)) * self.mpp
             for i in range(i0, i1 + 1, 2):
-                if st[j, i] != 1:
-                    continue
                 x = (i + 0.5 - self.cx) * self.mpp
                 inside = True
                 for k in range(4):
@@ -1032,10 +1115,14 @@ class Detector:
                         inside = False
                         break
                 if inside:
+                    if st[j, i] != 1:
+                        continue
                     n += 1
-                    if M[j, i]:
+                    if M[j, i] and not G[j, i]:
                         m += 1
-        return m / n if n >= 20 else 0.0
+        if n < 20:
+            return 0.0
+        return m / n
 
     def _why(self, tag):
         """除錯用：記下格子被拒的原因。"""
@@ -2914,9 +3001,42 @@ def _write_fixture(name, rgb, mpp, cx, cy, excl, veh, gts, dets, extra=None):
         json.dump(js, f, indent=1)
 
 
+def _quad_fixtures():
+    """使用者車機存下來的原始四分割畫面 → 自家 BEV → fixture。
+
+    合成場景生不出「自己停在格子裡、格內漆著車位號碼、格線貼著自車排除區」這種情況，
+    但那正是實車遇到的（地下室那兩張）。固定成 fixture，以後改參數才不會又掉回去。
+    路徑用環境變數 AVM_RAW_DIR 指定；沒有就跳過（repo 裡只留產好的 fixture）。
+    """
+    raw_dir = os.environ.get('AVM_RAW_DIR')
+    if not raw_dir or not os.path.isdir(raw_dir):
+        print('沒有 AVM_RAW_DIR，跳過實車四分割 fixture')
+        return
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import avm_geometry as ag
+    from PIL import Image
+    calib = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                         'app', 'src', 'main', 'assets', 'avm_calib.json')
+    geo = ag.Geometry.load(calib)
+    ego = [-geo.car_width / 2 - 0.15, -geo.car_length / 2 - 0.15,
+           geo.car_width / 2 + 0.15, geo.car_length / 2 + 0.15]
+    for name, tag in (('raw_20261103_181414.jpg', 'quad_garage1'), ('raw_20261103_181806.jpg', 'quad_garage2')):
+        path = os.path.join(raw_dir, name)
+        if not os.path.exists(path):
+            continue
+        frame = np.array(Image.open(path).convert('RGB'))
+        h, w = frame.shape[:2]
+        rgb = ag.stitch(frame, ag.build_bev_lut(geo, w, h))
+        det = Detector()
+        dets = det.detect(rgb, 0.04, 150.0, 175.0, [ego], [])
+        _write_fixture(tag, rgb, 0.04, 150.0, 175.0, [ego], [], [], dets, {'src': name})
+        print(f'{tag}: {len(dets)} slots ({name})')
+
+
 def cmd_fixtures():
     import time
     os.makedirs(FIXDIR, exist_ok=True)
+    _quad_fixtures()
     for (name, kind, s, var) in FIXTURES:
         ki = SCENE_KINDS.index(kind)
         seed = 1000 * ki + s + (0 if var == '300' else 500000)

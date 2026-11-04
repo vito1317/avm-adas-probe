@@ -58,6 +58,8 @@ class ParkingSlotDetector {
         private const val DEPTH_DEF = 5.5
         private const val DEPTH_PAR = 6.0
         private const val LANE_LEN = 7.0
+        private const val CROSS_REACH = 1.2   // 橫線自身線段可以離交點多遠（m）
+        private const val GLYPH_M = 0.60      // 遮罩元件兩個方向都小於此值 → 字形（車位號碼、箭頭、污漬）
         private const val RUN_GAP = 1.0
         private const val END_GAP = 0.8
         private const val EXT_MISS = 2
@@ -169,6 +171,11 @@ class ParkingSlotDetector {
     private var mask = BooleanArray(0)
     private var dil = BooleanArray(0)
     private var cen = BooleanArray(0)
+    private var glyphM = BooleanArray(0)   // 脊線上的字形元件
+    private var glyphD = BooleanArray(0)   // 對齊 dil：附近完全沒有結構標線的字形像素
+    private var ccStack = IntArray(0)
+    private var ccCells = IntArray(0)
+    private var ccLab = IntArray(0)
     private var tmpB = BooleanArray(0)
     private var mlist = IntArray(0)
     private var nM = 0
@@ -272,6 +279,8 @@ class ParkingSlotDetector {
         if (n > cap) {
             cap = n
             valid = BooleanArray(n); colOk = BooleanArray(n); vis = BooleanArray(n); state = ByteArray(n)
+            glyphM = BooleanArray(n); glyphD = BooleanArray(n)
+            ccStack = IntArray(n); ccCells = IntArray(n); ccLab = IntArray(n)
             paint = IntArray(n); sum3 = IntArray(n); rowSum = IntArray(n); rowCnt = IntArray(n)
             best = IntArray(n); theta = IntArray(n); kn = ByteArray(n)
             mask = BooleanArray(n); dil = BooleanArray(n); cen = BooleanArray(n); tmpB = BooleanArray(n); mlist = IntArray(n)
@@ -427,6 +436,68 @@ class ParkingSlotDetector {
             cen[p] = best[p] > rm && best[p] >= rp
             // 3x3 膨脹 → 取樣用的 D
             for (jj in max(0, j - 1)..min(h - 1, j + 1)) for (ii in max(0, i - 1)..min(w - 1, i + 1)) dil[jj * w + ii] = true
+        }
+        buildGlyph()
+    }
+
+    /**
+     * 字形遮罩：脊線遮罩裡「外接框兩個方向都小於 GLYPH_M」的連通元件（8 連通）。
+     *
+     * 停車格裡常常直接漆著車位號碼（實車地下室擷取就是「565」），箭頭、補土、油漬也一樣。
+     * 這些會讓「格內有沒有東西」的檢查誤判成機車格的 T 字，把好好的格子整個刷掉。
+     * 實測那張擷取：干擾物最大 0.12 x 0.36 m，最小的真標線元件 1.00 m，中間空得很。
+     * 斜紋禁停區的斜線是細長的，不會被當成字形。
+     *
+     * 一定要在「沒膨脹的脊線」上算：膨脹會把號碼筆畫和旁邊的標線串成同一個元件。
+     * 算完各自膨脹，只有附近完全沒有結構標線的像素才算字形（glyphD，對齊 dil）。
+     */
+    private fun buildGlyph() {
+        val n = w * h
+        java.util.Arrays.fill(glyphM, 0, n, false)
+        java.util.Arrays.fill(glyphD, 0, n, false)
+        java.util.Arrays.fill(ccLab, 0, n, -1)
+        val lim = GLYPH_M / mpp
+        for (q in 0 until nM) {
+            val p0 = mlist[q]
+            if (ccLab[p0] >= 0) continue
+            ccLab[p0] = q
+            ccStack[0] = p0
+            var sp = 1
+            var nc = 0
+            var i0 = p0 % w; var i1 = i0
+            var j0 = p0 / w; var j1 = j0
+            while (sp > 0) {
+                sp--
+                val p = ccStack[sp]
+                ccCells[nc++] = p
+                val i = p % w; val j = p / w
+                if (i < i0) i0 = i
+                if (i > i1) i1 = i
+                if (j < j0) j0 = j
+                if (j > j1) j1 = j
+                for (jj in max(0, j - 1)..min(h - 1, j + 1)) {
+                    for (ii in max(0, i - 1)..min(w - 1, i + 1)) {
+                        val r = jj * w + ii
+                        if (mask[r] && ccLab[r] < 0) { ccLab[r] = q; ccStack[sp++] = r }
+                    }
+                }
+            }
+            if ((i1 - i0 + 1) < lim && (j1 - j0 + 1) < lim) {
+                for (k in 0 until nc) glyphM[ccCells[k]] = true
+            }
+        }
+        // glyphD = 膨脹(字形) 且 非 膨脹(結構脊線)
+        for (q in 0 until nM) {
+            val p = mlist[q]
+            if (!glyphM[p]) continue
+            val i = p % w; val j = p / w
+            for (jj in max(0, j - 1)..min(h - 1, j + 1)) for (ii in max(0, i - 1)..min(w - 1, i + 1)) glyphD[jj * w + ii] = true
+        }
+        for (q in 0 until nM) {
+            val p = mlist[q]
+            if (glyphM[p]) continue
+            val i = p % w; val j = p / w
+            for (jj in max(0, j - 1)..min(h - 1, j + 1)) for (ii in max(0, i - 1)..min(w - 1, i + 1)) glyphD[jj * w + ii] = false
         }
     }
 
@@ -825,7 +896,7 @@ class ParkingSlotDetector {
             val v = state[p].toInt()
             if (v == 0 || (v == 2 && (strict || !dil[p]))) continue
             vis++
-            if (dil[p]) hit++
+            if (dil[p] && !(strict && glyphD[p])) hit++
         }
         segHit = hit; segVis = vis; segN = n
     }
@@ -981,6 +1052,20 @@ class ParkingSlotDetector {
             if (abs(cl.ux * ux + cl.uz * uz) > COS_CROSS) continue
             val pA = intersect(la, cl) ?: continue
             val pB = intersect(lb, cl) ?: continue
+            // intersect() 算的是無限長直線的交點：兩公尺外一條 1 m 的斜線延伸過來照樣有交點，
+            // 會把格子從中間切成兩半（實車地下室擷取就是這樣掉的）。要求橫線自己的線段
+            // 真的伸到交點附近；被停著的車擋掉一段還是過得了（pieces 首尾涵蓋整段）。
+            val tc0 = cl.pieces[0]
+            var tc1 = cl.pieces[1]
+            var pi = 3
+            while (pi < cl.pieces.size) { if (cl.pieces[pi] > tc1) tc1 = cl.pieces[pi]; pi += 2 }
+            var reach = 0.0
+            for (pt in arrayOf(pA, pB)) {
+                val tc = (pt[0] - cl.cx) * cl.ux + (pt[1] - cl.cz) * cl.uz
+                if (tc0 - tc > reach) reach = tc0 - tc
+                if (tc - tc1 > reach) reach = tc - tc1
+            }
+            if (reach > CROSS_REACH) continue
             val tA = (pA[0] - f.ox) * ux + (pA[1] - f.oz) * uz
             val tB = (pB[0] - f.ox) * ux + (pB[1] - f.oz) * uz
             val inA = minA - 1.0 <= tA && tA <= maxA + 1.0
@@ -1273,7 +1358,7 @@ class ParkingSlotDetector {
                         val bx = q[(2 * k + 2) % 8]; val bz = q[(2 * k + 3) % 8]
                         if ((bx - ax) * (z - az) - (bz - az) * (x - ax) < 0) { inside = false; break }
                     }
-                    if (inside) { n++; if (mask[p]) m++ }
+                    if (inside) { n++; if (mask[p] && !glyphM[p]) m++ }
                 }
                 i += 2
             }
