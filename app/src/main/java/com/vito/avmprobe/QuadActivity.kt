@@ -85,6 +85,7 @@ class QuadActivity : AppCompatActivity(), CameraQuadSource.Listener {
     private lateinit var web: Bev3DWeb
     private lateinit var texture: TextureView
     private lateinit var overlay: QuadOverlayView
+    @Volatile private var bevVehicles = 0      // 上一輪傳給停車格偵測的車輛框數（狀態列診斷用）
     private var camSide: ViewGroup? = null     // 左半邊（鏡頭畫面＋按鈕），全螢幕時整塊藏起來
     private var root: ViewGroup? = null
     private var fsBtn: Button? = null
@@ -637,6 +638,9 @@ class QuadActivity : AppCompatActivity(), CameraQuadSource.Listener {
             excl.add(r)
             if (o.t == "car" || o.t == "van" || o.t == "truck" || o.t == "bus") vehicles.add(r)
         }
+        // 停車格回報 0 個時要分得出是「沒看到車」還是別的問題：
+        // 停在格子裡的車如果沒被框起來，它的車身邊緣會被當成「格內有線」而把格子整個刷掉。
+        bevVehicles = vehicles.size
 
         // 取樣在這裡做（frame 只在這條執行緒有效），辨識丟到 ground 執行緒，跟下一輪偵測並行
         frame.sampleLut(table, bevArgb)
@@ -755,6 +759,13 @@ class QuadActivity : AppCompatActivity(), CameraQuadSource.Listener {
                 "每幀 ${emaProc.toInt()}ms · ${"%.1f".format(emaFps)} fps")
         }
         if (!calibrated) sb.append("\n鏡頭幾何：預設值（未校正），距離與實景地面僅供參考")
+        // 俯視圖辨識的階段計數：停車格回報 0 個時，這行才分得出是哪一關掉的
+        if (prefs.camBev) {
+            sb.append("\n俯視：車道線 ").append(road?.lines?.size ?: 0)
+                .append(" · 三角錐 ").append(cones.size)
+                .append(" · 停車格 ").append(slots.size)
+                .append(" · 車輛框 ").append(bevVehicles)
+        }
         return sb.toString()
     }
 
