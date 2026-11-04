@@ -38,6 +38,11 @@ class SignalProbeActivity : AppCompatActivity() {
 
     companion object {
         private const val LISTEN_MS = 60_000L
+        private const val UI_MS = 250L          // 畫面最多這麼頻繁更新一次
+        private const val UI_TAIL = 8000        // 畫面只顯示末端這麼多字
+        private const val FLUSH_MS = 1000L      // 邊收邊寫的落盤間隔
+        private const val PER_ACTION_MAX = 25   // 同一個 action 最多詳記幾筆，之後只計數
+        private const val BATCH = 40            // 一次只掛這麼多 action（重啟時才知道是哪一批）
         private const val MAX_ACTIONS = 600
         private val KEYWORDS = Regex(
             "turn|lamp|light|signal|blink|flash|indicat|canbus|can_|\\.can\\.|carinfo|car_info|mcu|" +
@@ -62,6 +67,12 @@ class SignalProbeActivity : AppCompatActivity() {
     private var receiver: BroadcastReceiver? = null
     private val actions = LinkedHashSet<String>()
     private var listenStart = 0L
+    private var uiPending = false
+    private var liveOut: java.io.BufferedWriter? = null
+    private var liveFile: java.io.File? = null
+    private var lastFlush = 0L
+    private val hitCount = HashMap<String, Int>()
+    private var listenBatch = 0
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -75,11 +86,12 @@ class SignalProbeActivity : AppCompatActivity() {
             setTextColor(Color.parseColor("#008577"))
         })
         col.addView(TextView(this).apply {
-            text = "按「開始監聽」後 60 秒內：左轉燈打 5 秒→關，右轉燈打 5 秒→關，" +
-                "（安全、停好的話）打倒車檔→方向盤左右轉到底各一次→請人站在車尾 1 m 內讓倒車雷達響幾秒" +
-                "（前雷達也一樣，在車頭前）→回 P→按一下排檔旁的 PDC 按鈕，車頭前 1 m 內有東西讓前雷達響。" +
-                "全景360 跳出來沒關係，" +
-                "60 秒後回到這頁按「存檔」，把檔案傳給開發者。"
+            text = "監聽一次只掛一批（40 個），按一次聽一批；重啟過也沒關係，" +
+                "紀錄是邊收邊寫進 Android/data/com.vito.avmprobe/files/signals/ 的，重開機後還在。\n\n" +
+                "60 秒內：左轉燈打 5 秒→關，右轉燈打 5 秒→關，（安全、停好的話）打倒車檔→" +
+                "方向盤左右轉到底各一次→請人站在車尾 1 m 內讓倒車雷達響幾秒（前雷達也一樣，在車頭前）→" +
+                "回 P→按一下排檔旁的 PDC 按鈕。能開一小段再停下來最好（才看得到車速）。" +
+                "全景360 跳出來沒關係，60 秒後回這頁按「存檔」。"
             textSize = 14f
             setPadding(0, 8, 0, 8)
         })
@@ -190,9 +202,65 @@ class SignalProbeActivity : AppCompatActivity() {
         else -> "%.2f".format(d)
     }
 
-    private fun append(s: String) = main.post {
-        log.append(s).append('\n')
-        logView.text = log
+    /**
+     * 記一行。**同時寫進檔案**（見 [liveFile]）——監聽中車機重啟過，記憶體裡的東西全沒了，
+     * 所以不能等使用者按存檔。
+     *
+     * 畫面更新是**批次**的：以前每來一筆就 `logView.text = log`，等於把整份字串重畫一次。
+     * 車機的 CAN 廣播可能每秒好幾十筆，那是 O(n²) 的主執行緒工作，卡住就會被看門狗重啟 ——
+     * 這很可能就是「監聽會讓車機重啟」的原因。現在最多每 [UI_MS] 更新一次，而且只顯示末端。
+     */
+    private fun append(s: String) {
+        synchronized(log) {
+            log.append(s).append('\n')
+            liveWrite(s)
+        }
+        scheduleUi()
+    }
+
+    private fun scheduleUi() {
+        if (uiPending) return
+        uiPending = true
+        main.postDelayed({
+            uiPending = false
+            val t = synchronized(log) {
+                if (log.length <= UI_TAIL) log.toString()
+                else "…（前面省略，完整內容在存檔裡）\n" + log.substring(log.length - UI_TAIL)
+            }
+            logView.text = t
+        }, UI_MS)
+    }
+
+    /** 監聽期間邊收邊寫的檔案；重啟也留得住。 */
+    private fun liveOpen(tag: String) {
+        liveClose()
+        try {
+            val dir = java.io.File(getExternalFilesDir(null), "signals")
+            dir.mkdirs()
+            val ts = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+            val f = java.io.File(dir, "live_${'$'}{tag}_${'$'}ts.txt")
+            liveFile = f
+            liveOut = java.io.BufferedWriter(java.io.FileWriter(f, true))
+            append("（邊收邊寫：${'$'}{f.absolutePath}）")
+        } catch (t: Throwable) {
+            liveOut = null
+            append("（邊收邊寫開檔失敗：${'$'}{t.message}）")
+        }
+    }
+
+    private fun liveWrite(s: String) {
+        val o = liveOut ?: return
+        try {
+            o.write(s); o.write("\n")
+            // 每 [FLUSH_MS] 真的落盤一次：重啟時最多只掉這段時間的資料
+            val now = SystemClock.elapsedRealtime()
+            if (now - lastFlush >= FLUSH_MS) { o.flush(); lastFlush = now }
+        } catch (_: Throwable) {}
+    }
+
+    private fun liveClose() {
+        try { liveOut?.flush(); liveOut?.close() } catch (_: Throwable) {}
+        liveOut = null
     }
 
     // ---------------- 1+2：平台、廠商 App、候選廣播 ----------------
@@ -428,18 +496,40 @@ class SignalProbeActivity : AppCompatActivity() {
             append("\n（還沒掃完或沒有候選廣播，先等掃描完成）")
             return
         }
+        // 分批：一次全掛 170 個 action，萬一還是會重啟就不知道是哪一個害的。
+        // 每按一次只掛一批，重啟之後看 live 檔的開頭就知道卡在第幾批。
+        val batch = listenBatch
+        val from = batch * BATCH
+        if (from >= list.size) {
+            listenBatch = 0
+            append("\n（所有批次都聽過了，從第 1 批重來）")
+            return
+        }
+        val sub = list.subList(from, minOf(from + BATCH, list.size))
+        listenBatch = batch + 1
+        liveOpen("b${'$'}{batch + 1}")
+        append("\n== 第 ${'$'}{batch + 1} / ${'$'}{(list.size + BATCH - 1) / BATCH} 批（${'$'}{sub.size} 個 action）")
         val filter = IntentFilter()
-        for (a in list) filter.addAction(a)
+        for (a in sub) filter.addAction(a)
+        hitCount.clear()
         val r = object : BroadcastReceiver() {
             override fun onReceive(c: Context, i: Intent) {
+                val a = i.action ?: return
+                // 同一個 action 只詳記前 PER_ACTION_MAX 筆：車機的 CAN 廣播一秒可能好幾十筆，
+                // 全部記下來會把真正有用的東西淹掉，也是把主執行緒卡死的主因之一
+                val n = (hitCount[a] ?: 0) + 1
+                hitCount[a] = n
+                if (n > PER_ACTION_MAX) return
                 val t = (SystemClock.elapsedRealtime() - listenStart) / 1000.0
-                val ex = i.extras?.let { b ->
-                    b.keySet().joinToString(", ") { k ->
-                        @Suppress("DEPRECATION")
-                        "$k=${b.get(k)}"
-                    }
-                } ?: ""
-                append("[%6.2fs] %s %s".format(t, i.action, ex))
+                val ex = try {
+                    i.extras?.let { b ->
+                        b.keySet().joinToString(", ") { k ->
+                            @Suppress("DEPRECATION")
+                            "$k=${b.get(k)}"
+                        }
+                    } ?: ""
+                } catch (t2: Throwable) { "(extras 讀取失敗 ${'$'}{t2.javaClass.simpleName})" }
+                append("[%6.2fs] %s %s%s".format(t, a, ex, if (n == PER_ACTION_MAX) "  ←之後這個只計數" else ""))
             }
         }
         listenStart = SystemClock.elapsedRealtime()
@@ -450,18 +540,47 @@ class SignalProbeActivity : AppCompatActivity() {
             return
         }
         receiver = r
-        watchProps()
-        append("\n== 監聽 ${list.size} 個廣播＋系統屬性 60 秒：現在打方向燈 / 倒車 / 轉方向盤")
+        propsBefore = readProps()
+        append("== 監聽 ${'$'}{sub.size} 個廣播 60 秒：現在打方向燈 / 倒車 / 轉方向盤 / 開一小段再停")
         sticky?.let { append("（黏著廣播）${it.action} ${it.extras?.keySet()}") }
         main.postDelayed({ stopListening(); append("== 監聽結束") }, LISTEN_MS)
     }
 
     private fun stopListening() {
         propsRunning = false
+        val had = receiver != null
         receiver?.let { try { unregisterReceiver(it) } catch (_: Throwable) {} }
         receiver = null
         main.removeCallbacksAndMessages(null)
+        uiPending = false
+        if (had) {
+            // 系統屬性只在頭尾各讀一次就好。以前是每 500 ms fork 一次 getprop，
+            // 60 秒就是 120 次，在車機上太重了（而且那正好是會重啟的那段時間）。
+            val after = readProps()
+            val before = propsBefore
+            if (before != null) {
+                var n = 0
+                for ((k, v) in after) {
+                    val old = before[k]
+                    if (old == v) continue
+                    if (++n > 60) { append("…（屬性變動太多，只列前 60 個）"); break }
+                    append("prop %s: %s → %s".format(k, old ?: "(無)", v))
+                }
+                if (n == 0) append("（系統屬性沒有變化）")
+            }
+            propsBefore = null
+            val hits = synchronized(log) { hitCount.toList() }
+            if (hits.isNotEmpty()) {
+                append("\n== 各 action 收到幾筆")
+                for ((a, c2) in hits.sortedByDescending { it.second }) append("  %5d  %s".format(c2, a))
+            } else {
+                append("\n（整段 60 秒一筆廣播都沒收到）")
+            }
+        }
+        liveClose()
     }
+
+    private var propsBefore: Map<String, String>? = null
 
     private val avmApps = ArrayList<ApplicationInfo>()
 

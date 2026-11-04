@@ -125,13 +125,18 @@ class AppPrefs(context: Context) {
 
     /**
      * 綁車機的車身訊號服務（com.ts.MainUI 的 ITsSpeechCar）並輪詢。
-     * **預設關閉**：那組 transaction code 是從別的 App 內含的介面版本還原的，
-     * 車機上的版本若方法順序不同就會呼叫到別的方法（那份介面裡有車窗、天窗、空調），
-     * 實測也出現過整台車機重啟。方向盤角度與雷達只有這條路拿得到，所以保留開關讓使用者自己決定。
-     * 廣播（倒車、車速、方向燈聯動）是被動接收，不受這個開關影響，一律開著。
+     *
+     * 本來預設關閉，因為以為是它害車機重啟的；使用者後來確認**重啟是「監聽廣播」造成的**，
+     * 不是綁定 —— 那一頁以前每收一筆廣播就把整份 log 重畫一次，又每 500 ms fork 一次 getprop，
+     * 主執行緒卡死就被看門狗重開（已修，見 SignalProbeActivity）。
+     *
+     * 所以改回**預設開啟**：方向盤角度、PDC 雷達只有這條路拿得到，車速也多一個可靠來源
+     * （廣播多半是有變化才送，停著不動時會過期）。
+     * 呼叫前仍然會先驗介面名稱、連續失敗 5 次就解綁；那份介面裡有車窗、天窗、空調，
+     * transaction code 對錯就慘了，所以那道檢查不能拿掉。開關保留。
      */
     var headUnitBind: Boolean
-        get() = sp.getBoolean("headUnitBind", false)
+        get() = sp.getBoolean("headUnitBind", true)
         set(v) = sp.edit().putBoolean("headUnitBind", v).apply()
 
     /** 前鏡頭上半部多跑一輪，專找紅綠燈。 */

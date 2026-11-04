@@ -55,7 +55,7 @@
 | GPS（`MapSource`） | 定位權限 + 收得到訊號 | 地下停車場沒有 |
 | 車機廣播 `Voice_Speed_State` | 無（被動接收，一律開著） | **這台車機掃不到這個 action** |
 | 車機廣播 `com.ts.main.auto_avm_speed_change` | 同上 | 掃描 52 個 App 的 170 個候選廣播，這台是這個 |
-| AIDL `GetSpeed()` | `headUnitBind` 打開 | 預設關閉（曾讓車機重啟） |
+| AIDL `GetSpeed()` | `headUnitBind` 打開 | v0.4.8 起**預設開啟**（重啟其實是「監聽廣播」造成的，不是綁定） |
 
 掃描使用者車機的結果裡**沒有** `Voice_Speed_State`，只有 `com.ts.main.auto_avm_speed_change`
 和 `com.ts.main.mcustate`（都來自 `com.ts.MainUI`）—— 所以 `Voice_*` 那組很可能是別款車機的。
