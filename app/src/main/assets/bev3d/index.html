@@ -295,7 +295,9 @@
   // 線方向 d = (sinφ, cosφ)，法向 n = (cosφ, −sinφ)，φ 從車軸（+z）往右量，正規化到 [−90°, 90°)
   var LINE_C = { w: srgb(0xeef2f5), y: srgb(0xffc533), r: srgb(0xff4b3e) }, LINE_W = { w: 0.15, y: 0.15, r: 0.2 };
   var DASH = 4, PERIOD = 10, MAXQ = 12, MAX_LINES = 16, LINE_Y = 0.014;
-  var LINE_EXT = 2.5;   // 縱向線往觀測範圍外延伸的長度（m）
+  var LINE_EXT = 2.5;    // 縱向線往觀測範圍外延伸的長度（m）
+  var LINE_MIN_C = 0.45; // 信心低於此不畫：車身反光、鏡頭接縫、地面髒污都會湊出短短的「線」
+  var LINE_MIN_M = 1.5;  // 實際看到的長度不足此值不畫（0.8 m 的東西延伸後變 5.8 m，放大 7 倍）
   var HALF = Math.PI / 2, LONG = 25 * Math.PI / 180, MATCH_A = 8 * Math.PI / 180;
   var LINE_IDX = (function () {
     var a = [];
@@ -393,7 +395,7 @@
   function buildLine(tr, w, lon) {
     var b = tr.built;
     if (b && b.w === w && b.d === tr.d && b.lon === lon && Math.abs(b.phi - tr.phi) < 0.0025 &&
-      Math.abs(b.rho - tr.rho) < 0.015 && (lon || (Math.abs(b.s0 - tr.s0) < 0.05 && Math.abs(b.s1 - tr.s1) < 0.05)) &&
+      Math.abs(b.rho - tr.rho) < 0.015 && Math.abs(b.s0 - tr.s0) < 0.05 && Math.abs(b.s1 - tr.s1) < 0.05 &&
       (!tr.d || Math.abs(b.ph - tr.ph) < 0.04)) return;   // 變化不明顯就不重建
     if (!b) b = tr.built = {};
     b.w = w; b.d = tr.d; b.lon = lon; b.phi = tr.phi; b.rho = tr.rho; b.s0 = tr.s0; b.s1 = tr.s1; b.ph = tr.ph;
@@ -401,7 +403,12 @@
     // 縱向線只往外延一小段。俯視圖只看得到車身周圍幾公尺，以前延到前後 40 m，
     // 角度差 1° 到 40 m 外就偏 0.7 m，幾何沒校正時整個畫面都是橫跨全場的假線。
     // 真實道路會彎、路口會中斷，看不到的地方就不要畫。
-    if (lon) { lo -= LINE_EXT; hi += LINE_EXT; }
+    // 外延長度跟實際看到的長度成比例：看到 2 m 只延 1 m，看到 6 m 才延滿 2.5 m。
+    // 不然一小截東西延伸完會變成好幾公尺的線，角度誤差也跟著放大。
+    if (lon) {
+      var ex = Math.min(LINE_EXT, Math.abs(tr.s1 - tr.s0) * 0.5);
+      lo -= ex; hi += ex;
+    }
     var geo = tr.mesh.geometry, arr = geo.attributes.position.array;
     if (!tr.d) putQuad(arr, nq++, lo, hi, tr.rho, sn, cs, w / 2);
     else {
@@ -448,6 +455,12 @@
     if (!road.visible) return;
     for (i = 0; i < lineTracks.length; i++) {
       tr = lineTracks[i];
+      // 信心不足或只看到短短一截就不要畫。幾何還沒校正時，車身反光、鏡頭接縫、
+      // 地面髒污都會湊出一小段「線」，畫出來就是一堆莫名其妙的直線。
+      if (tr.c < LINE_MIN_C || Math.abs(tr.s1 - tr.s0) < LINE_MIN_M) {
+        if (tr.mesh) { tr.mesh.material.opacity = 0; }
+        continue;
+      }
       var w = LINE_W[tr.k], lon = Math.abs(tr.phi) < LONG;
       // 雙線（雙黃線）中心距小於線寬時縮窄，留一道看得見的縫
       if (lon) {
@@ -460,7 +473,8 @@
       }
       if (!tr.mesh) { tr.mesh = takeLine(tr.k); tr.built = null; }
       buildLine(tr, w, lon);
-      tr.mesh.material.opacity = tr.fade * (0.7 + 0.3 * Math.min(1, Math.max(0, tr.c)));
+      // 信心低的畫淡一點（原本不管信心多低都是 0.7 以上，看起來跟確定的線一樣實）
+      tr.mesh.material.opacity = tr.fade * (0.25 + 0.75 * Math.min(1, Math.max(0, tr.c)));
     }
   }
   function updateRoad(dt, now) {
