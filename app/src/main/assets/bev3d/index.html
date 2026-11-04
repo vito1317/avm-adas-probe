@@ -77,6 +77,7 @@
   .tag.ped{border-color:rgba(94,240,138,.55)}
   .tag.cone{border-color:rgba(255,138,61,.6)}
   .tag.danger{border-color:var(--red);color:#ff8278}
+  .tag.obs{border-color:rgba(255,194,75,.6);color:#ffd27a}
   /* map3d 的 HUD 位置由宿主決定：放右欄，避開左上計數、左下盲點警示、右下號誌。
      選擇器要比 map3d.js 後注入的 .amap 更具體，align-items 才蓋得過去 */
   #app .amap{position:absolute;right:10px;top:52px;z-index:4;align-items:flex-end}
@@ -821,6 +822,85 @@
     for (i = used; i < slotPool.length; i++) slotPool[i].visible = false;
   }
 
+  // ---------- 障礙物（柱子、牆、路緣、別人的車身）----------
+  // payload.obs 來自四顆鏡頭重疊區的垂直平面掃描，不是物件偵測：只知道「這裡有東西高過地面」，
+  // 不知道是什麼、也量不準。實測定位往外偏 1.0–1.5 m、尺寸是俯視拖痕的近端，
+  // 所以畫成一塊半透明的「請勿靠近」量體加地面外框，不要畫成有稜有角的實體。
+  var OBS_MAX = 14, OBS_H = 0.9, OBS_TTL = 4500;
+  var obsGrp = new THREE.Group();
+  scene.add(obsGrp);
+  var obsPool = [];
+  var obsAt = -1e9;
+  var obsGeo = new THREE.BoxGeometry(1, 1, 1);          // 單位方塊，各自用 scale 調大小
+  var obsEdge = new THREE.EdgesGeometry(obsGeo);
+
+  function makeObs() {
+    var g = new THREE.Group();
+    var box = new THREE.Mesh(obsGeo, new THREE.MeshBasicMaterial({
+      transparent: true, opacity: 0.22, depthWrite: false, toneMapped: false
+    }));
+    var wire = new THREE.LineSegments(obsEdge, new THREE.LineBasicMaterial({
+      transparent: true, opacity: 0.9, depthWrite: false, toneMapped: false
+    }));
+    // 地面外框另外畫一圈：俯視視角時方塊的側面看不到，只剩這一圈在地上
+    var footG = new THREE.BufferGeometry();
+    footG.setAttribute('position', new THREE.BufferAttribute(new Float32Array(15), 3));
+    var foot = new THREE.Line(footG, new THREE.LineBasicMaterial({
+      transparent: true, opacity: 0.95, depthWrite: false, toneMapped: false
+    }));
+    var el = document.createElement('div');
+    el.className = 'tag obs';
+    var lab = new THREE.CSS2DObject(el);
+    lab.position.set(0, OBS_H + 0.25, 0);
+    g.add(box); g.add(wire); g.add(foot); g.add(lab);
+    g.userData = { box: box, wire: wire, foot: foot, el: el };
+    obsGrp.add(g);
+    obsPool.push(g);
+    return g;
+  }
+
+  function drawObs(list) {
+    var n = list ? Math.min(list.length, OBS_MAX) : 0, i, used = 0;
+    for (i = 0; i < n; i++) {
+      var o = list[i];
+      if (!o || typeof o.x !== 'number' || typeof o.z !== 'number') continue;
+      var w = Math.max(0.3, o.w || 0.5), l = Math.max(0.3, o.l || 0.5);
+      var g = obsPool[used] || makeObs(), u = g.userData;
+      u.box.scale.set(w, OBS_H, l);
+      u.wire.scale.set(w, OBS_H, l);
+      g.position.set(o.x, OBS_H / 2, -o.z);
+      var fp = u.foot.geometry.attributes.position, hx = w / 2, hz = l / 2;
+      var corner = [-hx, -hz, hx, -hz, hx, hz, -hx, hz, -hx, -hz], k;
+      for (k = 0; k < 5; k++) {
+        fp.array[k * 3] = corner[k * 2];
+        fp.array[k * 3 + 1] = 0.03 - OBS_H / 2;       // 群組原點在方塊中心，拉回地面
+        fp.array[k * 3 + 2] = corner[k * 2 + 1];
+      }
+      fp.needsUpdate = true;
+      u.foot.geometry.computeBoundingSphere();
+      // 離車身矩形越近越紅：停車時該先看哪一個，一眼就分得出來
+      var dx = Math.max(Math.abs(o.x) - EGO_W / 2, 0), dz = Math.max(Math.abs(o.z) - EGO_L / 2, 0);
+      var d = Math.sqrt(dx * dx + dz * dz);
+      var col = srgb(d < CRIT ? COL.red : (d < WARN ? COL.orange : COL.amber));
+      u.box.material.color.copy(col);
+      u.wire.material.color.copy(col);
+      u.foot.material.color.copy(col);
+      var c = typeof o.c === 'number' ? Math.max(0, Math.min(1, o.c)) : 1;
+      u.box.material.opacity = 0.16 + 0.18 * c;
+      u.wire.material.opacity = 0.6 + 0.4 * c;
+      u.el.innerHTML = '障礙物 <b>' + d.toFixed(1) + 'm</b>';
+      u.el.className = 'tag obs' + (d < WARN ? ' danger' : '');
+      u.el.style.display = '';
+      g.visible = true;
+      used++;
+    }
+    // CSS2D 標籤不會跟著父物件隱藏，要自己關掉
+    for (i = used; i < obsPool.length; i++) {
+      obsPool[i].visible = false;
+      obsPool[i].userData.el.style.display = 'none';
+    }
+  }
+
   // ---------- 號誌：前方約 18 m 的 3D 紅綠燈（橫式燈箱）+ HUD ----------
   var TL_C = { red: 0xff4b3e, yellow: 0xffc533, green: 0x35f08f };
   var TL_TX = { red: '紅燈', yellow: '黃燈', green: '綠燈', off: '未亮' };
@@ -985,6 +1065,7 @@
     lastVeh = p.veh || null;
     lastLca = p.lca || null;
     if (p.slots) { slotsAt = now; drawSlots(p.slots); }
+    if (p.obs) { obsAt = now; drawObs(p.obs); }
     if (window.AVM_MAP && p.map) AVM_MAP.update(p.map, now);
   };
 
@@ -1247,6 +1328,7 @@
     if (window.AVM_LCA) AVM_LCA.update(lastLca, lastObjs, now);
     // 停車格：來源停送就收起來
     if (slotsAt > 0 && now - slotsAt > SLOT_TTL) { drawSlots(null); slotsAt = -1e9; }
+    if (obsAt > 0 && now - obsAt > OBS_TTL) { drawObs(null); obsAt = -1e9; }
 
     // 號誌：1.5 s 沒資料就收起來
     var tlOn = now - lastTl < 1500;
@@ -1337,6 +1419,12 @@
         var z0 = 1.2 + si * 2.6;
         slots.push({ p: [2.2, z0, 2.2, z0 + 2.4, 7.2, z0 + 2.4, 7.2, z0], k: 'p', o: si === 1 ? 1 : 0, c: 0.8 });
       }
+      // 障礙物：左前柱子、右後牆面、近到該亮紅色的一個
+      var obs = [
+        { x: -2.6, z: 3.4, w: 0.5, l: 0.6, c: 0.95 },
+        { x: 3.4, z: -3.2, w: 0.6, l: 2.2, c: 0.7 },
+        { x: -1.2, z: 2.9, w: 0.4, l: 0.4, c: 0.5 }
+      ];
       var mapPts = [];
       for (var mi = -4; mi <= 24; mi++) mapPts.push([Math.sin(mi * 0.06) * 1.4, mi * 4]);
       var mp = { t: n, path: mapPts, matched: true, spd: rev ? 3 : 42, off: 0.3, od: s * 11,
@@ -1345,7 +1433,7 @@
       window.setFrame({ objs: objs, wm: 8, hm: 6, flip: false, ground: (n++ % 10 === 0) ? demoGround : null,
         stat: { eng: 'GPU', res: 320, inf: 48, e2e: 66, fps: 9.6 }, road: rd,
         tl: { s: cyc < 5 ? 'red' : cyc < 10 ? 'green' : 'yellow', c: 0.86, ax: 4 },
-        veh: veh, lca: lca, slots: slots, map: mp,
+        veh: veh, lca: lca, slots: slots, obs: obs, map: mp,
         src: DEMO_CAM ? 'cam' : 'screen' });
     }, 150);
   }

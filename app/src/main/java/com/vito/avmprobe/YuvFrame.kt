@@ -123,6 +123,15 @@ class YuvFrame {
         for (j in 0 until oh) for (i in 0 until ow) out[j * ow + i] = argbAt(i * step, j * step)
     }
 
+    /**
+     * 只把 [idx] 指到的線性位置轉成 ARGB 寫進 [out]（out 跟整幀一樣大，其餘位置不動）。
+     * 障礙物偵測只讀得到整幀約一成的像素，全幀轉色純粹是浪費。
+     */
+    fun fillArgbAt(idx: IntArray, out: IntArray) {
+        val w = width
+        for (p in idx) out[p] = argbAt(p % w, p / w)
+    }
+
     /** 轉成 NV21（YuvImage 存 JPEG 用）。 */
     fun toNv21(): ByteArray {
         val w = width

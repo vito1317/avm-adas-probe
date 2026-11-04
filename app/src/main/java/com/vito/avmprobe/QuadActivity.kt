@@ -58,6 +58,7 @@ class QuadActivity : AppCompatActivity(), CameraQuadSource.Listener {
         private const val OBJ_TTL_MS = 1300L   // > 鏡頭重訪週期（FPS 掉到 10 時一輪 1.3 s）
         private const val TL_TTL_MS = 1200L
         private const val BEV_TTL_MS = 1500L
+        private const val OBS_TTL_MS = 4000L   // 障礙物每 4 輪才算一次，而且柱子不會動
         private const val EGO_HW = 0.925f   // 自車半寬 / 半長（m）
         private const val EGO_HL = 2.42f
         private const val SLOT_TL = "tl"     // 前鏡頭上半部專找紅綠燈
@@ -131,6 +132,14 @@ class QuadActivity : AppCompatActivity(), CameraQuadSource.Listener {
     @Volatile private var roadAt = 0L
     @Volatile private var cones: List<Cone> = emptyList()
     @Volatile private var conesAt = 0L
+    // 高於地面的障礙物（柱子、牆、車身）：不靠模型，用四顆鏡頭重疊區的垂直平面掃描。
+    // 估 20–35 ms，會跟 YOLO 搶 CPU，所以只在停車速度下跑、而且降頻。
+    private var heightDet: HeightDetector? = null
+    private var heightArgb = IntArray(0)
+    @Volatile private var obstacles: List<Obstacle> = emptyList()
+    @Volatile private var obstaclesAt = 0L
+    private var heightEvery = 0L
+    @Volatile private var heightBusy = false
     @Volatile private var groundUrl: String? = null
     @Volatile private var groundAt = 0L
     private var previewArgb = IntArray(0)
@@ -237,6 +246,10 @@ class QuadActivity : AppCompatActivity(), CameraQuadSource.Listener {
         }
         row1.addView(toggle("紅綠燈", { prefs.camTrafficLight }) { prefs.camTrafficLight = !prefs.camTrafficLight })
         row1.addView(toggle("自建俯視", { prefs.camBev }) { prefs.camBev = !prefs.camBev })
+        row1.addView(toggle("障礙物", { prefs.camObstacle }) {
+            prefs.camObstacle = !prefs.camObstacle
+            if (!prefs.camObstacle) obstacles = emptyList()
+        })
         left.addView(row1)
 
         val row2 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
@@ -642,6 +655,34 @@ class QuadActivity : AppCompatActivity(), CameraQuadSource.Listener {
         // 停在格子裡的車如果沒被框起來，它的車身邊緣會被當成「格內有線」而把格子整個刷掉。
         bevVehicles = vehicles.size
 
+        // 障礙物偵測吃的是原始四分割畫面（要分別從各鏡頭取樣），不是俯視圖。
+        // 只在停車速度（< 15 km/h 或車速不明）下跑，而且每 4 輪才跑一次：
+        // 柱子和牆不會動，更新率低沒關係，但它跟 YOLO 搶 CPU。
+        val spd = VehicleBus.signals.snapshot().speedKmh
+        val slow = spd == null || spd < 15f
+        // heightBusy：上一輪還在算就不要覆寫緩衝區（它在 ground 執行緒讀）
+        if (prefs.camObstacle && slow && !heightBusy && (heightEvery++ % 4L == 0L)) {
+            val hw = frame.width
+            val hh = frame.height
+            val hd = heightDet ?: HeightDetector(g).also { heightDet = it }
+            if (heightArgb.size != hw * hh) heightArgb = IntArray(hw * hh)
+            // 降解析度會漏掉小柱子（實測 4 張實車畫面少一個真實目標），所以維持原解析度，
+            // 改成只轉偵測真的會取樣到的那些點
+            frame.fillArgbAt(hd.pixelsNeeded(hw, hh), heightArgb)
+            val buf2 = heightArgb
+            heightBusy = true
+            ground.post {
+                try {
+                    obstacles = hd.detect(buf2, hw, hh)
+                    obstaclesAt = SystemClock.elapsedRealtime()
+                } catch (t: Throwable) {
+                    obstacles = emptyList()
+                } finally {
+                    heightBusy = false
+                }
+            }
+        }
+
         // 取樣在這裡做（frame 只在這條執行緒有效），辨識丟到 ground 執行緒，跟下一輪偵測並行
         frame.sampleLut(table, bevArgb)
         groundBusy = true
@@ -736,6 +777,16 @@ class QuadActivity : AppCompatActivity(), CameraQuadSource.Listener {
                 .put("er", rd.edgeR?.let { r2(it) } ?: JSONObject.NULL))
         }
         if (now - slotsAt < BEV_TTL_MS && slots.isNotEmpty()) p.put("slots", slotsJson(slots, false))
+        // 障礙物更新率低（每 4 輪一次、又只在停車速度下跑），TTL 放寬成 4 秒
+        val obs = obstacles
+        if (now - obstaclesAt < OBS_TTL_MS && obs.isNotEmpty()) {
+            val oa = JSONArray()
+            for (o in obs) {
+                oa.put(JSONObject().put("x", r2(o.x)).put("z", r2(o.z))
+                    .put("w", r2(o.w)).put("l", r2(o.l)).put("c", r2(o.conf)))
+            }
+            p.put("obs", oa)
+        }
         if (!vs.isEmpty) p.put("veh", VehicleSignals.toJson(vs))
         if (now - tracksAt < OBJ_TTL_MS) lcaState?.let { p.put("lca", lca.toJson(it)) }
         mapSrc?.takeJsonIfNew()?.let { p.put("map", it) }   // 每個 GPS 定位只送一次，3D 自己沿路推算
@@ -765,6 +816,7 @@ class QuadActivity : AppCompatActivity(), CameraQuadSource.Listener {
                 .append(" · 三角錐 ").append(cones.size)
                 .append(" · 停車格 ").append(slots.size)
                 .append(" · 車輛框 ").append(bevVehicles)
+            if (prefs.camObstacle) sb.append(" · 障礙物 ").append(obstacles.size)
         }
         return sb.toString()
     }

@@ -100,6 +100,14 @@ class AppPrefs(context: Context) {
         get() = sp.getString("camDetect", "FBLR")!!
         set(v) = sp.edit().putString("camDetect", v).apply()
 
+    /**
+     * 障礙物偵測（柱子、牆、路緣、別人的車身）：四顆鏡頭重疊區的垂直平面掃描，不靠模型。
+     * 只在停車速度下跑且降頻，但仍然會跟 YOLO 搶 CPU，所以留一個開關。
+     */
+    var camObstacle: Boolean
+        get() = sp.getBoolean("camObstacle", true)
+        set(v) = sp.edit().putBoolean("camObstacle", v).apply()
+
     /** 鏡頭直讀的版面：0 = 左右分割、1 = 3D 全螢幕、2 = 鏡頭全螢幕。 */
     var fullScreen: Int
         get() = sp.getInt("fullScreen", 0).coerceIn(0, 2)
