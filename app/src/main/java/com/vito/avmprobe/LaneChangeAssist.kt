@@ -28,7 +28,9 @@ data class LcaState(
     /** 車道線資訊目前可用（否則盲點區是以自車為中心的預設 3.5 m 車道）。 */
     val laneOk: Boolean = false,
     /** 倒車中：不警示（盲點／來車預警只在前進時有意義）。 */
-    val reversing: Boolean = false
+    val reversing: Boolean = false,
+    /** 打燈是「路口轉彎」而非「變道」：不畫變道路徑，但警告照常。 */
+    val turning: Boolean = false
 )
 
 /**
@@ -68,6 +70,8 @@ class LaneChangeAssist {
         const val DRIFT_V = 0.25f          // 往車道線偏移速度 m/s
         const val DRIFT_MS = 500L
         const val STEER_DEG = 8f           // 方向盤往該側超過這個角度算有意圖
+        const val TURN_SPEED = 7.0         // m/s（25 km/h）以下打燈多半是路口轉彎，不是變道
+        const val TURN_STEER_DEG = 90f     // 方向盤打超過這個角度不可能是變道
         const val OVERTAKE_V = 2.8f        // 自車以 > 10 km/h 超越的車不警示
         const val STILL_V = 1.0f           // 對地速度低於此 = 靜止物
         const val MOVING_V = 3.0           // 自車高於此（11 km/h）才完全不理靜止物
@@ -308,9 +312,17 @@ class LaneChangeAssist {
         if (lv > 0 && nowMs - squeezeAt[0] <= OFF_MS) zoneL[2] = max(zoneL[2], -innerTwo.toFloat())
         if (rv > 0 && nowMs - squeezeAt[1] <= OFF_MS) zoneR[0] = min(zoneR[0], innerTwo.toFloat())
 
+        // 打方向燈不一定是要變道，也可能是路口要轉彎（或路邊停車）。兩者差很多：
+        // 轉彎時畫一條切進隔壁車道的變道路徑是錯的，「目標車道有車」的說法也不成立。
+        // 只靠速度與方向盤分（地圖不可靠：車機 GPS 會飄、停車場根本收不到）：
+        // 慢速多半是路口轉彎；方向盤打超過 90° 絕不可能是變道。
+        // 注意：這裡只收掉「畫錯的路徑」，L/R 等級與 threat 一律照送——
+        // 轉彎時盲點反而更危險（右轉遇到右側鑽上來的機車），警告不能因此消失。
+        val turning = (ego != null && ego < TURN_SPEED) || (st != null && abs(st) > TURN_STEER_DEG)
+
         var path: List<FloatArray>? = null
         var conflict = false
-        if (intent != null) {
+        if (intent != null && !turning) {
             val dir = if (intent == 'L') -1 else 1
             // 剛跨過線（燈還亮著）：目標是剛進入的這條車道，不是再下一條
             val target = if (laneOk && crossDir == dir && nowMs - crossAt <= CROSS_HOLD_MS) cx else cx + dir * w
@@ -328,7 +340,8 @@ class LaneChangeAssist {
         return LcaState(
             L = lv, R = rv, intent = intent, path = path, pathOk = pathOk,
             threatId = threatId, threatTtc = if (threatId != null) threatTtc.toFloat() else null,
-            zoneL = zoneL, zoneR = zoneR, latVel = latVel?.toFloat(), laneW = w.toFloat(), laneOk = laneOk
+            zoneL = zoneL, zoneR = zoneR, latVel = latVel?.toFloat(), laneW = w.toFloat(), laneOk = laneOk,
+            turning = intent != null && turning
         )
     }
 
@@ -513,6 +526,7 @@ class LaneChangeAssist {
             .put("L", s.L).put("R", s.R)
             .put("intent", s.intent?.toString() ?: JSONObject.NULL)
             .put("pathOk", s.pathOk)
+            .put("turning", s.turning)   // 路口轉彎：面板的用詞要跟「變道」分開
         val p = s.path
         if (p == null) o.put("path", JSONObject.NULL) else {
             val a = JSONArray()

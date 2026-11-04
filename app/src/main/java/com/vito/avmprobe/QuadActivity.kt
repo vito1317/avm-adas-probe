@@ -623,23 +623,34 @@ class QuadActivity : AppCompatActivity(), CameraQuadSource.Listener {
         val objs = JSONArray()
         val boxes = ArrayList<QuadOverlayView.Box>()
         for (r in camResults.values) if (now - r.at < OBJ_TTL_MS) boxes.addAll(r.boxes)
-        // 已確認的軌跡（id 跟 lca 的 threat.id 同一套）；c 用命中次數近似
-        val coneTr = ArrayList<Track>()
+        // 顯示用偵測結果（跟 2D 框同一個來源，有框就一定有物件），追蹤只負責加值：
+        // 配到同種類最近的確認軌跡才加 id / vx / vz / yaw。沒 id 的物件不會被 lca3d 的 threat.id 配到，
+        // LaneChangeAssist 也只吃 tracks 不吃 objs，所以多顯示出來的東西不會變成假警告。
         val ego = egoMps(vs)
-        if (now - tracksAt < OBJ_TTL_MS) for (tr in tracks) {
-            if (!tr.confirmed) continue
-            if (tr.t == "cone") coneTr.add(tr)
-            val o = JSONObject().put("t", tr.t).put("x", r2(tr.x)).put("z", r2(tr.z))
-                .put("c", r2((tr.hits * 0.25f).coerceAtMost(1f)))
-                .put("id", tr.id).put("vx", r2(tr.vx)).put("vz", r2(tr.vz))
-            yaw(tr, ego)?.let { o.put("yaw", r2(it)) }
-            objs.put(o)
+        val coneOut = ArrayList<WObj>()
+        val used = HashSet<Int>()
+        for (o in currentObjects(now)) {
+            if (o.t == "cone") coneOut.add(o)
+            var best: Track? = null
+            var bd = 1.5f
+            if (now - tracksAt < OBJ_TTL_MS) for (tr in tracks) {
+                if (!tr.confirmed || tr.t != o.t || tr.id in used) continue   // 一個軌跡只配一個物件
+                val d = hypot(tr.x - o.x, tr.z - o.z)
+                if (d < bd) { bd = d; best = tr }
+            }
+            val j = JSONObject().put("t", o.t).put("x", r2(o.x)).put("z", r2(o.z)).put("c", r2(o.c))
+            best?.let { tr ->
+                used.add(tr.id)
+                j.put("id", tr.id).put("vx", r2(tr.vx)).put("vz", r2(tr.vz))
+                yaw(tr, ego)?.let { y -> j.put("yaw", r2(y)) }
+            }
+            objs.put(j)
         }
         if (now - conesAt < BEV_TTL_MS) {
             for (c in cones) {
-                // 同一顆實體錐軌跡已輸出過就跳過 BEV 錐，面板才不會畫成一對。
-                // 留軌跡捨 BEV：id 要給前端關聯用；代價是錐的位置更新慢一點、消失多滑行 1.2 s
-                if (coneTr.any { hypot(it.x - c.x, it.z - c.z) < 1f }) continue
+                // 鏡頭已經看到的錐就跳過 BEV 錐，面板才不會畫成一對。
+                // 留鏡頭捨 BEV：位置跟 2D 框一致、也才帶得到 id；代價是 BEV 較準的那個位置用不到
+                if (coneOut.any { hypot(it.x - c.x, it.z - c.z) < 1f }) continue
                 objs.put(JSONObject().put("t", "cone").put("x", r2(c.x)).put("z", r2(c.z)).put("c", r2(c.conf)))
             }
         }

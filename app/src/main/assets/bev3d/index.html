@@ -129,6 +129,7 @@
 <script src="lib/RoomEnvironment.js"></script>
 <script src="lib/GLTFLoader.js"></script>
 <script src="models.js"></script>
+<script src="roadusers.js"></script>
 <script src="vehicle3d.js"></script>
 <script src="map3d.js"></script>
 <script src="lca3d.js"></script>
@@ -144,7 +145,7 @@
     asphalt: 0x11171f, ego: 0xeaf7ff, glass: 0x0c161d };
   var NAMES = { car: '汽車', van: '箱型車', truck: '卡車', bus: '公車',
     moto: '機車', bigbike: '重機', bike: '自行車', ped: '行人', cone: '三角錐' };
-  var RADIUS = { car: 0.9, van: 1.0, truck: 1.2, bus: 1.2,
+  var RADIUS = { car: 0.9, van: 1.0, truck: 1.2, bus: 1.3,
     moto: 0.4, bigbike: 0.4, bike: 0.4, ped: 0.3, cone: 0.2 };   // 物件約略半寬(m)
   var GATE = { car: 2.5, van: 2.5, truck: 2.5, bus: 2.5,
     moto: 2.5, bigbike: 2.5, bike: 2.5, ped: 2.5, cone: 1.2 };   // 跨幀關聯距離門檻(m)
@@ -688,6 +689,11 @@
   // ---------- 外掛模組 ----------
   // 先把每種模型建一次並編譯 shader，免得第一台車出現時卡一下
   if (MODELS && MODELS.prewarm) { try { MODELS.prewarm(renderer, scene, camera); } catch (e) { } }
+  // 寫實 GLB 模型：懶載入，讀不到 manifest 就一直用程式建模的，不會壞。
+  // 行人是骨骼動畫，GPU 不支援頂點貼圖時改用程式建模版。
+  if (window.AVM_RU) {
+    try { AVM_RU.init('models/', null, renderer.capabilities.floatVertexTextures); } catch (e) { }
+  }
   if (window.AVM_VEH) AVM_VEH.init(scene, THREE, app, ego);
   if (window.AVM_MAP) AVM_MAP.init(scene, THREE, app);
   if (window.AVM_LCA) AVM_LCA.init(scene, THREE, app);
@@ -825,19 +831,24 @@
     var n = paintN[t] = (paintN[t] || 0) + 1;
     return list[(n - 1) % list.length];
   }
-  function makeObj(t) {
-    var col = paintFor(t), seed = (paintN[t] || 1) * 7919, g;
+  // 寫實 GLB 模型（roadusers.js）為主，程式建模（models.js）當備援：
+  // GLB 還沒載完、或車機載不動時先顯示程式建模的，載完 dress() 會自動換上。
+  function buildFallback(t, col, seed) {
     if (MODELS) {
-      g = t === 'van' ? MODELS.makeVan(col) : t === 'truck' ? MODELS.makeTruck(col)
+      return t === 'van' ? MODELS.makeVan(col) : t === 'truck' ? MODELS.makeTruck(col)
         : t === 'bus' ? MODELS.makeBus(col) : t === 'moto' ? MODELS.makeScooter(col, seed)
         : t === 'bigbike' ? MODELS.makeMotorcycle(col, seed) : t === 'bike' ? MODELS.makeBicycle(col, seed)
         : t === 'ped' ? MODELS.makePerson(col, seed) : t === 'cone' ? MODELS.makeCone()
         : MODELS.makeSedan(col);
-    } else {   // models.js 沒載到就退回內建方塊模型
-      g = t === 'truck' || t === 'bus' ? makeTruck(0x8f7fd6)
-        : t === 'moto' || t === 'bigbike' || t === 'bike' ? makeScooter(0xe0a63a)
-        : t === 'ped' ? makePerson(0x5ef08a) : t === 'cone' ? makeCone() : makeCar(0x1f7fae);
     }
+    return t === 'truck' || t === 'bus' ? makeTruck(0x8f7fd6)
+      : t === 'moto' || t === 'bigbike' || t === 'bike' ? makeScooter(0xe0a63a)
+      : t === 'ped' ? makePerson(0x5ef08a) : t === 'cone' ? makeCone() : makeCar(0x1f7fae);
+  }
+  function makeObj(t) {
+    var col = paintFor(t), seed = (paintN[t] || 1) * 7919, g;
+    if (window.AVM_RU) g = AVM_RU.wrap(t, function () { return buildFallback(t, col, seed); });
+    else g = buildFallback(t, col, seed);
     var el = document.createElement('div');
     el.className = 'tag ' + t;
     var lab = new THREE.CSS2DObject(el);
@@ -848,8 +859,9 @@
     g.userData.lab = lab;
     return g;
   }
-  function acquire(t) {
+  function acquire(t, id) {
     var g = POOL[t].pop() || makeObj(t);
+    if (window.AVM_RU) AVM_RU.dress(g, id);   // 依軌跡 id 決定車款與車色（pool 重用時外觀才穩定）
     g.userData.el.style.display = '';
     scene.add(g);
     return g;
@@ -874,7 +886,8 @@
         if (d < bd) { bd = d; best = tr; }
       }
       if (!best) {
-        best = { id: nextId++, t: o.t, mesh: acquire(o.t), x: wx, z: wz, tx: wx, tz: wz, yaw: 0, yawT: 0, txt: '' };
+        var nid = nextId++;
+        best = { id: nid, t: o.t, mesh: acquire(o.t, nid), x: wx, z: wz, tx: wx, tz: wz, yaw: 0, yawT: 0, txt: '' };
         best.mesh.position.set(wx, 0, wz);
         tracks.push(best);
         fresh = true;
