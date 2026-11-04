@@ -100,6 +100,11 @@ class AppPrefs(context: Context) {
         get() = sp.getString("camDetect", "FBLR")!!
         set(v) = sp.edit().putString("camDetect", v).apply()
 
+    /** 鏡頭直讀的版面：0 = 左右分割、1 = 3D 全螢幕、2 = 鏡頭全螢幕。 */
+    var fullScreen: Int
+        get() = sp.getInt("fullScreen", 0).coerceIn(0, 2)
+        set(v) = sp.edit().putInt("fullScreen", v.coerceIn(0, 2)).apply()
+
     /** 自建俯視圖（拼接四顆鏡頭）→ 實景地面、道路、三角錐。 */
     var camBev: Boolean
         get() = sp.getBoolean("camBev", true)

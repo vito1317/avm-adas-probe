@@ -21,6 +21,7 @@ import android.util.Base64
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.TextureView
+import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.Button
@@ -84,6 +85,9 @@ class QuadActivity : AppCompatActivity(), CameraQuadSource.Listener {
     private lateinit var web: Bev3DWeb
     private lateinit var texture: TextureView
     private lateinit var overlay: QuadOverlayView
+    private var camSide: ViewGroup? = null     // 左半邊（鏡頭畫面＋按鈕），全螢幕時整塊藏起來
+    private var root: ViewGroup? = null
+    private var fsBtn: Button? = null
     private var geo: AvmGeometry? = null
     private var calibText = "{}"
     private var calibrated = false
@@ -244,7 +248,49 @@ class QuadActivity : AppCompatActivity(), CameraQuadSource.Listener {
         left.addView(row2)
 
         root.addView(web.view, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f))
-        return root
+        camSide = left
+        this.root = root
+
+        // 全螢幕切換鈕浮在最上層：切到全螢幕之後左邊整塊會被藏起來，
+        // 按鈕要是放在裡面就回不來了。
+        val stack = FrameLayout(this)
+        stack.addView(root, FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        fun floatBtn(label: String, onClick: () -> Unit) = Button(this).apply {
+            text = label; isAllCaps = false; textSize = 11f; alpha = 0.55f
+            setPadding(18, 6, 18, 6)
+            setOnClickListener { onClick() }
+        }
+        fsBtn = floatBtn("") { cycleFullscreen() }
+        // 全螢幕時左邊整塊（含「返回」）會不見，系統列也收起來了，所以返回也要浮著
+        val bar = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        bar.addView(fsBtn)
+        bar.addView(floatBtn("返回") { finish() })
+        stack.addView(bar, FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply { gravity = android.view.Gravity.TOP or android.view.Gravity.START; leftMargin = 8; topMargin = 8 })
+        applyFullscreen()
+        return stack
+    }
+
+    /** 0 = 左右分割、1 = 3D 全螢幕、2 = 鏡頭全螢幕 */
+    private fun cycleFullscreen() {
+        prefs.fullScreen = (prefs.fullScreen + 1) % 3
+        applyFullscreen()
+    }
+
+    private fun applyFullscreen() {
+        val m = prefs.fullScreen
+        camSide?.visibility = if (m == 1) View.GONE else View.VISIBLE
+        web.view.visibility = if (m == 2) View.GONE else View.VISIBLE
+        fsBtn?.text = when (m) { 1 -> "⤢ 3D"; 2 -> "⤢ 鏡頭"; else -> "⤢ 分割" }
+        // 全螢幕時連系統列一起收掉，小螢幕才看得到東西
+        val w = window ?: return
+        @Suppress("DEPRECATION")
+        w.decorView.systemUiVisibility = if (m == 0) 0 else
+            (View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
+                View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
+                View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION)
     }
 
     private fun button(label: String, onClick: () -> Unit) = Button(this).apply {

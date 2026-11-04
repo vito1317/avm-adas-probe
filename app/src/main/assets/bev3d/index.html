@@ -80,6 +80,18 @@
   /* map3d 的 HUD 位置由宿主決定：放右欄，避開左上計數、左下盲點警示、右下號誌。
      選擇器要比 map3d.js 後注入的 .amap 更具體，align-items 才蓋得過去 */
   #app .amap{position:absolute;right:10px;top:52px;z-index:4;align-items:flex-end}
+  /* 寬版（全螢幕 1920x720）：3D 只佔左邊 --rw，右邊 --mapw 整欄給地圖。
+     其餘 HUD 都要收進左邊那一區，不然會疊到地圖欄上。 */
+  #app.wide::after{content:'';position:absolute;top:0;bottom:0;left:var(--rw);
+    width:1px;background:var(--line);z-index:3}
+  #app.wide .amap{right:20px;top:20px;align-items:center}
+  #app.wide .dock{left:calc(var(--rw) / 2)}
+  #app.wide .alert{left:calc(var(--rw) / 2)}
+  #app.wide .wait{left:calc(var(--rw) / 2)}
+  #app.wide .tl{right:calc(var(--mapw) + 10px)}
+  #app.wide .topbtn{right:calc(var(--mapw) + 10px)}
+  #app.wide .cal{right:calc(var(--mapw) + 10px)}
+  #app.wide .lca-r{right:calc(var(--mapw) + 10px)}
   .tag b{margin-left:4px;font-variant-numeric:tabular-nums}
   [hidden]{display:none!important}
 </style>
@@ -295,6 +307,7 @@
   // 線方向 d = (sinφ, cosφ)，法向 n = (cosφ, −sinφ)，φ 從車軸（+z）往右量，正規化到 [−90°, 90°)
   var LINE_C = { w: srgb(0xeef2f5), y: srgb(0xffc533), r: srgb(0xff4b3e) }, LINE_W = { w: 0.15, y: 0.15, r: 0.2 };
   var DASH = 4, PERIOD = 10, MAXQ = 12, MAX_LINES = 16, LINE_Y = 0.014;
+  var WIDE_AR = 2.0;     // 寬高比超過這個就切成「3D 左、地圖右」的寬版（全螢幕 1920x720 = 2.67）
   var LINE_EXT = 2.5;    // 縱向線往觀測範圍外延伸的長度（m）
   var LINE_MIN_C = 0.45; // 信心低於此不畫：車身反光、鏡頭接縫、地面髒污都會湊出短短的「線」
   var LINE_MIN_M = 1.5;  // 實際看到的長度不足此值不畫（0.8 m 的東西延伸後變 5.8 m，放大 7 倍）
@@ -1125,13 +1138,21 @@
   var dockEl = document.getElementById('dock');
   function resize() {
     var w = app.clientWidth || window.innerWidth, h = app.clientHeight || window.innerHeight;
-    renderer.setSize(w, h);
-    labels.setSize(w, h);
-    camera.aspect = w / h;
+    // 全螢幕時畫面很寬（1920x720）：3D 只佔左邊，右邊讓給地圖，不然地圖只是角落一個小方塊
+    var wide = w / h > WIDE_AR;
+    var mapW = wide ? Math.max(300, Math.min(440, Math.round(w * 0.23))) : 0;
+    var rw = w - mapW;
+    app.className = wide ? 'wide' : '';
+    app.style.setProperty('--rw', rw + 'px');
+    app.style.setProperty('--mapw', mapW + 'px');
+    if (window.AVM_MAP && AVM_MAP.setMiniSize) AVM_MAP.setMiniSize(wide ? mapW - 40 : 170);
+    renderer.setSize(rw, h);
+    labels.setSize(rw, h);
+    camera.aspect = rw / h;
     camera.updateProjectionMatrix();
-    // 視窗太窄、號誌會撞到 dock 時改放到 dock 上方
+    // 視窗太窄、號誌會撞到 dock 時改放到 dock 上方（寬版時 dock 只佔左邊的 3D 區）
     var d = dockEl.getBoundingClientRect();
-    tlEl.style.bottom = d.right > w - 150 ? Math.round(h - d.top + 8) + 'px' : '';
+    tlEl.style.bottom = d.right > rw - 150 ? Math.round(h - d.top + 8) + 'px' : '';
   }
   window.addEventListener('resize', resize);
   resize();

@@ -615,5 +615,20 @@
       hud: !!(hud && !hud.hasAttribute('data-off')), mini: !!(ui.mini && !ui.mini.hasAttribute('data-off')) };
   }
 
-  window.AVM_MAP = { init: init, update: update, setNear: setNear, state: state };
+  /**
+   * 改小地圖邊長（CSS px）。全螢幕時畫面很寬，右邊整欄留給地圖，
+   * 這時要把畫布本身放大重畫，不是把小圖拉大（拉大只會糊）。
+   */
+  function setMiniSize(px) {
+    if (!inited || !ui.mini || !(px > 80)) return;
+    px = Math.round(px);
+    if (px === MINI) return;
+    MINI = px;
+    ui.mini.style.width = ui.mini.style.height = MINI + 'px';
+    ui.canvas.width = Math.round(MINI * miniDpr);
+    ui.canvas.height = Math.round(MINI * miniDpr);
+    miniLast = -1e9;   // 逼下一幀重畫
+  }
+
+  window.AVM_MAP = { init: init, update: update, setNear: setNear, state: state, setMiniSize: setMiniSize };
 })();
