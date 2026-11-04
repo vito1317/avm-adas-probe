@@ -486,12 +486,21 @@ class QuadActivity : AppCompatActivity(), CameraQuadSource.Listener {
         val cam = g.cam("front") ?: return
         val qx0 = (cam.quad % 2) * qw
         val qy0 = (cam.quad / 2) * qh
-        // 前鏡頭上半部（地平線以上）放大再偵測一次，紅綠燈在魚眼裡很小
-        val rx0 = qx0 + (qw * 0.15f).toInt()
-        val rw = (qw * 0.7f).toInt()
-        val rh = (qh * 0.5f).toInt()
-        val (dets, inf) = det.detectWith(rw, rh, rx0.toFloat(), qy0.toFloat()) { buf, nchw, size, lb ->
-            frame.fillModelInput(rx0, qy0, rw, rh, buf, nchw, size, lb)
+        // 紅綠燈在魚眼裡非常小：前鏡頭裝在約 0.3 m 高、下傾約 39°（那是停車用的鏡頭），
+        // 18 m 外 1 m 寬的燈箱只有約 9 px。原本裁 0.7qw x 0.5qh 再縮到模型輸入，等於再砍掉六成，
+        // 剩 3 px 根本抓不到。改成貼著地平線裁一塊**正方形**，縮放損失幾乎為零。
+        // 地平線在影像上是以主點為中心、半徑 = fx*QW*pitch 的圓（我們的等距模型）。
+        val rHor = (cam.fx * qw * Math.toRadians(cam.pitch)).toFloat()
+        val side = (qh * 0.55f).toInt().coerceAtMost(qw)
+        val cxPx = (cam.cx * qw).toFloat()
+        val cyPx = (cam.cy * qh).toFloat()
+        // 正方形中心放在地平線稍微上面一點（號誌在地平線以上）
+        val rx0 = (qx0 + (cxPx - side / 2f)).toInt().coerceIn(qx0, qx0 + qw - side)
+        val ry0 = (qy0 + (cyPx - rHor - side * 0.55f)).toInt().coerceIn(qy0, qy0 + qh - side)
+        val rw = side
+        val rh = side
+        val (dets, inf) = det.detectWith(rw, rh, rx0.toFloat(), ry0.toFloat()) { buf, nchw, size, lb ->
+            frame.fillModelInput(rx0, ry0, rw, rh, buf, nchw, size, lb)
         }
         emaInfer = ema(emaInfer, inf.toFloat())
         val now = SystemClock.elapsedRealtime()
