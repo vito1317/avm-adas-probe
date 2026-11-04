@@ -78,6 +78,10 @@ class HeadUnitSignalAdapter(
                     val v = intent.getIntExtra(Decode.KEY_STATE, -1)
                     if (v >= 0) s.reportSpeed(v.toFloat())
                 }
+                // 這台車機自己的車速廣播：鍵名未知，從 extras 裡認
+                Decode.ACT_TS_SPEED, Decode.ACT_TS_MCU -> {
+                    Decode.speedFrom(intent.extras)?.let { s.reportSpeed(it) }
+                }
                 // 方向燈聯動：位元遮罩，跟 AIDL 的 GetLeft/Right/Emergency 同一套編碼
                 Decode.ACT_LRREVERSE -> {
                     val v = intent.getIntExtra(Decode.KEY_STATE, -1)
@@ -239,13 +243,51 @@ class HeadUnitSignalAdapter(
         const val ACT_CAMERA = "Voice_Camera_State"
         const val ACT_FORBID = "Voice_Forbid_State"
         const val ACT_SPEED = "Voice_Speed_State"
+
+        /**
+         * 這台車機（com.ts.MainUI）自己的車速廣播。
+         * 掃描使用者車機上 52 個 App 的 170 個候選廣播，**沒有** `Voice_Speed_State`，
+         * 但有這兩個 —— 所以 Voice_* 那一組很可能是別款車機的。兩組都掛著收，
+         * 廣播是被動接收，多掛幾個沒有風險。
+         */
+        const val ACT_TS_SPEED = "com.ts.main.auto_avm_speed_change"
+        const val ACT_TS_MCU = "com.ts.main.mcustate"
         const val ACT_BACKSIGHT = "xy.image.wideAngle.or.backSight"
         const val ACT_LAMP = "action.com.flyaudio.device.head.lamp.status"
 
         val ACTIONS = arrayOf(
             ACT_ACC, ACT_REVERSE, ACT_LRREVERSE, ACT_CAMERA,
-            ACT_FORBID, ACT_SPEED, ACT_BACKSIGHT, ACT_LAMP
+            ACT_FORBID, ACT_SPEED, ACT_BACKSIGHT, ACT_LAMP,
+            ACT_TS_SPEED, ACT_TS_MCU
         )
+
+        /** 車速的合理範圍（km/h）：拿來從不知道鍵名的 extra 裡認出哪個是車速。 */
+        const val SPEED_MAX = 320
+
+        /**
+         * 不知道鍵名時，從 extras 裡找出車速。
+         * 先認 [KEY_STATE]（Voice_* 那組用這個），再退而求其次掃所有 Int/Short/Byte/Float，
+         * 取第一個落在 0..[SPEED_MAX] 的值。鍵名依字母排序後再掃，結果才不會隨 Bundle 順序跳動。
+         */
+        fun speedFrom(b: android.os.Bundle?): Float? {
+            if (b == null) return null
+            return speedFromExtras(b.keySet().map { it to b.get(it) })
+        }
+
+        /** [speedFrom] 的純 Kotlin 版（Bundle 在單元測試裡不能用）。 */
+        fun speedFromExtras(extras: List<Pair<String, Any?>>): Float? {
+            fun ok(v: Any?): Float? = when (v) {
+                is Int -> if (v in 0..SPEED_MAX) v.toFloat() else null
+                is Short -> if (v in 0..SPEED_MAX) v.toFloat() else null
+                is Byte -> if (v in 0..SPEED_MAX) v.toFloat() else null
+                is Float -> if (v >= 0f && v <= SPEED_MAX.toFloat()) v else null
+                is Double -> if (v >= 0.0 && v <= SPEED_MAX.toDouble()) v.toFloat() else null
+                else -> null
+            }
+            extras.firstOrNull { it.first == KEY_STATE }?.let { ok(it.second)?.let { v -> return v } }
+            for ((_, v) in extras.sortedBy { it.first }) ok(v)?.let { return it }
+            return null
+        }
 
         /** 雷達等級上限：到這個等級就是「沒東西」（DISPLAY_RADAR_MAX 預設 1500 mm 推出來的） */
         const val RADAR_CLEAR_LEVEL = 11

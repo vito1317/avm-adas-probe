@@ -52,7 +52,7 @@ class StartAssistTest {
         }
     }
 
-    /** 沒有車速訊號就整個不作用（分不出是誰在動）。 */
+    /** 一開始就沒有車速訊號 → 整個不作用（分不出是誰在動）。 */
     @Test
     fun needsSpeed() {
         val a = StartAssist()
@@ -63,6 +63,60 @@ class StartAssistTest {
             assertFalse(s.lead)
             assertFalse(s.green)
         }
+    }
+
+    /**
+     * 車速訊號是「有變化才廣播」的，停著不動 2 秒後 speedKmh 就過期變 null ——
+     * 正好是這個功能要用的時候。最後一次讀到 0，之後沒有新值，要當作還停著。
+     */
+    @Test
+    fun stoppedSurvivesStaleSpeed() {
+        val a = StartAssist()
+        var t = 0L
+        a.update(t, 0f, car(5f), null, 0f)          // 最後一次有效車速 = 0
+        t += StartAssist.ARM_MS + 100
+        assertFalse(a.update(t, null, car(5f), null, 0f).lead)
+        t += 30_000                                  // 等紅燈，整段都沒有車速訊號
+        assertFalse(a.update(t, null, car(5f), null, 0f).lead)
+        t += 500
+        assertTrue("訊號斷了也要會叫", a.update(t, null, car(6.6f), null, 0f).lead)
+    }
+
+    /** 紅燈轉綠一樣不能被過期的車速訊號擋掉。 */
+    @Test
+    fun greenSurvivesStaleSpeed() {
+        val a = StartAssist()
+        var t = 0L
+        a.update(t, 0f, none, "red", 0.9f)
+        repeat(10) { t += 300; a.update(t, null, none, "red", 0.9f) }
+        t += 100
+        a.update(t, null, none, "green", 0.9f)
+        t += StartAssist.GREEN_MS + 50
+        assertTrue(a.update(t, null, none, "green", 0.9f).green)
+    }
+
+    /** 最後一次讀到的是「在動」，之後訊號斷掉 → 狀況不明，不可以當成停著。 */
+    @Test
+    fun staleWhileMovingIsUnknown() {
+        val a = StartAssist()
+        var t = 0L
+        a.update(t, 40f, car(5f), null, 0f)
+        repeat(20) {
+            t += 300
+            assertFalse(a.update(t, null, car(5f + it * 0.2f), null, 0f).lead)
+        }
+    }
+
+    /** 訊號斷太久就不猜了。 */
+    @Test
+    fun staleTooLongGivesUp() {
+        val a = StartAssist()
+        var t = 0L
+        a.update(t, 0f, car(5f), null, 0f)
+        t += StartAssist.STALE_STOP_MS + 1000
+        assertFalse(a.update(t, null, car(5f), null, 0f).lead)
+        t += 500
+        assertFalse(a.update(t, null, car(8f), null, 0f).lead)
     }
 
     /** 旁邊車道的車開走不算前車。 */

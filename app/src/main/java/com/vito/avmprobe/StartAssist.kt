@@ -36,11 +36,19 @@ class StartAssist {
         const val RED_MS = 1500L         // 紅／黃燈要穩定這麼久
         const val GREEN_MS = 400L        // 綠燈要穩定這麼久
         const val TL_CONF = 0.5f         // 號誌信心下限
+        const val STALE_STOP_MS = 180_000L   // 停住後車速訊號斷了，還能當「仍然停著」多久
         private val LEAD_TYPES = setOf("car", "van", "truck", "bus", "moto", "bigbike")
     }
 
     /** [lead] 前車走了、[green] 轉綠燈了；[gap] 前車比最近時拉開了幾公尺（沒有前車時 0）。 */
     data class State(val lead: Boolean, val green: Boolean, val gap: Float)
+
+    // 車速訊號多半是「有變化才廣播」的，而 VehicleSignals 2 秒就讓它過期 ——
+    // 停在紅燈前不動，第 3 秒起 speedKmh 就是 null 了，正好是這個功能要用的時候。
+    // 最後一次讀到的是「幾乎沒在動」，之後一直沒有新值，就代表它還是沒動
+    //（真的動起來，會變才廣播的訊號就會送新值過來）。
+    private var lastSpeed: Float? = null
+    private var lastSpeedAt = 0L
 
     private var stoppedAt = -1L      // 開始停住的時刻；-1 = 沒停
     private var minZ = Float.NaN     // 武裝後前車最近到幾公尺
@@ -64,15 +72,16 @@ class StartAssist {
         tlState: String?,
         tlConf: Float
     ): State {
-        if (speedKmh == null) {          // 沒車速就分不出是誰在動
+        val sp = effectiveSpeed(nowMs, speedKmh)
+        if (sp == null) {                // 沒車速就分不出是誰在動
             reset()
             return State(false, false, 0f)
         }
-        if (speedKmh >= MOVE_KMH) {      // 自己動了 → 全部歸零，下次停下來重新算
+        if (sp >= MOVE_KMH) {            // 自己動了 → 全部歸零，下次停下來重新算
             reset()
             return State(false, false, 0f)
         }
-        if (speedKmh >= STOP_KMH) {      // 在 STOP 和 MOVE 之間：維持現狀，不武裝也不解除
+        if (sp >= STOP_KMH) {            // 在 STOP 和 MOVE 之間：維持現狀，不武裝也不解除
             return State(lead, green, gap)
         }
 
@@ -131,6 +140,19 @@ class StartAssist {
             if (best == null || o.z < best!!) best = o.z
         }
         return best
+    }
+
+    /** 車速訊號斷掉時沿用最後一次的「停著」讀數，見 [lastSpeed] 的說明。 */
+    private fun effectiveSpeed(nowMs: Long, speedKmh: Float?): Float? {
+        if (speedKmh != null) {
+            lastSpeed = speedKmh
+            lastSpeedAt = nowMs
+            return speedKmh
+        }
+        val ls = lastSpeed ?: return null
+        if (ls >= STOP_KMH) return null                       // 最後是在動 → 現在狀況不明
+        if (nowMs - lastSpeedAt > STALE_STOP_MS) return null   // 斷太久了，不猜
+        return ls
     }
 
     private fun reset() {

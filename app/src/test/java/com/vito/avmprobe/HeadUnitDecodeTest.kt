@@ -82,8 +82,49 @@ class HeadUnitDecodeTest {
         assertEquals("Voice_Reverse_State", Decode.ACT_REVERSE)
         assertEquals("Voice_LRReverse_State", Decode.ACT_LRREVERSE)
         assertEquals("Voice_Speed_State", Decode.ACT_SPEED)
+        assertEquals("com.ts.main.auto_avm_speed_change", Decode.ACT_TS_SPEED)
+        assertEquals("com.ts.main.mcustate", Decode.ACT_TS_MCU)
         assertEquals("com.ts.MainUI", Decode.TS_PKG)
         assertEquals("com.ts.tsspeechlib.car.TsCarService", Decode.TS_ACTION)
-        assertEquals(8, Decode.ACTIONS.size)
+        assertEquals(10, Decode.ACTIONS.size)
+        // 這台車機實際掃到的是 ts 這兩個，Voice_* 那組一個都沒出現 —— 兩組都要掛著
+        assertTrue(Decode.ACT_TS_SPEED in Decode.ACTIONS)
+        assertTrue(Decode.ACT_SPEED in Decode.ACTIONS)
+    }
+}
+
+/**
+ * 不知道鍵名時從 extras 認出車速。
+ * 使用者車機掃出來的 170 個候選廣播裡沒有 Voice_Speed_State，
+ * 只有 com.ts.main.auto_avm_speed_change —— 鍵名不明，只能用值的範圍猜。
+ */
+class HeadUnitSpeedExtraTest {
+    @Test
+    fun prefersKnownKey() {
+        val v = HeadUnitSignalAdapter.Decode.speedFromExtras(
+            listOf("other" to 7, HeadUnitSignalAdapter.Decode.KEY_STATE to 42)
+        )
+        assertEquals(42f, v!!, 1e-6f)
+    }
+
+    @Test
+    fun fallsBackToFirstPlausibleValue() {
+        val v = HeadUnitSignalAdapter.Decode.speedFromExtras(listOf("zz" to 60, "aa" to "x"))
+        assertEquals(60f, v!!, 1e-6f)
+    }
+
+    /** 鍵名排序後再掃，兩個都合理時結果才不會隨 Bundle 順序跳動。 */
+    @Test
+    fun deterministicOrder() {
+        val a = HeadUnitSignalAdapter.Decode.speedFromExtras(listOf("b" to 20, "a" to 30))
+        val b = HeadUnitSignalAdapter.Decode.speedFromExtras(listOf("a" to 30, "b" to 20))
+        assertEquals(a!!, b!!, 1e-6f)
+        assertEquals(30f, a, 1e-6f)
+    }
+
+    @Test
+    fun rejectsOutOfRange() {
+        assertNull(HeadUnitSignalAdapter.Decode.speedFromExtras(listOf("x" to -5, "y" to 9999)))
+        assertNull(HeadUnitSignalAdapter.Decode.speedFromExtras(emptyList()))
     }
 }
