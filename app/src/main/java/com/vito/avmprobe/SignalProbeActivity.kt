@@ -124,6 +124,10 @@ class SignalProbeActivity : AppCompatActivity() {
             text = "匯出環景校正檔（calibinfo / lens / sensor）"; isAllCaps = false
             setOnClickListener { exportCalib() }
         })
+        col.addView(Button(this).apply {
+            text = "查上次重啟的原因"; isAllCaps = false
+            setOnClickListener { bootDiag() }
+        })
         logView = TextView(this).apply {
             textSize = 12f
             typeface = Typeface.MONOSPACE
@@ -492,10 +496,20 @@ class SignalProbeActivity : AppCompatActivity() {
      */
     private fun exportCalib() {
         val romRes = "/storage/emulated/0/.Baios360/birdview/res"
+        // 全景360 依平台決定校正檔位置（反編譯 LuaParamsConstant 的 switch）。
+        // 這台是 alps spm8667 → 平台 8（MTK8667）→ /data/flyconfig/，但其他平台的也一起試，
+        // 讀不到至少能從「存在但沒權限」分辨出是路徑錯還是權限不足。
         val candidates = listOf(
-            "/cache/config/calibinfo.lua",
-            "/lsecfs/calibinfo.lua",
+            "/data/flyconfig/calibinfo.lua",        // MTK8667（這台最可能）
+            "/avm/calibinfo.lua",                   // AutoChips
+            "/mnt/avm/calibinfo.lua",
+            "/custom/calibinfo.lua",
+            "/sttoem/avm/calibinfo.lua",            // MTK8666
+            "/data/bvparam/calibinfo.lua",          // Allwinner
+            "/cache/config/calibinfo.lua",          // HZX
+            "/lsecfs/calibinfo.lua",                // FYT 7862
             "/data/zq_factory/calibinfo.lua",
+            "/sdcard/.Baios360/calibinfo.lua",      // Qualcomm XY
             "/storage/emulated/0/.Baios360/birdview/cali/calibinfo.lua",
             "$romRes/lens.lua",
             "$romRes/sensor.lua",
@@ -532,6 +546,46 @@ class SignalProbeActivity : AppCompatActivity() {
                 append("  目錄 $d → ${ls ?: if (dir.exists()) "（讀不到）" else "（不存在）"}")
             }
             append(if (got > 0) "  匯出 $got 個檔，請一起傳回來。" else "  一個都讀不到——把上面的目錄列表傳回來，我再找。")
+        }
+    }
+
+    /**
+     * 車機重啟後找原因。重啟不是我們這邊看得到的事，但系統會留下痕跡：
+     * 開機原因屬性區分「正常開機 / 核心panic / 看門狗 / 掉電」，pstore 則留著上次當掉前的核心訊息。
+     * 掉電重啟代表是電源或負載問題，跟我們呼叫哪個服務無關。
+     */
+    private fun bootDiag() {
+        append("\n== 上次重啟的原因")
+        thread(name = "boot-diag") {
+            for (k in listOf("sys.boot.reason", "sys.boot.reason.last", "ro.boot.bootreason",
+                    "ro.boot.boot_reason", "persist.sys.boot.reason", "gsm.version.baseband")) {
+                append("  $k = ${getProp(k)}")
+            }
+            // 上次當掉前的核心訊息（有 panic / watchdog 才會有東西）
+            for (p in listOf("/sys/fs/pstore/console-ramoops-0", "/sys/fs/pstore/console-ramoops",
+                    "/proc/last_kmsg", "/sys/fs/pstore/dmesg-ramoops-0")) {
+                val f = java.io.File(p)
+                when {
+                    !f.exists() -> append("  －  $p（不存在）")
+                    !f.canRead() -> append("  ×  $p（存在但讀不到，需要 root）")
+                    else -> {
+                        val txt = runCatching { f.readText() }.getOrNull() ?: ""
+                        append("  ✓  $p  ${txt.length} 字元")
+                        // 只留關鍵字附近，整份太大
+                        val hit = txt.lineSequence().filter {
+                            Regex("panic|watchdog|WDT|oops|Unable to handle|reboot|reset|low batt|undervolt",
+                                RegexOption.IGNORE_CASE).containsMatchIn(it)
+                        }.take(40).toList()
+                        if (hit.isEmpty()) append("    （沒有 panic / watchdog 關鍵字）")
+                        else hit.forEach { append("    $it") }
+                        runCatching {
+                            append("    已存：" + MediaSaver.save(this, "lastkmsg_${f.name}.txt", "text/plain", txt.toByteArray()))
+                        }
+                    }
+                }
+            }
+            append("  做完了。如果看到 panic / watchdog，是軟體把系統打掛；" +
+                "如果是 power / undervolt 之類，就是電源或負載問題，跟呼叫哪個服務無關。")
         }
     }
 
