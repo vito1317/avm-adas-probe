@@ -170,6 +170,10 @@ class MapSource(
             if (hypot(dx, dy) > 8) spd = Double.NaN
         }
         lastLat = loc.latitude; lastLon = loc.longitude; lastFixMs = now
+        // GPS 車速也送進車身訊號：車機服務綁不上（或關著）時，這是唯一的車速來源。
+        // 沒有車速就分不出「停著的車」與「同向行駛的車」，他車的車頭朝向會全部變成跟自車同向。
+        // 只在真的有速度時送，GPS 沒鎖定就讓它自然過期（VehicleSignals 有 2 s 逾時）。
+        if (spd.isFinite() && spd >= 0) VehicleBus.signals.reportSpeed((spd * 3.6).toFloat())
         val brg = if (loc.hasBearing()) loc.bearing.toDouble() else Double.NaN
         val acc = if (loc.hasAccuracy()) loc.accuracy.toDouble() else Double.NaN
         val st = try {
