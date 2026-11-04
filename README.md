@@ -27,9 +27,11 @@ Camera2 鏡頭 "2" 1920x1080 @25fps          全景360 的俯視圖（螢幕擷�
    │
    ├─ 跨幀追蹤 TrackManager（ID、vx/vz 速度）
    ├─ 盲點／變道輔助 LaneChangeAssist（後方來車預警、變道路徑）
+   ├─ 起步提醒 StartAssist（前車開走、紅燈轉綠；見 docs/driver-alerts.md）
+   ├─ 車道偏離警示 LaneDepartureWarning（打同方向燈時不叫）
    ├─ 停車格偵測（垂直／平行／斜向，是否有車；見 docs/parking-slots.md）
-   ├─ 障礙物偵測 HeightDetector（柱子、牆、路緣、別人的車身；不靠模型，
-   │   用四顆鏡頭重疊區的垂直平面掃描，只在停車速度下跑）
+   ├─ 障礙物偵測 HeightDetector（四顆鏡頭重疊區的垂直平面掃描；**預設關閉**，
+   │   實車上多半在報接縫沒對齊，見 docs/obstacle-detection.md）
    ├─ 紅綠燈燈色（前鏡頭 COCO class 9 ＋ 燈色分類）
    ├─ 車身訊號 VehicleBus（方向燈、檔位、方向盤轉角、車速、PDC 雷達）
    └─ 地圖輔助 MapAssist（OpenStreetMap + GPS：前方 200 m 道路、車道數、速限、紅綠燈預告）
@@ -41,6 +43,7 @@ Camera2 鏡頭 "2" 1920x1080 @25fps          全景360 的俯視圖（螢幕擷�
    ├─ PDC 雷達弧線、隨方向盤彎的前進／倒車軌跡線（含內輪差）、方向燈
    ├─ 盲點警示與變道路徑、停車格（空格綠、有車灰）
    ├─ 障礙物量體與距離標籤（近到 1.2 m 轉橘、0.5 m 轉紅）
+   ├─ 起步提醒（綠色膠囊）、車道偏離（左右邊緣橘色光柱）＋ 提示音
    └─ 小地圖與速限／紅綠燈預告
 ```
 

@@ -102,10 +102,15 @@ class AppPrefs(context: Context) {
 
     /**
      * 障礙物偵測（柱子、牆、路緣、別人的車身）：四顆鏡頭重疊區的垂直平面掃描，不靠模型。
-     * 只在停車速度下跑且降頻，但仍然會跟 YOLO 搶 CPU，所以留一個開關。
+     *
+     * **預設關閉**：實車驗證後發現它大部分時候是在報「接縫沒對齊」而不是障礙物。
+     * 平坦的地下室地面只有 48.5 % 的格子投給 h=0（應該要 >90 %），可判定區有 17–20 %
+     * 超過門檻，而且超標區明顯沿著四條對角接縫分布 —— 空的柏油路和草地上也一樣。
+     * 合成測試抓不到這個問題：合成畫面是用偵測器假設的同一組幾何算出來的，天生完美對齊。
+     * 詳見 docs/obstacle-detection.md。留著開關讓人實驗，但不要預設開。
      */
     var camObstacle: Boolean
-        get() = sp.getBoolean("camObstacle", true)
+        get() = sp.getBoolean("camObstacle", false)
         set(v) = sp.edit().putBoolean("camObstacle", v).apply()
 
     /** 鏡頭直讀的版面：0 = 左右分割、1 = 3D 全螢幕、2 = 鏡頭全螢幕。 */

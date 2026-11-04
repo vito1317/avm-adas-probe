@@ -110,6 +110,13 @@ class QuadActivity : AppCompatActivity(), CameraQuadSource.Listener {
     // camPos 只給位置不給軸向：一次只送半個 FOV 的裁切，countMisses 的整鏡視野錐會記假 miss（見 runCamera）
     private val trackMgr = TrackManager(camPos = TrackManager.DEFAULT_CAMS.mapValues { it.value.copyOf(2) })
     private val lca = LaneChangeAssist()
+    // 起步提醒（前車開走／紅燈轉綠）與車道偏離警示；都只在 frames 執行緒更新
+    private val startAssist = StartAssist()
+    private val ldw = LaneDepartureWarning()
+    @Volatile private var startState: StartAssist.State? = null
+    @Volatile private var ldwState: LaneDepartureWarning.State? = null
+    private var lastBeepAt = 0L
+    private var tone: android.media.ToneGenerator? = null
     private var tracks: List<Track> = emptyList()
     private var tracksAt = 0L
     @Volatile private var lcaState: LcaState? = null
@@ -357,9 +364,13 @@ class QuadActivity : AppCompatActivity(), CameraQuadSource.Listener {
             lca.reset()
             tracks = emptyList()
             lcaState = null
+            startState = null
+            ldwState = null
         }
         mapSrc?.stop()
         mapSrc = null
+        tone?.release()
+        tone = null
         web.view.onPause()
     }
 
@@ -496,6 +507,43 @@ class QuadActivity : AppCompatActivity(), CameraQuadSource.Listener {
             vs.turn, vs.steerDeg, ego,
             lane?.get(2)?.takeIf { !it.isNaN() }, reverse = vs.gear == 'R'
         )
+
+        // 起步提醒：用「要顯示的物件」而不是軌跡 —— 前車常常只被前鏡頭看到一兩次，
+        // 等軌跡 confirmed 會慢半拍，而這個提醒本來就是要快
+        val t = tl
+        val tlFresh = t != null && now - t.at < TL_TTL_MS
+        startState = startAssist.update(
+            now, vs.speedKmh,
+            currentObjects(now).map { StartAssist.Obj(it.t, it.x, it.z) },
+            if (tlFresh) t!!.s else null, if (tlFresh) t!!.c else 0f
+        )
+        // 車道偏離：吃道路辨識的線。虛擬道路關掉時 road 不會更新，LDWS 就沒東西可吃
+        ldwState = ldw.update(
+            now, vs.speedKmh,
+            if (rd != null && now - roadAt < BEV_TTL_MS) rd.lines else emptyList(),
+            vs.turn
+        )
+        beepIfNeeded(now)
+    }
+
+    /**
+     * 起步提醒與車道偏離各給一聲短提示音。畫面在右半邊、駕駛未必在看，沒有聲音等於沒有提醒。
+     * 兩秒內只響一次，免得連環叫。
+     */
+    private fun beepIfNeeded(now: Long) {
+        val st = startState
+        val ld = ldwState
+        val want = (st != null && (st.lead || st.green)) || (ld != null && ld.any)
+        if (!want || now - lastBeepAt < 2000L) return
+        lastBeepAt = now
+        try {
+            val tg = tone ?: android.media.ToneGenerator(
+                android.media.AudioManager.STREAM_NOTIFICATION, 80
+            ).also { tone = it }
+            tg.startTone(android.media.ToneGenerator.TONE_PROP_BEEP2, 250)
+        } catch (_: Throwable) {
+            tone = null     // 有些車機沒有這個音路，失敗就算了，畫面還是有
+        }
     }
 
     /** 自車車速 m/s；排檔 R 時為負（GPS/CAN 只有速率，分不出前進倒退）。 */
@@ -786,6 +834,15 @@ class QuadActivity : AppCompatActivity(), CameraQuadSource.Listener {
                     .put("w", r2(o.w)).put("l", r2(o.l)).put("c", r2(o.conf)))
             }
             p.put("obs", oa)
+        }
+        startState?.let { st ->
+            if (st.lead || st.green) {
+                p.put("start", JSONObject()
+                    .put("lead", st.lead).put("green", st.green).put("gap", r2(st.gap)))
+            }
+        }
+        ldwState?.let { ld ->
+            if (ld.any) p.put("ldw", JSONObject().put("l", ld.left).put("r", ld.right))
         }
         if (!vs.isEmpty) p.put("veh", VehicleSignals.toJson(vs))
         if (now - tracksAt < OBJ_TTL_MS) lcaState?.let { p.put("lca", lca.toJson(it)) }

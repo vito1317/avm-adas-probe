@@ -88,6 +88,14 @@
   #app.wide .amap{right:20px;top:20px;align-items:center}
   #app.wide .dock{left:calc(var(--rw) / 2)}
   #app.wide .alert{left:calc(var(--rw) / 2)}
+  /* 起步提醒：跟碰撞預警同一個位置，但往下排，而且是綠的（這是「可以走了」不是「危險」） */
+  .go{top:52px;left:50%;transform:translateX(-50%);background:rgba(53,240,143,.16);border:1px solid rgba(53,240,143,.6);color:#6ff5ad;padding:6px 14px;border-radius:999px;font-weight:700;letter-spacing:.1em;font-size:13px;pointer-events:none;white-space:nowrap;animation:blink 1.2s infinite}
+  #app.wide .go{left:calc(var(--rw) / 2)}
+  /* 車道偏離：畫面左右各一條會閃的光柱，餘光就看得到，不用把視線移過來 */
+  .ldw{top:0;bottom:0;width:72px;pointer-events:none;animation:blink .45s infinite}
+  .ldw.l{left:0;background:linear-gradient(90deg,rgba(255,106,20,.55),rgba(255,106,20,0))}
+  .ldw.r{right:0;background:linear-gradient(270deg,rgba(255,106,20,.55),rgba(255,106,20,0))}
+  #app.wide .ldw.r{right:var(--mapw)}
   #app.wide .wait{left:calc(var(--rw) / 2)}
   #app.wide .tl{right:calc(var(--mapw) + 10px)}
   #app.wide .topbtn{right:calc(var(--mapw) + 10px)}
@@ -105,6 +113,9 @@
     <div class="stat" id="stat">—</div>
   </div>
   <div class="hud alert" id="alert" hidden>⚠ 碰撞預警</div>
+  <div class="hud go" id="go" hidden></div>
+  <div class="hud ldw l" id="ldwL" hidden></div>
+  <div class="hud ldw r" id="ldwR" hidden></div>
   <div class="hud wait" id="wait">等待偵測資料…<br><small>把全景360 切到俯視畫面</small></div>
   <div class="hud tl" id="tl" role="status" aria-label="號誌" hidden>
     <span class="lamps"><i class="r"></i><i class="y"></i><i class="g"></i></span><span class="tx" id="tlTx">未亮</span>
@@ -1066,6 +1077,13 @@
     lastLca = p.lca || null;
     if (p.slots) { slotsAt = now; drawSlots(p.slots); }
     if (p.obs) { obsAt = now; drawObs(p.obs); }
+    if (p.start) {
+      goAt = now;
+      // 兩個同時成立就一起講（路口排第一台時兩者都看得到）
+      goTx = p.start.lead && p.start.green ? '綠燈了，前車也走了'
+        : p.start.green ? '綠燈了' : '前車已起步';
+    }
+    if (p.ldw) { ldwAt = now; ldwL = !!p.ldw.l; ldwR = !!p.ldw.r; }
     if (window.AVM_MAP && p.map) AVM_MAP.update(p.map, now);
   };
 
@@ -1092,6 +1110,11 @@
     countEls[l[0]] = r.querySelector('.ct');
   });
   var alertEl = document.getElementById('alert'), waitEl = document.getElementById('wait');
+  // 起步提醒／車道偏離：Kotlin 端已經做好遲滯與一次性，這裡只負責顯示與逾時收掉
+  var goEl = document.getElementById('go');
+  var ldwLEl = document.getElementById('ldwL'), ldwREl = document.getElementById('ldwR');
+  var GO_TTL = 6000, LDW_TTL = 900;
+  var goAt = -1e9, goTx = '', ldwAt = -1e9, ldwL = false, ldwR = false;
 
   // ---------- views ----------
   var VIEWS = {
@@ -1297,6 +1320,12 @@
     for (var t in counts) countEls[t].textContent = counts[t];
     alertEl.hidden = !anyWarn;
     alertEl.textContent = anyCrit ? '⚠ 距離過近' : '⚠ 碰撞預警';
+    var goOn = now - goAt < GO_TTL;
+    goEl.hidden = !goOn;
+    if (goOn) goEl.textContent = '▶ ' + goTx;
+    var ldwOn = now - ldwAt < LDW_TTL;      // 短 TTL：偏離是連續狀態，停了就該馬上收
+    ldwLEl.hidden = !(ldwOn && ldwL);
+    ldwREl.hidden = !(ldwOn && ldwR);
     waitEl.hidden = now - lastData < 2000;
 
     updateRoad(dt, now);
@@ -1425,6 +1454,10 @@
         { x: 3.4, z: -3.2, w: 0.6, l: 2.2, c: 0.7 },
         { x: -1.2, z: 2.9, w: 0.4, l: 0.4, c: 0.5 }
       ];
+      // 起步提醒與車道偏離：12 秒週期裡輪流示範
+      var st = cyc < 4 ? { lead: true, green: false, gap: 1.8 }
+        : cyc < 8 ? { lead: false, green: true, gap: 0 } : null;
+      var ld = cyc >= 8 && cyc < 10 ? { l: true, r: false } : null;
       var mapPts = [];
       for (var mi = -4; mi <= 24; mi++) mapPts.push([Math.sin(mi * 0.06) * 1.4, mi * 4]);
       var mp = { t: n, path: mapPts, matched: true, spd: rev ? 3 : 42, off: 0.3, od: s * 11,
@@ -1433,7 +1466,7 @@
       window.setFrame({ objs: objs, wm: 8, hm: 6, flip: false, ground: (n++ % 10 === 0) ? demoGround : null,
         stat: { eng: 'GPU', res: 320, inf: 48, e2e: 66, fps: 9.6 }, road: rd,
         tl: { s: cyc < 5 ? 'red' : cyc < 10 ? 'green' : 'yellow', c: 0.86, ax: 4 },
-        veh: veh, lca: lca, slots: slots, obs: obs, map: mp,
+        veh: veh, lca: lca, slots: slots, obs: obs, map: mp, start: st, ldw: ld,
         src: DEMO_CAM ? 'cam' : 'screen' });
     }, 150);
   }
