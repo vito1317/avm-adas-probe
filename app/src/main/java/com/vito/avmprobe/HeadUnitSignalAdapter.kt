@@ -25,7 +25,9 @@ import java.util.concurrent.atomic.AtomicReference
  */
 class HeadUnitSignalAdapter(
     private val ctx: Context,
-    private val pollMs: Long = 100L,   // 全景360 用 50 ms；100 ms 對顯示夠用且省電
+    /** 綁車機的 AIDL 服務。預設關：見 AppPrefs.headUnitBind 的說明（車機重啟 / 介面版本不同）。 */
+    private val bindEnabled: Boolean = false,
+    private val pollMs: Long = 250L,   // 全景360 用 50 ms；放慢以免對系統程序打太兇
 ) : VehicleSignalAdapter {
 
     override val name = "車機訊號（廣播＋TS 服務）"
@@ -55,6 +57,7 @@ class HeadUnitSignalAdapter(
 
     @Volatile private var car: ITsSpeechCar? = null
     @Volatile private var running = false
+    private var fails = 0
 
     private val seen = java.util.Collections.synchronizedSet(LinkedHashSet<String>())
 
@@ -88,6 +91,14 @@ class HeadUnitSignalAdapter(
 
     private val conn = object : ServiceConnection {
         override fun onServiceConnected(n: ComponentName?, b: IBinder?) {
+            // 先驗介面名稱再用。對面若不是我們以為的那個介面，transaction code 會對到別的方法——
+            // 那份介面裡有開關車窗／天窗／空調，絕對不能亂呼叫。
+            val desc = try { b?.interfaceDescriptor } catch (e: Throwable) { null }
+            if (desc != Decode.TS_DESCRIPTOR) {
+                car = null
+                statusRef.updateAndGet { it.copy(bound = false, bindError = "介面不符：$desc") }
+                return
+            }
             car = ITsSpeechCar.Stub.asInterface(b)
             statusRef.updateAndGet { it.copy(bound = car != null, bindError = null) }
         }
@@ -111,6 +122,12 @@ class HeadUnitSignalAdapter(
         } else {
             @Suppress("UnspecifiedRegisterReceiverFlag")
             ctx.registerReceiver(receiver, f)
+        }
+
+        // AIDL 要使用者自己開：實測出現過整台車機重啟，而且介面版本若不同會呼叫到別的方法。
+        if (!bindEnabled) {
+            statusRef.updateAndGet { it.copy(bindError = "未啟用（設定裡開「車機服務」才會綁）") }
+            return
         }
 
         try {
@@ -175,6 +192,7 @@ class HeadUnitSignalAdapter(
                 s.reportPdc(null, null)
             }
 
+            fails = 0
             statusRef.updateAndGet {
                 it.copy(
                     polls = it.polls + 1,
@@ -186,7 +204,19 @@ class HeadUnitSignalAdapter(
                 )
             }
         } catch (e: Throwable) {
-            statusRef.updateAndGet { it.copy(pollErrors = it.pollErrors + 1, bindError = e.javaClass.simpleName) }
+            // 連續失敗就整個停掉。對面是系統程序，一直重試打它只會讓情況更糟（實測過車機重啟）。
+            fails++
+            if (fails >= Decode.MAX_FAILS) {
+                car = null
+                runCatching { ctx.unbindService(conn) }
+                statusRef.updateAndGet {
+                    it.copy(bound = false, pollErrors = it.pollErrors + 1,
+                        bindError = "連續失敗 $fails 次，已停止輪詢：${e.javaClass.simpleName}")
+                }
+                handler?.removeCallbacksAndMessages(null)
+            } else {
+                statusRef.updateAndGet { it.copy(pollErrors = it.pollErrors + 1, bindError = e.javaClass.simpleName) }
+            }
         }
     }
 
@@ -196,6 +226,9 @@ class HeadUnitSignalAdapter(
     object Decode {
         const val TS_PKG = "com.ts.MainUI"
         const val TS_ACTION = "com.ts.tsspeechlib.car.TsCarService"
+        const val TS_DESCRIPTOR = "com.ts.tsspeechlib.car.ITsSpeechCar"
+        /** 連續這麼多次呼叫失敗就停止輪詢並解綁 */
+        const val MAX_FAILS = 5
 
         const val KEY_STATE = "Signal_State"
         const val KEY_HEAD_LAMP = "HeadLampStatus"

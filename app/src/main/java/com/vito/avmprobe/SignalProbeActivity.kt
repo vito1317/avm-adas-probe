@@ -101,6 +101,25 @@ class SignalProbeActivity : AppCompatActivity() {
             text = "車身訊號 20 秒（方向燈／倒車／方向盤／雷達）"; isAllCaps = false
             setOnClickListener { watchSignals() }
         })
+        val prefs = AppPrefs(this)
+        col.addView(Button(this).apply {
+            fun label() = "車機服務（方向盤／雷達）：" +
+                if (prefs.headUnitBind) "已啟用 ⚠ 可能讓車機重啟" else "關閉（安全）"
+            text = label(); isAllCaps = false
+            setOnClickListener {
+                prefs.headUnitBind = !prefs.headUnitBind
+                text = label()
+                (application as? AvmApp)?.attach(prefs.headUnitBind)
+                append(
+                    if (prefs.headUnitBind)
+                        "\n⚠ 已啟用車機服務。方向盤角度與雷達只有這條路拿得到，但：\n" +
+                            "  - 介面編號是從別的 App 還原的，車機上的版本若不同會呼叫到別的方法\n" +
+                            "  - 實測出現過整台車機重啟\n" +
+                            "  請停好車再測。連續失敗 5 次會自動停止並解綁。"
+                    else "\n已關閉車機服務，只剩廣播（倒車／車速／方向燈聯動），不會再碰系統服務。"
+                )
+            }
+        })
         col.addView(Button(this).apply {
             text = "匯出環景校正檔（calibinfo / lens / sensor）"; isAllCaps = false
             setOnClickListener { exportCalib() }

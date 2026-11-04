@@ -10,7 +10,14 @@ class AvmApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
-        headUnit = HeadUnitSignalAdapter(this)
+        // 廣播一律收（被動、不需權限）；AIDL 要使用者自己開（見 AppPrefs.headUnitBind）
+        attach(AppPrefs(this).headUnitBind)
+    }
+
+    /** 設定改了之後重接。 */
+    fun attach(bind: Boolean) {
+        headUnit?.let { VehicleBus.signals.detach() }
+        headUnit = HeadUnitSignalAdapter(this, bindEnabled = bind)
         VehicleBus.signals.attach(headUnit!!)
     }
 
