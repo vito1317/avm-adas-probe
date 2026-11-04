@@ -424,8 +424,7 @@ class QuadActivity : AppCompatActivity(), CameraQuadSource.Listener {
 
         // 追蹤 + 變道輔助。cam 傳 null：一次只送半個 FOV 的裁切，傳鏡頭名稱會讓 countMisses
         // 對不在本次裁切內的軌跡記假 miss、在確認前殺掉盲點軌跡；假軌跡改由 TENTATIVE_MS / COAST_MS 逾時清除。
-        // 車速：排檔 R 時為負（GPS/CAN 只有速率）
-        val ego = vs.speedKmh?.div(3.6f)?.let { if (vs.gear == 'R') -it else it }
+        val ego = egoMps(vs)
         tracks = trackMgr.update(tDets, now, ego, egoYawRate = null, cam = null)
         tracksAt = now
         val rd = road
@@ -437,6 +436,25 @@ class QuadActivity : AppCompatActivity(), CameraQuadSource.Listener {
             vs.turn, vs.steerDeg, ego,
             lane?.get(2)?.takeIf { !it.isNaN() }, reverse = vs.gear == 'R'
         )
+    }
+
+    /** 自車車速 m/s；排檔 R 時為負（GPS/CAN 只有速率，分不出前進倒退）。 */
+    private fun egoMps(vs: VehicleState): Float? =
+        vs.speedKmh?.div(3.6f)?.let { if (vs.gear == 'R') -it else it }
+
+    /**
+     * 車頭朝向（弧度，+ = 偏右）＝ 對地速度的方向：vx/vz 是相對速度，縱向要加回自車車速，
+     * 對向車才不會跟自車同方向。null = 這一刻不送（前端沿用上一次的朝向，停著的車不會亂轉）：
+     * 沒有車速（分不出靜止車與同向車）、三角錐／行人（朝向沒意義）、對地速率 < 1.5 m/s（方向是雜訊），
+     * 或速度標準差比速率還大（軌跡剛生成，速度還停在初值）。
+     */
+    private fun yaw(tr: Track, ego: Float?): Float? {
+        if (ego == null || tr.t == "cone" || tr.t == "ped") return null
+        val avx = tr.vx
+        val avz = tr.vz + ego
+        val sp = hypot(avx, avz)
+        if (sp < 1.5f || hypot(tr.svx, tr.svz) > sp) return null
+        return atan2(avx, avz)
     }
 
     /** 近縱向（±30°）的標線在 z=0 內插出 x：左取 x<0 最大、右取 x>0 最小。回傳 [左x, 右x, 車道角]，沒有為 NaN。 */
@@ -607,12 +625,15 @@ class QuadActivity : AppCompatActivity(), CameraQuadSource.Listener {
         for (r in camResults.values) if (now - r.at < OBJ_TTL_MS) boxes.addAll(r.boxes)
         // 已確認的軌跡（id 跟 lca 的 threat.id 同一套）；c 用命中次數近似
         val coneTr = ArrayList<Track>()
+        val ego = egoMps(vs)
         if (now - tracksAt < OBJ_TTL_MS) for (tr in tracks) {
             if (!tr.confirmed) continue
             if (tr.t == "cone") coneTr.add(tr)
-            objs.put(JSONObject().put("t", tr.t).put("x", r2(tr.x)).put("z", r2(tr.z))
-                .put("c", r2((tr.hits * 0.25f).coerceAtMost(1f))).put("yaw", 0)
-                .put("id", tr.id).put("vx", r2(tr.vx)).put("vz", r2(tr.vz)))
+            val o = JSONObject().put("t", tr.t).put("x", r2(tr.x)).put("z", r2(tr.z))
+                .put("c", r2((tr.hits * 0.25f).coerceAtMost(1f)))
+                .put("id", tr.id).put("vx", r2(tr.vx)).put("vz", r2(tr.vz))
+            yaw(tr, ego)?.let { o.put("yaw", r2(it)) }
+            objs.put(o)
         }
         if (now - conesAt < BEV_TTL_MS) {
             for (c in cones) {

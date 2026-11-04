@@ -281,10 +281,11 @@
     e.on = ok;
     e.t = ok ? sign * Math.min(Math.abs(val), 15) : sign * DEF_EDGE;
   }
-  function sideEdge(c, wk, e, sign, red) {
+  function sideEdge(c, wk, e, sign, red, half) {
     c.visible = wk.visible = e.on;
     c.position.x = e.v + sign * CURB_W / 2;
     wk.position.x = e.v + sign * (CURB_W + WALK_W / 2);
+    c.scale.z = wk.scale.y = half / ROAD_Z;   // 跟路面一樣只畫看得到的長度
     c.geometry = red ? redCurbGeo : curbGeo;
     c.material = red ? redCurbMat : curbMat;
   }
@@ -293,6 +294,7 @@
   // 線方向 d = (sinφ, cosφ)，法向 n = (cosφ, −sinφ)，φ 從車軸（+z）往右量，正規化到 [−90°, 90°)
   var LINE_C = { w: srgb(0xeef2f5), y: srgb(0xffc533), r: srgb(0xff4b3e) }, LINE_W = { w: 0.15, y: 0.15, r: 0.2 };
   var DASH = 4, PERIOD = 10, MAXQ = 12, MAX_LINES = 16, LINE_Y = 0.014;
+  var LINE_EXT = 2.5;   // 縱向線往觀測範圍外延伸的長度（m）
   var HALF = Math.PI / 2, LONG = 25 * Math.PI / 180, MATCH_A = 8 * Math.PI / 180;
   var LINE_IDX = (function () {
     var a = [];
@@ -395,7 +397,10 @@
     if (!b) b = tr.built = {};
     b.w = w; b.d = tr.d; b.lon = lon; b.phi = tr.phi; b.rho = tr.rho; b.s0 = tr.s0; b.s1 = tr.s1; b.ph = tr.ph;
     var sn = Math.sin(tr.phi), cs = Math.cos(tr.phi), lo = tr.s0, hi = tr.s1, nq = 0;
-    if (lon) { lo = (-ROAD_Z + tr.rho * sn) / cs; hi = (ROAD_Z + tr.rho * sn) / cs; }   // 縱向線沿航向延伸到前後 40 m
+    // 縱向線只往外延一小段。俯視圖只看得到車身周圍幾公尺，以前延到前後 40 m，
+    // 角度差 1° 到 40 m 外就偏 0.7 m，幾何沒校正時整個畫面都是橫跨全場的假線。
+    // 真實道路會彎、路口會中斷，看不到的地方就不要畫。
+    if (lon) { lo -= LINE_EXT; hi += LINE_EXT; }
     var geo = tr.mesh.geometry, arr = geo.attributes.position.array;
     if (!tr.d) putQuad(arr, nq++, lo, hi, tr.rho, sn, cs, w / 2);
     else {
@@ -464,8 +469,21 @@
     var k = 1 - Math.pow(0.02, dt);
     edgeL.v += (edgeL.t - edgeL.v) * k;
     edgeR.v += (edgeR.t - edgeR.v) * k;
-    strip.scale.x = edgeR.v - edgeL.v;
-    strip.position.x = (edgeL.v + edgeR.v) / 2;
+    // 路面只畫「有看到東西」的範圍。以前不管有沒有偵測到都鋪一條 10.5 x 80 m 的假路，
+    // 在停車場或室內（沒有道路、也沒有 GPS）看起來就像憑空生出一條大馬路。
+    var ext = 0;
+    for (var n = 0; n < lineTracks.length; n++) {
+      var lt = lineTracks[n];
+      if (lt.dead || lt.fade < 0.2) continue;
+      ext = Math.max(ext, Math.abs(lt.s0), Math.abs(lt.s1));
+    }
+    var hasRoad = edgeL.on || edgeR.on || ext > 0;
+    var half = Math.min(ROAD_Z, Math.max(6, ext + LINE_EXT));
+    strip.visible = hasRoad;
+    if (hasRoad) {
+      strip.scale.set(edgeR.v - edgeL.v, half / ROAD_Z, 1);
+      strip.position.x = (edgeL.v + edgeR.v) / 2;
+    }
     // 紅線貼著路緣 0.6 m 內 → 該側路緣畫成紅白相間
     var redL = false, redR = false;
     for (var i = 0; i < lineTracks.length; i++) {
@@ -475,8 +493,8 @@
       if (Math.abs(xm - edgeL.t) < 0.6) redL = true;
       if (Math.abs(xm - edgeR.t) < 0.6) redR = true;
     }
-    sideEdge(curbL, walkL, edgeL, -1, redL);
-    sideEdge(curbR, walkR, edgeR, 1, redR);
+    sideEdge(curbL, walkL, edgeL, -1, redL, half);
+    sideEdge(curbR, walkR, edgeR, 1, redR, half);
   }
 
   // ---------- builders ----------
@@ -1179,7 +1197,9 @@
 
   // ---------- 示範資料（瀏覽器預覽用：index.html#demo、#demo-cam） ----------
   if (DEMO) {
-    window.__bev3d = { renderer: renderer, camera: camera, controls: controls, lines: lineTracks };   // 除錯用（僅示範模式）
+    // 除錯用（僅示範模式）
+    window.__bev3d = { renderer: renderer, camera: camera, controls: controls, lines: lineTracks,
+      scene: scene, road: road, strip: strip };
     var demoGround = (function () {
       var c = document.createElement('canvas'); c.width = 256; c.height = 192;
       var g = c.getContext('2d');

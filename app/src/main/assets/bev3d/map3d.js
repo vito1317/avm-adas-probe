@@ -19,6 +19,7 @@
   var DR_MAX_MS = 2500;       // 推算最多往前推多久
   var NEAR = 8;               // 8 m 內交給鏡頭偵測的車道線
   var FAR = 200;
+  var ACC_ROAD_M = 10;        // GPS 精度差過這個值就不畫地面的 3D 道路（飄移會整條畫到隔壁車道）
   var LANE_W = 3.5;
   var DASH = 4, PERIOD = 10;  // 車道虛線：實 4 m、空 6 m
   var MAXP = 64;              // path 最多點數
@@ -458,7 +459,10 @@
       }
     }
     var fresh = cur && now - lastAt < STALE_MS;
-    var showRoad = !!(fresh && cur.matched);
+    // 車機 GPS 會飄：精度差的時候地面上的道路帶會整條畫到隔壁車道，比不畫還糟。
+    // 小地圖與速限 / 路名這些屬性不受影響，只關掉貼在地上的 3D 道路。
+    var accOk = !cur || !(cur.acc > 0) || cur.acc <= ACC_ROAD_M;
+    var showRoad = !!(fresh && cur.matched && accOk);
     var showMini = !!(fresh && (cur.matched || cur.roads.length));
     var k = 1 - Math.exp(-dt / 0.35);
     fade += ((showRoad ? 1 : 0) - fade) * (1 - Math.exp(-dt / 0.4));

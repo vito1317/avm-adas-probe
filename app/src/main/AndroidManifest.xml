@@ -35,6 +35,9 @@
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+                <!-- 宣告成地圖/導航類：車機 ROM 多半用這個把導航 App 排除在「行駛中禁止觀看」之外。
+                     能不能生效要看 ROM 怎麼判斷（有些是寫死套件名白名單），待實車確認。 -->
+                <category android:name="android.intent.category.APP_MAPS" />
             </intent-filter>
         </activity>
 

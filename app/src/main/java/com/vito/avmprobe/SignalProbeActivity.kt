@@ -46,6 +46,8 @@ class SignalProbeActivity : AppCompatActivity() {
             RegexOption.IGNORE_CASE
         )
         private val ACTION_LIKE = Regex("^[A-Za-z][\\w]*(\\.[\\w]+){2,}$")
+        // 除了環景 App，這些也要匯出回來分析（車身訊號服務、行駛中限制的白名單都在裡面）
+        private val EXPORT_PKGS = setOf("com.ts.MainUI", "com.ts.tsspeechlib", "com.ts.MainUI2")
         // 常見廠商平台的套件名稱特徵
         private val VENDOR_HINT = Regex(
             "syu|fyt|canbus|microntek|\\.ts\\.|\\.tw\\.|mcu|carsetting|car\\.|vehicle|avm|360|" +
@@ -212,8 +214,11 @@ class SignalProbeActivity : AppCompatActivity() {
             val sys = if ((a.flags and ApplicationInfo.FLAG_SYSTEM) != 0) "" else "（使用者安裝）"
             sb.append("${a.packageName}  「${label(a)}」$sys$mark\n")
         }
+        // 車機主程式也一起匯出：車身訊號的 AIDL 服務在它裡面（能不能 bind 要看它的 manifest），
+        // 「行駛中禁止觀看」的白名單多半也寫在那裡。
+        val wanted = vendor.filter { isAvm(it) || it.packageName in EXPORT_PKGS }
+        synchronized(avmApps) { avmApps.clear(); avmApps.addAll(wanted) }
         val avm = vendor.filter(isAvm)
-        synchronized(avmApps) { avmApps.clear(); avmApps.addAll(avm) }
         for (a in avm) {
             // 用平台金鑰簽的 App 能用系統等級權限，那些管道我們就用不了
             val platform = try {
