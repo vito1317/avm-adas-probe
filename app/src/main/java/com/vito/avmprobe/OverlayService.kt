@@ -189,13 +189,23 @@ class OverlayService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
 
-    /** 整張螢幕的透明懸浮窗，裡面是 3D 面板 → 疊在原廠 bowl 上。 */
+    /**
+     * 3D 面板只佔畫面的一側（沿用「3D 面板位置」設定，預設右半），另一側留給原廠 bowl。
+     *
+     * 不能開全螢幕：Bev3DPanel 是不透明的（OPAQUE、深色背景）而且吃觸控，
+     * 全螢幕會把原廠 bowl 整個蓋掉、原廠的按鈕也按不到 —— v0.5.0 就是這樣。
+     * 也不做「透明疊在 bowl 上」：我們的 3D 是獨立重建，跟原廠 bowl 的投影對不齊，
+     * 疊上去反而是兩套對不起來的畫面。並排才是兩個都看得清楚。
+     */
     private fun showPanel() {
         if (panel != null) return
         val dm = resources.displayMetrics
-        panel = Bev3DPanel(this, windowManager) {}.also {
-            it.show(Rect(0, 0, dm.widthPixels, dm.heightPixels))
-        }
+        val r = prefs.panelRect() ?: android.graphics.RectF(0.5f, 0f, 1f, 1f)   // 「關閉」時也給右半
+        val px = Rect(
+            (r.left * dm.widthPixels).toInt(), (r.top * dm.heightPixels).toInt(),
+            (r.right * dm.widthPixels).toInt(), (r.bottom * dm.heightPixels).toInt()
+        )
+        panel = Bev3DPanel(this, windowManager) {}.also { it.show(px) }
     }
 
     private fun startMap() {
