@@ -37,6 +37,7 @@ class StartAssist {
         const val GREEN_MS = 400L        // 綠燈要穩定這麼久
         const val TL_CONF = 0.5f         // 號誌信心下限
         const val STALE_STOP_MS = 180_000L   // 停住後車速訊號斷了，還能當「仍然停著」多久
+        const val ALERT_MS = 5_000L          // 提醒顯示多久就自己收掉（這是通知，不是狀態）
         private val LEAD_TYPES = setOf("car", "van", "truck", "bus", "moto", "bigbike")
     }
 
@@ -54,6 +55,8 @@ class StartAssist {
     private var minZ = Float.NaN     // 武裝後前車最近到幾公尺
     private var leadFired = false
     private var greenFired = false
+    private var leadAt = 0L
+    private var greenAt = 0L
     private var redSince = -1L
     private var greenSince = -1L
     private var sawRed = false
@@ -82,7 +85,7 @@ class StartAssist {
             return State(false, false, 0f)
         }
         if (sp >= STOP_KMH) {            // 在 STOP 和 MOVE 之間：維持現狀，不武裝也不解除
-            return State(lead, green, gap)
+            return out(nowMs)
         }
 
         if (stoppedAt < 0L) stoppedAt = nowMs
@@ -105,7 +108,7 @@ class StartAssist {
                 if (conf) {
                     if (greenSince < 0L) greenSince = nowMs
                     if (sawRed && !greenFired && nowMs - greenSince >= GREEN_MS) {
-                        green = true; greenFired = true
+                        green = true; greenFired = true; greenAt = nowMs
                     }
                 } else greenSince = -1L
             }
@@ -115,7 +118,7 @@ class StartAssist {
             }
         }
 
-        if (!armed) return State(lead, green, gap)
+        if (!armed) return out(nowMs)
 
         // ---- 前車 ----
         val l = nearestLead(objs)
@@ -123,12 +126,30 @@ class StartAssist {
             if (minZ.isNaN()) { if (l <= NEAR_Z) minZ = l } else if (l < minZ) minZ = l
             if (!minZ.isNaN()) {
                 gap = l - minZ
-                if (!leadFired && gap >= GAP_M) { lead = true; leadFired = true }
+                if (!leadFired && gap >= GAP_M) { lead = true; leadFired = true; leadAt = nowMs }
             }
         }
 
-        return State(lead, green, gap)
+        return out(nowMs)
     }
+
+    /**
+     * 提醒**會自己收掉**：[ALERT_MS] 過了就不再回報。
+     *
+     * 本來是「狀態」—— 叫了之後一直為真，等自車動起來（≥ [MOVE_KMH]）才清掉。
+     * 問題是車速訊號多半有變化才廣播，停著不動時會過期；為了讓停著時還判得出來，
+     * 車速斷訊時會沿用最後那個「停著」的讀數（見 [effectiveSpeed]）——
+     * 於是**跟著前車開走之後，如果一直沒有新的車速送來，就以為還停著，提示就不會消失**。
+     * 使用者回報的就是這個。
+     *
+     * 這本來就該是通知而不是狀態：響一聲、顯示幾秒、自己消失。
+     * 這樣不管判不判得出來「已經開走了」，都不會卡住。
+     */
+    private fun out(nowMs: Long): State = State(
+        lead && nowMs - leadAt <= ALERT_MS,
+        green && nowMs - greenAt <= ALERT_MS,
+        gap
+    )
 
     /** 正前方同車道、距離最近的那台車（公尺）；沒有回 null。 */
     private fun nearestLead(objs: List<Obj>): Float? {

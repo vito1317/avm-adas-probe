@@ -825,7 +825,12 @@ class QuadActivity : AppCompatActivity(), CameraQuadSource.Listener {
                 .put("el", rd.edgeL?.let { r2(it) } ?: JSONObject.NULL)
                 .put("er", rd.edgeR?.let { r2(it) } ?: JSONObject.NULL))
         }
-        if (now - slotsAt < BEV_TTL_MS && slots.isNotEmpty()) p.put("slots", slotsJson(slots, false))
+        if (now - slotsAt < BEV_TTL_MS && slots.isNotEmpty()) {
+            p.put("slots", slotsJson(slots, false))
+            // 倒車入庫路徑：挑最近的空格算一條。只在停車速度下給，不然開在路上會一直閃
+            val spd = vs.speedKmh
+            if (spd == null || spd < 15f) parkPathJson(slots)?.let { p.put("park", it) }
+        }
         // 障礙物更新率低（每 4 輪一次、又只在停車速度下跑），TTL 放寬成 4 秒
         val obs = obstacles
         if (now - obstaclesAt < OBS_TTL_MS && obs.isNotEmpty()) {
@@ -859,6 +864,27 @@ class QuadActivity : AppCompatActivity(), CameraQuadSource.Listener {
         overlay.frameW = frame.width
         overlay.frameH = frame.height
         overlay.update(boxes, statusText(det))
+    }
+
+    /**
+     * 最近的**空**格的倒車入庫路徑。垂直／斜向才算得出來（平行停車是另一種解法，planner 回 null）。
+     * 格子太多的話只試最近幾個，省得每幀算一堆。
+     */
+    private fun parkPathJson(list: List<ParkingSlot>): JSONObject? {
+        val free = list.filter { !it.occupied && (it.kind == 'p' || it.kind == 'a') }
+            .sortedBy { s -> (0 until 4).minOf { hypot(s.p[it * 2], s.p[it * 2 + 1]) } }
+        for (s in free.take(3)) {
+            val plan = ParkingPathPlanner.plan(s) ?: continue
+            if (!plan.ok || plan.points.size < 2) continue
+            val pts = JSONArray()
+            for (q in plan.points) pts.put(JSONArray().put(r2(q[0])).put(r2(q[1])))
+            return JSONObject()
+                .put("pts", pts)
+                .put("rev", plan.reverseFrom)          // 從第幾點開始是倒車
+                .put("r", r2(plan.turnRadius))
+                .put("goal", JSONArray().put(r2(plan.goal[0])).put(r2(plan.goal[1])).put(r4(plan.goal[2])))
+        }
+        return null
     }
 
     private fun statusText(det: Yolo? = yolo): String {

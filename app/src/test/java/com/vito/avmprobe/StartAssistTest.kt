@@ -10,6 +10,41 @@ class StartAssistTest {
     private fun car(z: Float, x: Float = 0f) = listOf(StartAssist.Obj("car", x, z))
     private val none = emptyList<StartAssist.Obj>()
 
+    /**
+     * 提醒過 ALERT_MS 就要自己收掉 —— 使用者回報「前車開走我也跟著開，提示卻一直都在」。
+     * 原因是車速訊號斷訊時會沿用最後那個「停著」的讀數，於是一直以為還停著。
+     * 這本來就該是通知不是狀態。
+     */
+    @Test
+    fun alertClearsByItself() {
+        val a = StartAssist()
+        var t = 0L
+        a.update(t, 0f, car(5f), null, 0f)
+        t += StartAssist.ARM_MS + 100
+        a.update(t, 0f, car(5f), null, 0f)
+        t += 500
+        assertTrue(a.update(t, 0f, car(6.6f), null, 0f).lead)
+        // 跟著開走，但車速訊號一直沒有新值（這就是使用者遇到的情況）
+        t += StartAssist.ALERT_MS + 500
+        assertFalse("提醒應該自己收掉", a.update(t, null, car(9f), null, 0f).lead)
+        t += 10_000
+        assertFalse("不可以又跑出來", a.update(t, null, car(12f), null, 0f).lead)
+    }
+
+    /** 綠燈提醒一樣會自己收掉。 */
+    @Test
+    fun greenAlertClearsByItself() {
+        val a = StartAssist()
+        var t = 0L
+        repeat(10) { t += 300; a.update(t, 0f, none, "red", 0.9f) }
+        t += 100
+        a.update(t, 0f, none, "green", 0.9f)
+        t += StartAssist.GREEN_MS + 50
+        assertTrue(a.update(t, 0f, none, "green", 0.9f).green)
+        t += StartAssist.ALERT_MS + 500
+        assertFalse(a.update(t, null, none, "green", 0.9f).green)
+    }
+
     /** 停住、前車在 5 m，等它拉到 6.6 m（> GAP_M）→ 提醒一次就好。 */
     @Test
     fun leadDeparture() {
@@ -23,7 +58,7 @@ class StartAssistTest {
         t += 500
         assertTrue("拉開 1.6 m 要提醒", a.update(t, 0f, car(6.6f), null, 0f).lead)
         t += 500
-        assertTrue("狀態要保持住（畫面才有東西顯示）", a.update(t, 0f, car(8f), null, 0f).lead)
+        assertTrue("ALERT_MS 內要保持住（畫面才有東西顯示）", a.update(t, 0f, car(8f), null, 0f).lead)
     }
 
     /** 前車先往前蹭了 0.5 m 再開走：基準要跟著更新，不能從一開始那個距離算。 */

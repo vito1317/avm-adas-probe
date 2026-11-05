@@ -912,6 +912,64 @@
     }
   }
 
+  // ---------- 倒車入庫路徑 ----------
+  // payload.park.pts 是後軸中心的路徑（車身座標公尺），rev = 從第幾點開始是倒車。
+  // 前進段畫成青色、倒車段畫成琥珀色，終點畫一個小框表示停好的位置。
+  var PARK_TTL = 1600, PARK_Y = 0.07;
+  var parkGrp = new THREE.Group();
+  scene.add(parkGrp);
+  var parkAt = -1e9, parkFwd = null, parkRev = null, parkGoal = null;
+
+  function makePath(color, n) {
+    var g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(n * 3), 3));
+    var m = new THREE.Line(g, new THREE.LineBasicMaterial({
+      transparent: true, opacity: 0.95, depthWrite: false, toneMapped: false, color: srgb(color)
+    }));
+    parkGrp.add(m);
+    return m;
+  }
+
+  function setPath(mesh, pts) {
+    var g = mesh.geometry, pos = g.attributes.position;
+    if (!pts || pts.length < 2) { mesh.visible = false; return; }
+    if (pos.count < pts.length) {
+      g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pts.length * 3), 3));
+      pos = g.attributes.position;
+    }
+    for (var i = 0; i < pos.count; i++) {
+      var q = pts[Math.min(i, pts.length - 1)];
+      pos.array[i * 3] = q[0]; pos.array[i * 3 + 1] = PARK_Y; pos.array[i * 3 + 2] = -q[1];
+    }
+    pos.needsUpdate = true;
+    g.computeBoundingSphere();
+    mesh.visible = true;
+  }
+
+  function drawPark(p) {
+    if (!parkFwd) {
+      parkFwd = makePath(COL.cyan, 2);
+      parkRev = makePath(COL.amber, 2);
+      parkGoal = makePath(COL.green, 5);
+    }
+    if (!p || !p.pts || p.pts.length < 2) {
+      parkFwd.visible = parkRev.visible = parkGoal.visible = false;
+      return;
+    }
+    var rev = Math.max(0, Math.min(p.pts.length - 1, p.rev | 0));
+    setPath(parkFwd, p.pts.slice(0, rev + 1));
+    setPath(parkRev, p.pts.slice(rev));
+    // 終點：停好之後的車身外框（朝向 goal[2] 弧度）
+    var g = p.goal;
+    if (g && g.length >= 3) {
+      var ca = Math.cos(g[2]), sa = Math.sin(g[2]), hw = EGO_W / 2, hl = EGO_L / 2, box = [];
+      [[-hw, -hl], [hw, -hl], [hw, hl], [-hw, hl], [-hw, -hl]].forEach(function (c) {
+        box.push([g[0] + c[0] * ca + c[1] * sa, g[1] - c[0] * sa + c[1] * ca]);
+      });
+      setPath(parkGoal, box);
+    } else parkGoal.visible = false;
+  }
+
   // ---------- 號誌：前方約 18 m 的 3D 紅綠燈（橫式燈箱）+ HUD ----------
   var TL_C = { red: 0xff4b3e, yellow: 0xffc533, green: 0x35f08f };
   var TL_TX = { red: '紅燈', yellow: '黃燈', green: '綠燈', off: '未亮' };
@@ -1077,6 +1135,7 @@
     lastLca = p.lca || null;
     if (p.slots) { slotsAt = now; drawSlots(p.slots); }
     if (p.obs) { obsAt = now; drawObs(p.obs); }
+    if (p.park) { parkAt = now; drawPark(p.park); }
     if (p.start) {
       goAt = now;
       // 兩個同時成立就一起講（路口排第一台時兩者都看得到）
@@ -1113,7 +1172,9 @@
   // 起步提醒／車道偏離：Kotlin 端已經做好遲滯與一次性，這裡只負責顯示與逾時收掉
   var goEl = document.getElementById('go');
   var ldwLEl = document.getElementById('ldwL'), ldwREl = document.getElementById('ldwR');
-  var GO_TTL = 6000, LDW_TTL = 900;
+  // GO_TTL 只是串流斷掉的保險，不是顯示時間 —— 顯示多久由 Kotlin 端的 ALERT_MS 決定，
+  // 這裡放太長的話，Kotlin 已經收掉了畫面還會再掛好幾秒
+  var GO_TTL = 1200, LDW_TTL = 900;
   var goAt = -1e9, goTx = '', ldwAt = -1e9, ldwL = false, ldwR = false;
 
   // ---------- views ----------
@@ -1358,6 +1419,7 @@
     // 停車格：來源停送就收起來
     if (slotsAt > 0 && now - slotsAt > SLOT_TTL) { drawSlots(null); slotsAt = -1e9; }
     if (obsAt > 0 && now - obsAt > OBS_TTL) { drawObs(null); obsAt = -1e9; }
+    if (parkAt > 0 && now - parkAt > PARK_TTL) { drawPark(null); parkAt = -1e9; }
 
     // 號誌：1.5 s 沒資料就收起來
     var tlOn = now - lastTl < 1500;
