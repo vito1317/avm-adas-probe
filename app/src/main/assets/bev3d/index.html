@@ -122,6 +122,7 @@
   </div>
 
   <button class="topbtn" id="calBtn" aria-pressed="false">校正</button>
+  <button class="topbtn" id="closeBtn" style="right:auto;left:10px" hidden>✕ 關閉</button>
   <div class="hud cal" id="cal" hidden>
     <h2>俯視區校正</h2>
     <p>拖動滑桿，讓螢幕上的黃色虛線框剛好框住全景360 的俯視圖。</p>
@@ -1335,6 +1336,9 @@
   cM.addEventListener('input', function () { syncOut(); if (Bridge) Bridge.setMeters(+cM.value); });
   cF.addEventListener('change', function () { if (Bridge) Bridge.setFlip(cF.checked); });
   cO.addEventListener('change', function () { if (Bridge) Bridge.setRoiOnly(cO.checked); });
+  var closeBtn = document.getElementById('closeBtn');
+  try { if (Bridge && Bridge.canClose && Bridge.canClose()) closeBtn.hidden = false; } catch (e) {}
+  closeBtn.addEventListener('click', function () { try { Bridge.close(); } catch (e) {} });
   calBtn.addEventListener('click', function () {
     var open = cal.hidden;
     if (open) loadCal();
@@ -1363,6 +1367,14 @@
     calBtn.hidden = s === 'cam';
     if (s === 'cam') { cal.hidden = true; calBtn.setAttribute('aria-pressed', 'false'); }
   }
+  // B 模式（影格共用）：還沒收到影格時，把診斷文字顯示在「等待」提示上（車機常常沒 adb 可看 log）
+  window.setWait = function (text) {
+    var lines = String(text).split('\n');
+    var esc = function (t) { return t.replace(/&/g, '&amp;').replace(/</g, '&lt;'); };
+    waitEl.innerHTML = esc(lines[0]) + (lines.length > 1
+      ? '<br><small style="display:block;text-align:left;white-space:pre-wrap">' + esc(lines.slice(1).join('\n')) + '</small>' : '');
+    srcMode = '';
+  };
 
   (function initPrefs() {
     var p = readPrefs(), m = p.groundMode;

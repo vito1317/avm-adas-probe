@@ -40,12 +40,35 @@ ImageReader。一次開鏡頭、兩邊各拿一份原始影格。
 - 全程 try/catch：綁不上、HAL 不給第二串流、任何例外 → 用原廠原本的清單。
 - 出事就關開關，下次原廠建相機 session 時就恢復（退出 360 再進）。
 
+## 拿 Surface：同步走 provider（v0.5.3 起）
+
+v0.5.2 以前 FrameTap 要等 `bindService` 綁上才拿得到 Surface，但原廠建相機 session 比綁定快，
+結果「360 正常、我們沒資料」。現在 `addSurface` 當下直接 `ContentResolver.call(…, "surface")`
+同步拿（`FrameShareHub` 持有 ImageReader，provider 順便叫起 OverlayService），Binder 只當備援。
+
+## 診斷（不用 adb）
+
+FrameTap 每一步都用 provider 的 `log` 回報。還沒收到影格時，3D 面板的「等待」提示和 App 主頁
+「影格共用」欄會顯示摘要＋最近的事件：
+
+| 看到 | 意思 |
+|---|---|
+| 原廠 360 還沒來拿 Surface | addSurface 沒被呼叫：原廠沒重建相機 session（試著重開車機），或走的不是被注入的類別 |
+| Surface 已交給原廠，但還沒收到影格 | 加進 session 了但 HAL 沒送影格到第二路輸出 |
+| 影格進來中 | 正常 |
+
+## 關閉
+
+面板上「✕ 關閉」、通知列「關閉疊圖」、或 App 把 B 模式關掉 → 收面板、停偵測。
+原廠綁著服務所以 `stopSelf` 不一定停得掉，因此是自己收面板與前景通知；ImageReader 保留
+（原廠相機 session 可能還掛著它的 Surface）。離開 360（影格停 5 秒）面板自動收起，回來再出現。
+
 ## 已知限制（都要實機調）
 
 - **HAL 第二串流**：不是每台相機 HAL 都允許同時輸出兩路 1080p。不支援 → session 建立失敗。
   `FrameTap` 擋不住這種「加了才失敗」的情況，所以用預設關 + 可隨時關掉當防線。
-- **時序**：原廠相機 session 可能在我們服務綁好之前就建了 → 第一次進 360 沒共用到，
-  退出再進一次即可（服務會留著）。
+- **原廠不重建 session**：如果原廠開機就建好相機 session、之後一直沿用，打開開關後要等它下次重建
+  （重開車機）才加得進去。
 - **對齊**：我們的 3D 是獨立重建，不是貼著原廠 bowl 的像素；兩個都看得到，但不是同一個投影。
 
 ## 原廠 360 怎麼改

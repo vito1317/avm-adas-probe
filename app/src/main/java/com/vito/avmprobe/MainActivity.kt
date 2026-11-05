@@ -28,6 +28,17 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var prefs: AppPrefs
     private lateinit var log: TextView
+    private var fsStatus: TextView? = null
+    private val ui = android.os.Handler(android.os.Looper.getMainLooper())
+    private val fsTick = object : Runnable {
+        override fun run() {
+            fsStatus?.text = FrameShareHub.status()
+            ui.postDelayed(this, 1000)
+        }
+    }
+
+    override fun onResume() { super.onResume(); ui.post(fsTick) }
+    override fun onPause() { super.onPause(); ui.removeCallbacks(fsTick) }
 
     private val projectionLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -114,6 +125,14 @@ class MainActivity : AppCompatActivity() {
         ) {
             prefs.frameShare = it == "1"
             if (prefs.frameShare && !Settings.canDrawOverlays(this)) requestOverlay()
+            if (!prefs.frameShare) FrameShareHub.stopOverlay()
+        })
+        col.addView(TextView(this).apply {
+            textSize = 12f
+            typeface = Typeface.MONOSPACE
+            setPadding(0, 8, 0, 4)
+            setTextIsSelectable(true)
+            fsStatus = this
         })
 
         col.addView(section("模型（輸入解析度，小＝快；int8＝量化版）"))

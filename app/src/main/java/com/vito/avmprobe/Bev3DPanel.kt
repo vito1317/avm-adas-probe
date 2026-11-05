@@ -16,7 +16,8 @@ import android.view.WindowManager
 class Bev3DPanel(
     private val context: Context,
     private val wm: WindowManager,
-    private val onSaveCapture: (() -> Unit)? = null
+    private val onSaveCapture: (() -> Unit)? = null,
+    private val onClose: (() -> Unit)? = null
 ) {
     companion object { private const val TAG = "Bev3DPanel" }
 
@@ -25,7 +26,7 @@ class Bev3DPanel(
 
     fun show(rectPx: Rect) {
         if (web != null) return
-        val w = Bev3DWeb(context, "screen", onSaveCapture)
+        val w = Bev3DWeb(context, "screen", onSaveCapture, onClose)
         val lp = WindowManager.LayoutParams(
             rectPx.width(), rectPx.height(),
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
@@ -51,6 +52,8 @@ class Bev3DPanel(
     fun push(json: String) { web?.push(json) }
 
     fun notifySaved(text: String) { web?.notifySaved(text) }
+
+    fun setWait(text: String) { web?.setWait(text) }
 
     fun hide() {
         main.post {

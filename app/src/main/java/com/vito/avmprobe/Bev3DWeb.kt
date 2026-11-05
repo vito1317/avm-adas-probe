@@ -24,7 +24,8 @@ import org.json.JSONObject
 class Bev3DWeb(
     private val context: Context,
     private val src: String,                       // "screen" | "cam"
-    private val onSaveCapture: (() -> Unit)? = null
+    private val onSaveCapture: (() -> Unit)? = null,
+    private val onClose: (() -> Unit)? = null      // 有給才在頁面上顯示「關閉」鈕（B 模式懸浮窗用）
 ) {
     private val main = Handler(Looper.getMainLooper())
     private val prefs = AppPrefs(context)
@@ -64,6 +65,13 @@ class Bev3DWeb(
         main.post {
             latest = json
             drain()
+        }
+    }
+
+    /** 還沒有影格時，在「等待」提示上顯示診斷文字（B 模式用）。 */
+    fun setWait(text: String) {
+        main.post {
+            if (ready) view.evaluateJavascript("window.setWait&&window.setWait(${JSONObject.quote(text)})", null)
         }
     }
 
@@ -137,6 +145,12 @@ class Bev3DWeb(
 
         @JavascriptInterface
         fun setRoiOnly(v: Boolean) { prefs.roiOnly = v }
+
+        @JavascriptInterface
+        fun canClose(): Boolean = onClose != null
+
+        @JavascriptInterface
+        fun close() { onClose?.let { main.post(it) } }
 
         @JavascriptInterface
         fun saveCapture() {

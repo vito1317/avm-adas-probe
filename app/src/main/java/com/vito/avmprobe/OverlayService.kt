@@ -11,7 +11,6 @@ import android.graphics.PixelFormat
 import android.graphics.Rect
 import android.graphics.RectF
 import android.media.Image
-import android.media.ImageReader
 import android.os.Binder
 import android.os.Build
 import android.os.Handler
@@ -49,8 +48,12 @@ class OverlayService : Service() {
         private const val TAG = "OverlayService"
         /** Binder transaction：回傳我們 ImageReader 的 Surface，給原廠 process 加進 capture session。 */
         const val TRANSACT_GET_SURFACE = IBinder.FIRST_CALL_TRANSACTION + 0
-        private const val CAP_W = 1920
-        private const val CAP_H = 1080
+        /** 通知列「關閉疊圖」與 App 關掉 B 模式時用：停掉服務、收掉懸浮窗。 */
+        const val ACTION_STOP = "com.vito.avmprobe.OVERLAY_STOP"
+        /** 影格停了這麼久（離開 360）→ 收起面板；影格回來再出現。 */
+        private const val HIDE_AFTER_IDLE_MS = 5000L
+        /** 一直沒收到影格時，診斷面板最多顯示這麼久就收起。 */
+        private const val DIAG_MAX_MS = 60_000L
         private const val OBJ_TTL_MS = 1300L
         private const val TL_TTL_MS = 1200L
         private const val BEV_TTL_MS = 1500L
@@ -81,7 +84,8 @@ class OverlayService : Service() {
     private val binder = object : Binder() {
         override fun onTransact(code: Int, data: Parcel, reply: Parcel?, flags: Int): Boolean {
             if (code == TRANSACT_GET_SURFACE) {
-                val s = reader?.surface
+                val s = FrameShareHub.surface()
+                FrameShareHub.log("[360] 經由 Binder 拿 Surface")
                 if (reply != null) {
                     if (s != null) { reply.writeInt(1); s.writeToParcel(reply, 0) }
                     else reply.writeInt(0)
@@ -95,15 +99,31 @@ class OverlayService : Service() {
     private lateinit var prefs: AppPrefs
     private lateinit var windowManager: WindowManager
     private var panel: Bev3DPanel? = null
-    private var reader: ImageReader? = null
 
     private var geo: AvmGeometry? = null
     private var calibText = "{}"
     private var calibrated = false
 
     // ── frames 執行緒 ──
-    private val camThread = HandlerThread("overlay-frames").apply { start() }
-    private val cam = Handler(camThread.looper)
+    // 影格在 FrameShareHub 的執行緒上進來；整條偵測管線也跑在那條執行緒
+    private val cam = FrameShareHub.handler
+    private val diag = Handler(android.os.Looper.getMainLooper())
+    private var startedAt = 0L
+    /** 使用者按了關閉：面板不再出現、偵測暫停，直到下次進 360 由掛鉤重新叫起。 */
+    @Volatile private var closed = false
+    private val diagTick = object : Runnable {
+        override fun run() {
+            val now = SystemClock.elapsedRealtime()
+            val idle = now - FrameShareHub.lastFrameAt
+            val hadFrames = FrameShareHub.lastFrameAt != 0L
+            // 離開 360（影格停了）就收起面板；還沒收到過影格時先顯示診斷，最多 DIAG_MAX_MS。
+            // 只收面板、不停服務：原廠相機 session 可能還掛著我們的 Surface，process 要留著。
+            val wantPanel = if (hadFrames) idle < HIDE_AFTER_IDLE_MS else now - startedAt < DIAG_MAX_MS
+            if (wantPanel && !closed) showPanel() else hidePanel()
+            if (wantPanel && !closed && idle > 2000) panel?.setWait(FrameShareHub.status())
+            diag.postDelayed(this, 1000)
+        }
+    }
     private val frame = YuvFrame()
     private var yolo: Yolo? = null
     private var yoloError: String? = null
@@ -174,20 +194,46 @@ class OverlayService : Service() {
         }
         startForeground(NOTI_ID, buildNotification())
 
-        reader = ImageReader.newInstance(CAP_W, CAP_H, android.graphics.ImageFormat.YUV_420_888, 3).apply {
-            setOnImageAvailableListener({ rd ->
-                val img = try { rd.acquireLatestImage() } catch (_: Throwable) { null }
-                    ?: return@setOnImageAvailableListener
-                try { onFrame(img) } catch (t: Throwable) { Log.e(TAG, "frame 失敗：${t.message}", t) }
-                finally { img.close() }
-            }, cam)
+        FrameShareHub.onStop = { diag.post { closeByUser() } }
+        FrameShareHub.listener = { img ->
+            if (!closed) try { onFrame(img) } catch (t: Throwable) { Log.e(TAG, "frame 失敗：${t.message}", t) }
         }
+        FrameShareHub.log("OverlayService 啟動")
+        startedAt = SystemClock.elapsedRealtime()
         showPanel()
+        diag.post(diagTick)
         startMap()
         Log.i(TAG, "OverlayService 起來了，等原廠相機把影格餵進我們的 Surface")
     }
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_STOP) {
+            closeByUser()
+            return START_NOT_STICKY
+        }
+        // 重新叫起（又進 360）→ 解除關閉、重新給診斷時間
+        if (closed) startForeground(NOTI_ID, buildNotification())
+        closed = false
+        startedAt = SystemClock.elapsedRealtime()
+        return START_NOT_STICKY   // 被關掉就不要自己復活，等下次進 360 再由掛鉤叫起
+    }
+
+    /**
+     * 關閉疊圖。原廠 360 綁著這個服務，stopSelf 不一定真的停得掉，所以自己把能收的都收掉：
+     * 面板、前景通知、偵測。ImageReader 留著（原廠相機 session 可能還掛著它的 Surface）。
+     */
+    private fun closeByUser() {
+        if (closed) return
+        closed = true
+        FrameShareHub.log("使用者關閉疊圖")
+        hidePanel()
+        try { stopForeground(STOP_FOREGROUND_REMOVE) } catch (_: Throwable) {}
+        stopSelf()
+    }
+
+    private fun hidePanel() {
+        panel?.hide(); panel = null
+    }
 
     /**
      * 3D 面板只佔畫面的一側（沿用「3D 面板位置」設定，預設右半），另一側留給原廠 bowl。
@@ -205,7 +251,8 @@ class OverlayService : Service() {
             (r.left * dm.widthPixels).toInt(), (r.top * dm.heightPixels).toInt(),
             (r.right * dm.widthPixels).toInt(), (r.bottom * dm.heightPixels).toInt()
         )
-        panel = Bev3DPanel(this, windowManager) {}.also { it.show(px) }
+        panel = Bev3DPanel(this, windowManager, onSaveCapture = {}, onClose = { closeByUser() })
+            .also { it.show(px) }
     }
 
     private fun startMap() {
@@ -584,17 +631,22 @@ class OverlayService : Service() {
             .setContentTitle("AVM 偵測疊圖執行中")
             .setContentText("跟原廠 360 共用影格")
             .setSmallIcon(android.R.drawable.ic_menu_camera)
+            .addAction(Notification.Action.Builder(null, "關閉疊圖",
+                android.app.PendingIntent.getService(this, 0,
+                    Intent(this, OverlayService::class.java).setAction(ACTION_STOP),
+                    android.app.PendingIntent.FLAG_IMMUTABLE)).build())
             .build()
     }
 
     override fun onDestroy() {
         super.onDestroy()
         panel?.hide(); panel = null
-        try { reader?.close() } catch (_: Throwable) {}
-        reader = null
+        diag.removeCallbacks(diagTick)
+        FrameShareHub.listener = null
+        FrameShareHub.onStop = null
         mapSrc?.stop(); mapSrc = null
         cam.post { try { yolo?.close() } catch (_: Throwable) {}; yolo = null }
-        camThread.quitSafely(); groundThread.quitSafely()
+        groundThread.quitSafely()
         tone?.release(); tone = null
     }
 }
