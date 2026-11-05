@@ -78,5 +78,11 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="與原廠環景共用相機影格，疊加 ADAS 偵測" />
         </service>
+
+        <!-- B 模式開關：FrameTap 用 ContentResolver.call 問「要不要共用影格」。只回一個布林。 -->
+        <provider
+            android:name=".FrameShareProvider"
+            android:authorities="com.vito.avmprobe.frameshare"
+            android:exported="true" />
     </application>
 </manifest>

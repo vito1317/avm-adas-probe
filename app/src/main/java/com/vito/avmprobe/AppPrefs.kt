@@ -40,9 +40,6 @@ class AppPrefs(context: Context) {
         const val GROUND_REAL = "real"
         const val GROUND_VIRTUAL = "virtual"
         const val GROUND_OFF = "off"
-
-        /** FrameTap（原廠 process）讀這個檔判斷要不要加我們的 surface。存在＝開。 */
-        const val FRAMESHARE_FLAG = "/sdcard/avm-adas/frameshare.on"
     }
 
     var model: String
@@ -123,19 +120,13 @@ class AppPrefs(context: Context) {
      * **預設關閉——這是安全開關**。關閉時注入的掛鉤完全不碰原廠相機，第一次燒進去
      * 保證不會害原廠沒畫面。確認原廠一切正常後，再從這裡打開，掛鉤才會去加我們的 surface。
      *
-     * 這個旗標同時寫成一個檔案 [FRAMESHARE_FLAG]，給注入在原廠 process 裡的 FrameTap 讀
-     * （跨 App 沒辦法共用 SharedPreferences）。
+     * 注入在原廠 process 裡的 FrameTap 透過 [FrameShareProvider] 來問這個值
+     * （跨 App 沒辦法共用 SharedPreferences；寫 /sdcard 旗標檔又沒儲存權限）。
      */
     var frameShare: Boolean
         get() = sp.getBoolean("frameShare", false)
-        set(v) {
-            sp.edit().putBoolean("frameShare", v).apply()
-            try {
-                val f = java.io.File(FRAMESHARE_FLAG)
-                f.parentFile?.mkdirs()
-                if (v) f.writeText("1") else f.delete()
-            } catch (_: Throwable) {}
-        }
+        // commit（同步寫入）：FrameTap 隨時可能透過 FrameShareProvider 來問，要馬上讀得到新值
+        set(v) { sp.edit().putBoolean("frameShare", v).commit() }
 
     /** 鏡頭直讀的版面：0 = 左右分割、1 = 3D 全螢幕、2 = 鏡頭全螢幕。 */
     var fullScreen: Int
