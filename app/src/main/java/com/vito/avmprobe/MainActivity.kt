@@ -62,6 +62,17 @@ class MainActivity : AppCompatActivity() {
         ) {
             notiLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
+        // 從原廠 360 的注入掛鉤叫起來時（EXTRA_AUTO_QUAD），直接進鏡頭直讀偵測，
+        // 不用停在這個選單頁。按返回才會退回選單。QuadActivity 不 exported，
+        // 所以由這裡轉進去（不讓外部直接叫非匯出的 activity）。
+        if (savedInstanceState == null && intent?.getBooleanExtra(EXTRA_AUTO_QUAD, false) == true) {
+            startActivity(Intent(this, QuadActivity::class.java))
+        }
+    }
+
+    companion object {
+        /** 注入掛鉤用：帶這個 extra 叫起 MainActivity → 直接進 QuadActivity。 */
+        const val EXTRA_AUTO_QUAD = "com.vito.avmprobe.AUTO_QUAD"
     }
 
     private fun buildUi(): View {
@@ -86,6 +97,23 @@ class MainActivity : AppCompatActivity() {
         col.addView(segRow(cameraIds().map { "鏡頭 $it" to it }, { prefs.camId }) { prefs.camId = it })
         col.addView(btn("▶ 開始鏡頭直讀偵測") {
             startActivity(Intent(this, QuadActivity::class.java))
+        })
+
+        col.addView(section("影格共用（B 模式）— 跟原廠 360 同時用（需安裝注入版 360）"))
+        col.addView(TextView(this).apply {
+            text = "打開後，注入原廠 360 的掛鉤才會把我們的 ImageReader 加進它的相機 session，" +
+                "原廠 bowl 與我們的偵測同時顯示。\n" +
+                "⚠ 預設關：先確認原廠 360 一切正常，再打開。萬一打開後原廠相機沒畫面，馬上關掉即可。\n" +
+                "需要「懸浮窗權限」才畫得出疊圖（下方①那顆）。"
+            textSize = 13f
+            setPadding(0, 6, 0, 10)
+        })
+        col.addView(segRow(
+            listOf("關閉" to "0", "開啟（影格共用）" to "1"),
+            { if (prefs.frameShare) "1" else "0" }
+        ) {
+            prefs.frameShare = it == "1"
+            if (prefs.frameShare && !Settings.canDrawOverlays(this)) requestOverlay()
         })
 
         col.addView(section("模型（輸入解析度，小＝快；int8＝量化版）"))

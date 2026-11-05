@@ -29,6 +29,7 @@ Camera2 鏡頭 "2" 1920x1080 @25fps          全景360 的俯視圖（螢幕擷�
    ├─ 跨幀追蹤 TrackManager（ID、vx/vz 速度）
    ├─ 盲點／變道輔助 LaneChangeAssist（後方來車預警、變道路徑）
    ├─ 起步提醒 StartAssist（前車開走、紅燈轉綠；見 docs/driver-alerts.md）
+   ├─ B 模式：跟原廠 360 共用相機影格，偵測疊在原廠 bowl 上（見 docs/frame-share.md）
    ├─ 車道偏離警示 LaneDepartureWarning（打同方向燈時不叫）
    ├─ 路口轉彎預判 TurnPathPlanner（外側車頭角 + 內側後輪 = 內輪差走廊）
    ├─ 停車格偵測（垂直／平行／斜向，是否有車；見 docs/parking-slots.md）
