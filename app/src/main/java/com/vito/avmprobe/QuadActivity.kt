@@ -841,6 +841,19 @@ class QuadActivity : AppCompatActivity(), CameraQuadSource.Listener {
             }
             p.put("obs", oa)
         }
+        // 路口轉彎預判：打了方向燈又真的在轉方向盤才給（還沒轉就不猜）
+        TurnPathPlanner.plan(vs.turn, vs.steerDeg, vs.speedKmh)?.let { tp ->
+            val outer = JSONArray()
+            for (q in tp.pts) outer.put(JSONArray().put(r2(q[0])).put(r2(q[1])))
+            val inner = JSONArray()
+            for (q in tp.inner) inner.put(JSONArray().put(r2(q[0])).put(r2(q[1])))
+            val hits = TurnPathPlanner.conflicts(
+                tp, currentObjects(now).map { StartAssist.Obj(it.t, it.x, it.z) }
+            )
+            p.put("turn", JSONObject()
+                .put("o", outer).put("i", inner).put("d", tp.dir.toString())
+                .put("r", r2(tp.radius)).put("hit", hits.size))
+        }
         startState?.let { st ->
             if (st.lead || st.green) {
                 p.put("start", JSONObject()
