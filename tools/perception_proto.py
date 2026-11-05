@@ -103,7 +103,7 @@ TUNED = dict(
     minArea=0.03, maxWidth=0.50, minAspect=3.0, minLen=0.40, complexVote=True, thinM=0.50, thinFrac=0.85,
     hough='tuned', dBin=0.05, voteWin=8, supportM=0.8, band1=0.10, band=0.08, maxLines=8, maxIter=40,
     gapM=0.6, minSeg=0.5, minCovered=0.8, dashed='tuned', solidM=5.0, dashGapM=1.5, thickM=0.25, dupM=0.17, dupDeg=4.0,
-    edge='tuned', madC=3, edgeMinRows=4, edgePrune=0.0, clutterMax=0.25, minFill=0.25, wideM=0.30, coneNearM=0.25,
+    edge='tuned', madC=3, edgeMinRows=4, edgePrune=0.0, clutterMax=0.25, minFill=0.25, wideM=0.30, maxWdM=0.50, egoCrossMax=0.15, coneNearM=0.25,
     # 二次（彎道）擬合：門檻寧可嚴，寧可畫直線也不要畫出假彎道
     curveSpanM=3.0, curveMinPts=40, curveF=50.0, curveSagM=0.03, curveMinK=1.0 / 150.0, curveMaxK=0.1,
 )
@@ -582,6 +582,7 @@ def _lines_tuned(X, Z, C, lk, mode, cphi, w, h, mpp, cx, cy, use, P, CA=None):
             lo -= 1
         while pk > 0 and hi < 29 and hist[hi + 1] * 4 >= pk:
             hi += 1
+        wd = (hi - lo + 1) * 0.02
         wide = near & (rr_ >= lo * 0.02 - 0.30) & (rr_ < (hi + 1) * 0.02 - 0.30)
         grab = inl | wide
         # 跟已找到的同色線幾乎重合 → 重複偵測（寬線、模糊線的另一半），丟掉
@@ -592,7 +593,9 @@ def _lines_tuned(X, Z, C, lk, mode, cphi, w, h, mpp, cx, cy, use, P, CA=None):
         # 漆寬量到「整個 ±0.30 m 視窗都還沒降下來」＝ 飽和：這不是一條線，是一整片亮的東西
         # （接縫錯位、車身反光、拉長的陰影）。實測 5 張實車擷取共 7 條飽和線，全是假的；
         # 真正的標線 lo ≥ 5、hi ≤ 27，一條都沒碰到視窗邊。
-        sat = (lo == 0 and hi == 29)
+        # 漆寬上限：台灣的標線最寬也就停止線 30–45 cm、斑馬線條 40–60 cm（而且斑馬線是成排的，
+        # 由 wideM 那條規則處理）。量到 50 cm 以上的「線」是接縫、陰影或車身，不是漆上去的。
+        sat = (lo == 0 and hi == 29) or wd >= P.get('maxWdM', 99.0)
         dup = False
         for L in lines:
             if L['k'] != 'wyr'[kind - 1] or abs(wrap90(L['phi'] - math.degrees(phi))) > P['dupDeg']:
@@ -615,7 +618,6 @@ def _lines_tuned(X, Z, C, lk, mode, cphi, w, h, mpp, cx, cy, use, P, CA=None):
             else:
                 spans.append([a, e])
         longest = max(e - a for a, e in spans)
-        wd = (hi - lo + 1) * 0.02
         if longest >= P['solidM']:
             dashed = False
         elif len(spans) >= 2:
@@ -643,6 +645,28 @@ def _lines_tuned(X, Z, C, lk, mode, cphi, w, h, mpp, cx, cy, use, P, CA=None):
         ln = _line_out(phi, d, segs[0][0], segs[-1][1], kind, dashed, covered / 4.0, curv, ce0, ce1)
         ln['wd'] = wd
         lines.append(ln)
+    # 跨過車底的線：自車矩形整塊被排除在遮罩外，那裡「一個證據都沒有」。
+    # 會冒出這種線，是因為不可觀測的空隙不算斷開（_observable），於是車子左邊的路緣
+    # 和右邊的陰影被接成同一條、從車底穿過去 —— 使用者說的「車子底下多出奇怪的直線」。
+    # 實測 9 張實車擷取：穿過車底的線佔比都在 25–52 %，其餘每一條都是 0–2 %，中間空得很。
+    em_ = P.get('egoMargin', 0.0)
+    ehx = EGO_HX + em_
+    ehz = EGO_HZ + em_
+    cmax = P.get('egoCrossMax', 1.0)
+    kept = []
+    for L in lines:
+        n_ = 80
+        inside = 0
+        for q in range(n_):
+            f_ = (q + 0.5) / n_
+            xq = L['x1'] + (L['x2'] - L['x1']) * f_
+            zq = L['z1'] + (L['z2'] - L['z1']) * f_
+            if abs(xq) <= ehx and abs(zq) <= ehz:
+                inside += 1
+        if inside / n_ < cmax:
+            kept.append(L)
+    lines = kept
+
     # 斑馬紋：比一般標線粗、又跟某條細標線平行 → 不是車道線
     out = []
     for L in lines:

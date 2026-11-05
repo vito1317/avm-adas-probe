@@ -52,6 +52,10 @@ class RoadExtractor {
         const val EGO_HX = 0.925
         const val EGO_HZ = 2.42
         private const val EGO_MARGIN = 0.15        // 自車外擴一圈不找標線（螢幕模式的車子圖示、後照鏡）
+        /** 漆寬上限（m）：台灣標線最寬是停止線 30–45 cm；量到 50 cm 以上不是漆上去的。 */
+        private const val MAX_WD_M = 0.50
+        /** 線有這麼大比例落在自車矩形裡就丟掉（那塊地整個沒有證據，見 dropAcrossEgo）。 */
+        private const val EGO_CROSS_MAX = 0.15
         private const val BG_HALF_M = 0.20         // opening 視窗半寬
         private const val T_WHITE = 24
         private const val Y_WHITE = 100
@@ -407,6 +411,11 @@ class RoadExtractor {
             if (zebra) continue
             val c = cos(L.phi)
             val s = sin(L.phi)
+            if (crossesEgo(
+                    (L.e0 * c + L.s0 * s), (-L.e0 * s + L.s0 * c),
+                    (L.e1 * c + L.s1 * s), (-L.e1 * s + L.s1 * c)
+                )
+            ) continue
             lines.add(
                 RoadLine(
                     "wyr"[L.kind - 1], L.dashed,
@@ -424,6 +433,33 @@ class RoadExtractor {
     }
 
     /** 中心落在 [x0,x1]×[z0,z1] 內的像素清掉 flag 位元 bits。 */
+    /**
+     * 線有沒有大部分穿過自車矩形。
+     *
+     * 自車那一塊整個被排除在遮罩外，那裡**一個證據都沒有**。會冒出穿過車底的線，
+     * 是因為「不可觀測的空隙不算斷開」（見 observable）——於是車子左邊的路緣和右邊的
+     * 陰影被接成同一條，從車底穿過去。使用者說的「車子底下多出很多奇怪的直線」就是這個。
+     *
+     * 實測 9 張實車擷取：穿過車底的線佔比都在 25–52 %，其餘每一條都是 0–2 %，中間空得很，
+     * 所以門檻取 [EGO_CROSS_MAX]。
+     *
+     * 代價：真的壓在車底下的標線（跨著車道線開）會被丟掉。
+     * 但那塊地本來就看不到，留著也只是把兩側湊起來的猜測。
+     */
+    private fun crossesEgo(x1: Double, z1: Double, x2: Double, z2: Double): Boolean {
+        val ehx = EGO_HX + EGO_MARGIN
+        val ehz = EGO_HZ + EGO_MARGIN
+        val n = 80
+        var inside = 0
+        for (q in 0 until n) {
+            val f = (q + 0.5) / n
+            val xq = x1 + (x2 - x1) * f
+            val zq = z1 + (z2 - z1) * f
+            if (abs(xq) <= ehx && abs(zq) <= ehz) inside++
+        }
+        return inside.toDouble() / n >= EGO_CROSS_MAX
+    }
+
     private fun markRect(x0: Double, z0: Double, x1: Double, z1: Double, bits: Int) {
         val keep = (bits.inv() and 7).toByte()
         for (j in 0 until bh) {
@@ -1033,7 +1069,8 @@ class RoadExtractor {
             val wd = (hi - lo + 1) * 0.02
             // 漆寬量到整個 ±0.30 m 視窗都還沒降下來 ＝ 飽和：那不是一條線，是一整片亮的東西
             // （接縫錯位、車身反光、拉長的陰影）。實測 5 張實車擷取共 7 條飽和線，全是假的。
-            if (lo == 0 && hi == 29) continue
+            // 以及絕對上限：量到 50 cm 以上的「線」不可能是標線。
+            if ((lo == 0 && hi == 29) || wd >= MAX_WD_M) continue
             val dashed = if (longest >= SOLID_M) false
             else if (spN >= 2) true
             else if (wd >= THICK_M) false

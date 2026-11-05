@@ -501,9 +501,9 @@ class RoadExtractorTest {
 class RoadExtractorStreetTest {
     private val F = PerceptionFixtures
 
-    private fun run(withMask: Boolean): List<RoadLine> {
-        val doc = F.json("quad_street.json")
-        val img = F.image("quad_street.png")
+    private fun run(withMask: Boolean, name: String = "quad_street"): List<RoadLine> {
+        val doc = F.json("$name.json")
+        val img = F.image("$name.png")
         val geo = AvmGeometry.fromJson(
             RoadExtractorStreetTest::class.java.classLoader!!
                 .getResourceAsStream("../../../main/assets/avm_calib.json")
@@ -558,5 +558,32 @@ class RoadExtractorStreetTest {
             "有遮罩才抽得到彎的縱向線：${with.filter { longitudinal(it) }.map { it.k }}",
             with.any { longitudinal(it) && abs(it.k) > 1e-4f }
         )
+    }
+
+    /**
+     * 實車地下停車場：使用者說「車子底下會多出很多奇怪的直線」。
+     * 自車那一塊整個被排除在遮罩外，那裡一個證據都沒有 —— 穿過車底的線
+     * 一定是把車子兩側不相干的東西接起來的。
+     */
+    @Test
+    fun noLineCrossesUnderTheCar() {
+        for (name in listOf("quad_garage_road", "quad_street")) {
+            val lines = run(true, name)
+            for (l in lines) {
+                var inside = 0
+                val n = 80
+                for (q in 0 until n) {
+                    val f = (q + 0.5) / n
+                    val x = l.x1 + (l.x2 - l.x1) * f
+                    val z = l.z1 + (l.z2 - l.z1) * f
+                    if (abs(x) <= RoadExtractor.EGO_HX + 0.15f && abs(z) <= RoadExtractor.EGO_HZ + 0.15f) inside++
+                }
+                assertTrue(
+                    "$name 有線穿過車底 ${inside * 100 / n}%：(${l.x1},${l.z1})→(${l.x2},${l.z2})",
+                    inside.toDouble() / n < 0.15
+                )
+            }
+            assertTrue("$name 線太多：${lines.size}", lines.size <= 8)
+        }
     }
 }
