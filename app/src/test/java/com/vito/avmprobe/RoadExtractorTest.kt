@@ -489,3 +489,74 @@ class RoadExtractorTest {
         assertTrue(a.lines[0].k > 0f)
     }
 }
+
+/**
+ * 實車窄巷擷取（兩側黃線、路邊機車、店面招牌）：
+ * 使用者回報「只會顯示直線」「車子底下多出很多奇怪的直線」。
+ *
+ * 原因是俯視圖外圈的入射角太平，立起來的東西被拉成放射狀拖痕，又長又亮，
+ * 被當成標線抽出來；而且二次擬合被那些拖痕拉著，怎麼擬都是直線。
+ * 切掉投地假設不成立的區域（[IPM_MIN_ELEV_DEG]）之後兩個問題一起好轉。
+ */
+class RoadExtractorStreetTest {
+    private val F = PerceptionFixtures
+
+    private fun run(withMask: Boolean): List<RoadLine> {
+        val doc = F.json("quad_street.json")
+        val img = F.image("quad_street.png")
+        val geo = AvmGeometry.fromJson(
+            RoadExtractorStreetTest::class.java.classLoader!!
+                .getResourceAsStream("../../../main/assets/avm_calib.json")
+                ?.bufferedReader()?.use { it.readText() }
+                ?: java.io.File("src/main/assets/avm_calib.json").readText()
+        )
+        val mask = if (withMask) geo.ipmValidMask() else null
+        return RoadExtractor().extract(
+            img.argb, img.w, img.h,
+            doc.getDouble("mpp").toFloat(), doc.getDouble("cx").toFloat(), doc.getDouble("cy").toFloat(),
+            F.exclude(doc), mask
+        ).lines
+    }
+
+    private fun lenOf(l: RoadLine) = kotlin.math.hypot((l.x2 - l.x1).toDouble(), (l.z2 - l.z1).toDouble())
+    private fun longitudinal(l: RoadLine) =
+        abs(l.z2 - l.z1) > abs(l.x2 - l.x1)      // 沿著車身方向的線
+
+    /** 兩側的黃線要抽得到，而且其中至少一條是彎的（那條路確實是彎的）。 */
+    @Test
+    fun findsCurvedLaneLines() {
+        val lines = run(true)
+        val lon = lines.filter { longitudinal(it) && lenOf(it) >= 4.0 }
+        assertTrue("應該抽得到兩側的縱向標線，實際 ${lon.size} 條（全部 ${lines.size} 條）", lon.size >= 2)
+        assertTrue("這條路是彎的，至少要有一條帶曲率：${lines.map { it.k }}", lines.any { abs(it.k) > 1e-4f })
+    }
+
+    /** 不可以再冒出一堆橫越整張圖的假線。 */
+    @Test
+    fun noLongTransverseGarbage() {
+        val lines = run(true)
+        val bad = lines.filter { !longitudinal(it) && lenOf(it) >= 8.0 }
+        assertTrue("橫越整張圖的長假線太多：${bad.size} 條", bad.size <= 1)
+        assertTrue("線太多了：${lines.size} 條", lines.size <= 6)
+    }
+
+    /**
+     * 遮罩才是關鍵，不是順便加的：
+     * 沒有它線會變多，而且**一條彎的都抽不到**（二次擬合被外圈的拖痕拉直了）。
+     */
+    @Test
+    fun maskIsWhatFixesIt() {
+        val without = run(false)
+        val with = run(true)
+        assertTrue("沒遮罩時線應該更多（${without.size} vs ${with.size}）", without.size > with.size)
+        // 沒遮罩時唯一帶曲率的是一條橫越整張圖的假線 —— 曲率有出現，但出現在錯的東西上
+        assertTrue(
+            "沒遮罩時不該有彎的縱向線：${without.filter { longitudinal(it) }.map { it.k }}",
+            without.none { longitudinal(it) && abs(it.k) > 1e-4f }
+        )
+        assertTrue(
+            "有遮罩才抽得到彎的縱向線：${with.filter { longitudinal(it) }.map { it.k }}",
+            with.any { longitudinal(it) && abs(it.k) > 1e-4f }
+        )
+    }
+}

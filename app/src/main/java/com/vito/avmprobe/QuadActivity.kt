@@ -744,7 +744,8 @@ class QuadActivity : AppCompatActivity(), CameraQuadSource.Listener {
                 slots = slotTrack.update(slotDet.detect(buf, bw, bh, mpp, cx, cy, listOf(ego), vehicles), now)
                 slotsAt = now
                 if (mode == AppPrefs.GROUND_VIRTUAL) {
-                    road = roadTrack.update(roadEx.extract(buf, bw, bh, mpp, cx, cy, excl), now)
+                    road = roadTrack.update(
+                        roadEx.extract(buf, bw, bh, mpp, cx, cy, excl, g.ipmValidMask()), now)
                     roadAt = now
                 }
                 if (mode == AppPrefs.GROUND_REAL) {

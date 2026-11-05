@@ -20,8 +20,8 @@ android {
         applicationId = "com.vito.avmprobe"
         minSdk = 26
         targetSdk = 34
-        versionCode = 20
-        versionName = "0.4.8"
+        versionCode = 21
+        versionName = "0.4.9"
     }
 
     buildFeatures {

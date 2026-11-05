@@ -16,6 +16,9 @@ import kotlin.math.sqrt
 // 相機座標：x 右、y 下、z 光軸。等距魚眼 rd = θ(1 + k1θ² + k2θ⁴)。
 
 private const val DEG = PI / 180.0
+
+/** 投地假設的入射仰角下限（度）。低於此角度，一個原始像素攤成一大片地面，立起來的東西會拉成拖痕。 */
+const val IPM_MIN_ELEV_DEG = 15.0
 private const val HORIZON_EPS = 1e-6   // 射線 y 分量要 < -1e-6 才算打到地面
 private const val EGO_MARGIN = 0.05    // 車身外擴 5 cm 在 BEV 裡留黑
 private const val NEWTON_ITERS = 10
@@ -47,6 +50,47 @@ data class BevSpec(val xMin: Double, val xMax: Double, val zMin: Double, val zMa
 }
 
 class AvmGeometry(val cams: List<CamParams>, val bev: BevSpec, val carLength: Double, val carWidth: Double) {
+
+    /**
+     * 「投地假設站得住腳」的區域（以入射仰角 ≥ [minElevDeg] 為準），長度 = bev.width * bev.height。
+     *
+     * 俯視圖是把畫面投影到 y = 0 的平面拼出來的。鏡頭看地面的入射角越平，一個原始像素就攤成
+     * 越大一片地面，而且**立起來的東西會被拉成放射狀的長條拖痕** —— 那些拖痕又長又亮，
+     * top-hat + Hough 一抓一個準，全都是假線（實車窄巷的擷取裡，外圈幾乎全是店面招牌和
+     * 路邊機車的拖痕）。
+     *
+     * 15° 對應鏡頭高 0.84 m 時離鏡頭約 3.1 m。實測把這圈切掉之後：
+     * 假線大幅減少，而且**彎道才開始抓得到** —— 以前二次擬合被外圈的拖痕拉著，
+     * 怎麼擬都是直線。
+     *
+     * 算一次就好（只跟校正有關），結果快取在 [ipmCache]。
+     */
+    fun ipmValidMask(minElevDeg: Double = IPM_MIN_ELEV_DEG): BooleanArray {
+        ipmCache?.let { if (ipmCacheDeg == minElevDeg) return it }
+        val w = bev.width
+        val h = bev.height
+        val out = BooleanArray(w * h)
+        val tanMin = kotlin.math.tan(minElevDeg * DEG)
+        for (j in 0 until h) {
+            val z = bev.zMax - (j + 0.5) * bev.mpp
+            val row = j * w
+            for (i in 0 until w) {
+                val x = bev.xMin + (i + 0.5) * bev.mpp
+                var ok = false
+                for (c in cams) {
+                    val horiz = kotlin.math.hypot(x - c.px, z - c.pz)
+                    if (c.py >= horiz * tanMin) { ok = true; break }
+                }
+                out[row + i] = ok
+            }
+        }
+        ipmCache = out
+        ipmCacheDeg = minElevDeg
+        return out
+    }
+
+    private var ipmCache: BooleanArray? = null
+    private var ipmCacheDeg = Double.NaN
 
     companion object {
         /** 讀 avm_calib.json 的內容。cams 依 quad 排序。 */

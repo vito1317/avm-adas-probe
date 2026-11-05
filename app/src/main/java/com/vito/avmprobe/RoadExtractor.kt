@@ -247,9 +247,14 @@ class RoadExtractor {
         aZ = DoubleArray(aCap)
     }
 
+    /**
+     * @param ipmValid 「投地假設站得住腳」的遮罩（見 [AvmGeometry.ipmValidMask]），長度 w*h。
+     *   傳 null 就不限制 —— 截螢幕模式讀的是原廠拼好的俯視圖，沒有鏡頭幾何可以算。
+     *   自建俯視圖一定要傳：外圈全是立起來的東西被拉成的放射狀拖痕，在那裡抽到的「線」幾乎都是假的。
+     */
     fun extract(
         argb: IntArray, w: Int, h: Int, mpp: Float, cx: Float, cy: Float,
-        exclude: List<FloatArray>
+        exclude: List<FloatArray>, ipmValid: BooleanArray? = null
     ): RoadResult {
         val t0 = System.nanoTime()
         ensure(w, h)
@@ -274,6 +279,10 @@ class RoadExtractor {
         val emx = (-EGO_HX - EGO_MARGIN).toFloat().toDouble()
         val emz = (-EGO_HZ - EGO_MARGIN).toFloat().toDouble()
         markRect(emx, emz, (EGO_HX + EGO_MARGIN).toFloat().toDouble(), (EGO_HZ + EGO_MARGIN).toFloat().toDouble(), 4)
+        // 投地假設不成立的地方整個不找線（跟自車排除區清掉同一個位元）
+        if (ipmValid != null && ipmValid.size == n) {
+            for (p in 0 until n) if (!ipmValid[p]) flags[p] = (flags[p].toInt() and 3).toByte()
+        }
 
         // ── opening（有效像素）→ top-hat ──
         val half = floorHalf(BG_HALF_M / m)
@@ -1022,6 +1031,9 @@ class RoadExtractor {
             longest = max(longest, curB - curA)
             spN++
             val wd = (hi - lo + 1) * 0.02
+            // 漆寬量到整個 ±0.30 m 視窗都還沒降下來 ＝ 飽和：那不是一條線，是一整片亮的東西
+            // （接縫錯位、車身反光、拉長的陰影）。實測 5 張實車擷取共 7 條飽和線，全是假的。
+            if (lo == 0 && hi == 29) continue
             val dashed = if (longest >= SOLID_M) false
             else if (spN >= 2) true
             else if (wd >= THICK_M) false

@@ -210,8 +210,37 @@ def _pca_line(xs, zs):
     return phi, d
 
 
-def road_extract(argb, w, h, mpp, cx, cy, exclude, P=TUNED, dbg=None):
-    """回傳 dict(lines=[dict(k,d,x1,z1,x2,z2,c)], edgeL, edgeR)。"""
+def ipm_valid_mask(geo, w, h, mpp, cx, cy, min_elev_deg=12.0):
+    """投地假設站得住腳的區域（以擁有該像素的鏡頭算入射仰角）。
+
+    俯視圖是把畫面投影到 y=0 的平面拼出來的。鏡頭看地面的入射角越平，
+    一個原始像素就攤成越大一片地面，而且**立起來的東西會被拉成放射狀的長條拖痕** ——
+    那些拖痕又長又亮，top-hat ＋ Hough 一抓一個準，全是假線。
+
+    實測：台灣的窄巷裡，俯視圖外圈幾乎都是店面招牌和路邊機車被拉長的影子。
+    入射仰角 12° 對應鏡頭高度 0.84 m 時離鏡頭約 3.9 m —— 車身周圍的路面還在，
+    外面那一圈純屬腦補的地方就不要拿來找線了。
+    """
+    import numpy as _np
+    cams = sorted(geo.cams, key=lambda c: c.quad)
+    X = (_np.arange(w) + 0.5 - cx) * mpp
+    Z = (cy - (_np.arange(h) + 0.5)) * mpp
+    XX, ZZ = _np.meshgrid(X, Z)
+    tan_min = math.tan(math.radians(min_elev_deg))
+    ok = _np.zeros((h, w), bool)
+    for c in cams:
+        horiz = _np.hypot(XX - c.px, ZZ - c.pz)
+        ok |= (c.py >= horiz * tan_min)
+    return ok
+
+
+def road_extract(argb, w, h, mpp, cx, cy, exclude, P=TUNED, dbg=None, ipm=None):
+    """回傳 dict(lines=[dict(k,d,x1,z1,x2,z2,c)], edgeL, edgeR)。
+
+    [ipm] 是「投地假設站得住腳」的遮罩（見 ipm_valid_mask）。傳 None 就不限制，
+    但實車上一定要傳：俯視圖外圈都是立起來的東西被拉成的放射狀拖痕，
+    那裡抽出來的「線」幾乎都是假的。
+    """
     mpp, cx, cy = f32(mpp), f32(cx), f32(cy)
     R, G, B = unpack(argb, w, h)
     Y = (77 * R + 150 * G + 29 * B) >> 8
@@ -220,6 +249,8 @@ def road_extract(argb, w, h, mpp, cx, cy, exclude, P=TUNED, dbg=None):
     use0 = valid & ~exclude_mask(w, h, mpp, cx, cy, exclude)
     # 標線另外把自車外擴一圈也排除（螢幕模式的車子圖示、後照鏡、車身邊緣的亮條）
     use = use0 & ~exclude_mask(w, h, mpp, cx, cy, [[-EGO_HX - em, -EGO_HZ - em, EGO_HX + em, EGO_HZ + em]]) if em > 0 else use0
+    if ipm is not None:
+        use = use & ipm
     half = floor_half(P['bgHalfM'] / mpp)
     if P['bg'] == 'mean':
         T = Y - _box_mean(Y, valid, half)
@@ -558,6 +589,10 @@ def _lines_tuned(X, Z, C, lk, mode, cphi, w, h, mpp, cx, cy, use, P, CA=None):
         mz_ = -d * s + (segs[0][0] + segs[-1][1]) / 2 * c
         cnts = [int(np.sum(C[inl] == q)) for q in (1, 2, 3)]
         kind = 1 + int(np.argmax(cnts))
+        # 漆寬量到「整個 ±0.30 m 視窗都還沒降下來」＝ 飽和：這不是一條線，是一整片亮的東西
+        # （接縫錯位、車身反光、拉長的陰影）。實測 5 張實車擷取共 7 條飽和線，全是假的；
+        # 真正的標線 lo ≥ 5、hi ≤ 27，一條都沒碰到視窗邊。
+        sat = (lo == 0 and hi == 29)
         dup = False
         for L in lines:
             if L['k'] != 'wyr'[kind - 1] or abs(wrap90(L['phi'] - math.degrees(phi))) > P['dupDeg']:
@@ -568,7 +603,7 @@ def _lines_tuned(X, Z, C, lk, mode, cphi, w, h, mpp, cx, cy, use, P, CA=None):
                 break
         claimed |= grab
         unvote(grab)
-        if dup:
+        if dup or sat:
             continue
         # 不可觀測（無覆蓋 / 被排除）的空隙不算真的斷開
         # 虛線的空檔是 6 m；太短（磨損、陰影）或看不到（無覆蓋、被排除）的空隙都不算斷開
