@@ -170,10 +170,20 @@ class AppPrefs(context: Context) {
         get() = sp.getBoolean("annotOn", true)
         set(v) { sp.edit().putBoolean("annotOn", v).commit() }
 
-    /** 連續「啟動後沒撐過健康檢查」的次數（崩潰保護）。 */
+    /** 連續「啟動後沒撐過健康檢查」的次數（舊的崩潰保護，已不用；留著讓設定頁歸零）。 */
     var annotBoots: Int
         get() = sp.getInt("annotBoots", 0)
         set(v) { sp.edit().putInt("annotBoots", v).commit() }
+
+    /** 我們的程式害原廠閃退的次數（堆疊裡有 com.vito）；撐過健康檢查就歸零。 */
+    var annotCrashes: Int
+        get() = sp.getInt("annotCrashes", 0)
+        set(v) { sp.edit().putInt("annotCrashes", v).commit() }
+
+    /** 上一次閃退的摘要（顯示在 ADAS 設定最上面），空字串 = 沒有。 */
+    var lastCrash: String
+        get() = sp.getString("lastCrash", "")!!
+        set(v) { sp.edit().putString("lastCrash", v).commit() }
 
     /** 原廠俯視圖 → 螢幕的對應（[AnnotationMapper.Params]）。 */
     var annotParams: AnnotationMapper.Params

@@ -37,10 +37,20 @@ object Engine360Settings {
             text = FrameShareHub.status()
             textSize = 11f; typeface = Typeface.MONOSPACE
         })
+        if (prefs.lastCrash.isNotEmpty()) {
+            col.addView(TextView(act).apply {
+                text = "上次閃退（完整內容在「下載/avm-adas/crash_*.txt」）：\n" + prefs.lastCrash
+                textSize = 11f; typeface = Typeface.MONOSPACE; setTextColor(Color.rgb(255, 120, 100))
+            })
+            col.addView(Button(act).apply {
+                text = "清除閃退紀錄"; isAllCaps = false
+                setOnClickListener { prefs.lastCrash = ""; prefs.annotCrashes = 0; text = "已清除" }
+            })
+        }
 
         section("ADAS")
         check("啟用偵測與標注（關掉後下次進 360 起不再接相機）", { prefs.annotEnabled }) {
-            prefs.annotEnabled = it; prefs.annotBoots = 0
+            prefs.annotEnabled = it; prefs.annotBoots = 0; prefs.annotCrashes = 0
         }
         check("車道偵測（偏離車道警示、變道輔助要用）", { prefs.groundMode == AppPrefs.GROUND_VIRTUAL }) {
             prefs.groundMode = if (it) AppPrefs.GROUND_VIRTUAL else AppPrefs.GROUND_OFF

@@ -34,8 +34,9 @@ import java.lang.ref.WeakReference
  */
 object Engine360 {
     private const val TAG = "Engine360"
-    private const val HEALTHY_MS = 30_000L
-    private const val MAX_FAILED_BOOTS = 3
+    private const val HEALTHY_MS = 60_000L
+    /** 我們的程式害原廠閃退這麼多次（沒撐過 HEALTHY_MS）就自動停用。 */
+    private const val MAX_OUR_CRASHES = 2
     private const val VIEW_TAG = "com.vito.avmprobe.annot"
 
     private val main = Handler(Looper.getMainLooper())
@@ -89,20 +90,45 @@ object Engine360 {
         }
     }
 
-    /** 連續啟動後沒撐過 HEALTHY_MS（多半是我們害原廠閃退）→ 自動停用。 */
+    /**
+     * 崩潰保護：只算**真的閃退、而且堆疊裡有我們的程式**（[onCrash] 記的）。
+     * 以前是數「啟動幾次」，但原廠一次啟動會建好幾個畫面（注入點在父類別和子類別都有），
+     * 冷開機還會重建，一啟動就數到上限把 ADAS 關掉 —— 那不是閃退。
+     */
+    private var guardArmed = false
     private fun crashGuard(act: Activity, prefs: AppPrefs) {
+        prefs.annotBoots = 0
+        if (prefs.lastCrash.isNotEmpty()) log("上次閃退：" + prefs.lastCrash.lineSequence().take(2).joinToString(" / "))
         if (!prefs.annotEnabled) return
-        val boots = prefs.annotBoots
-        if (boots >= MAX_FAILED_BOOTS) {
+        val n = prefs.annotCrashes
+        if (n >= MAX_OUR_CRASHES) {
             prefs.annotEnabled = false
-            prefs.annotBoots = 0
-            log("連續 $boots 次啟動失敗，ADAS 已自動停用")
-            try { Toast.makeText(act, "ADAS 連續啟動失敗，已自動停用（按「ADAS」可重新開啟）", Toast.LENGTH_LONG).show() }
+            prefs.annotCrashes = 0
+            log("我們的程式連續害原廠閃退 $n 次，ADAS 已自動停用")
+            try { Toast.makeText(act, "ADAS 造成閃退，已自動停用（按「ADAS」可看原因、重新開啟）", Toast.LENGTH_LONG).show() }
             catch (_: Throwable) {}
             return
         }
-        prefs.annotBoots = boots + 1
-        main.postDelayed({ prefs.annotBoots = 0 }, HEALTHY_MS)
+        if (!guardArmed) {
+            guardArmed = true
+            main.postDelayed({ prefs.annotCrashes = 0 }, HEALTHY_MS)   // 撐過一分鐘就當作沒事
+        }
+    }
+
+    /**
+     * 原廠 process 要閃退了（FrameTap 裝的 UncaughtExceptionHandler 呼叫）：
+     * 完整堆疊存到「下載/avm-adas/crash_*.txt」，摘要記在設定裡；堆疊有我們的程式才算進崩潰保護。
+     */
+    @JvmStatic
+    fun onCrash(ctx: Context, trace: String) {
+        try {
+            val prefs = AppPrefs(ctx)
+            val ours = "com.vito" in trace
+            prefs.lastCrash = (if (ours) "【我們的程式】" else "【原廠程式】") + "\n" + trace.lineSequence().take(6).joinToString("\n")
+            if (ours) prefs.annotCrashes = prefs.annotCrashes + 1
+            val ts = java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.US).format(java.util.Date())
+            MediaSaver.save(ctx, "crash_$ts.txt", "text/plain", trace.toByteArray())
+        } catch (_: Throwable) {}
     }
 
     private fun addViews(act: Activity, prefs: AppPrefs) {

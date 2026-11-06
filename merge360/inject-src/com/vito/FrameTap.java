@@ -126,6 +126,7 @@ public final class FrameTap {
         try {
             if (act == null) return;
             sCtx = act.getApplicationContext();
+            installCrashHandler(sCtx);
             if (engine() != null) {
                 // 合併版：不管開關都掛上標注圖層與「ADAS」鈕（關著也要能從那顆鈕打開）
                 try { engineCall("attach", new Class<?>[]{Activity.class}, act); }
@@ -138,9 +139,10 @@ public final class FrameTap {
             }
             report("掛鉤觸發：" + act.getClass().getSimpleName() + "，相機物件 " + liveCams().size() + " 個");
             if (engine() == null) bind(sCtx);   // B 模式才要叫起另一個 App 的服務
-            // 原廠相機多半早就開好、不會重建 session → 等它自己的啟動跑完，再用它的
-            // addOutputSurface 把我們的 Surface 加進去（它截圖也是這樣在運作中加輸出）
-            sMain.postDelayed(new Runnable() { public void run() { attachAll(); } }, 1500);
+            // 原廠相機多半早就開好、不會重建 session → 用它的 addOutputSurface 在運作中加輸出
+            // （它截圖也是這樣）。冷開機時原廠相機還在開，這時去「停相機→加輸出→重開」會跟原廠
+            // 自己的啟動撞在一起 → 等相機**穩定運作 3 秒**才接。
+            if (!sWaiting) { sWaiting = true; waitStableThenAttach(0, 0); }   // 一次啟動會進來好幾次，只排一個
             if (engine() == null) {
                 try { Toast.makeText(act, "影格共用：已啟動偵測疊圖", Toast.LENGTH_SHORT).show(); } catch (Throwable ignore) {}
             }
@@ -194,6 +196,73 @@ public final class FrameTap {
         } catch (Throwable t) {
             Log.e(TAG, "onBvState 失敗：" + t);
         }
+    }
+
+    private static final int STABLE_TICKS = 3;     // 連續幾秒都在擷取才算穩定
+    private static final int MAX_TICKS = 40;       // 最多等這麼多秒
+
+    private static volatile boolean sWaiting;
+
+    private static void waitStableThenAttach(final int tick, final int stable) {
+        sMain.postDelayed(new Runnable() {
+            public void run() {
+                try {
+                    boolean capturing = false;
+                    for (Object cam : liveCams()) {
+                        try {
+                            Method m = findMethod(cam.getClass(), "isCapturing");
+                            if (m != null && (Boolean) m.invoke(cam)) { capturing = true; break; }
+                        } catch (Throwable ignore) {}
+                    }
+                    int st = capturing ? stable + 1 : 0;
+                    if (st >= STABLE_TICKS) { sWaiting = false; attachAll(); return; }
+                    if (tick >= MAX_TICKS) {
+                        // 等不到在擷取：照樣加進清單（相機沒在跑時 addOutputSurface 只是記下來，不會停／開相機）
+                        report("等了 " + MAX_TICKS + " 秒相機都沒在擷取，直接登記輸出");
+                        sWaiting = false;
+                        attachAll();
+                        return;
+                    }
+                    waitStableThenAttach(tick + 1, st);
+                } catch (Throwable t) {
+                    sWaiting = false;
+                    report("waitStable 失敗：" + t);
+                }
+            }
+        }, 1000);
+    }
+
+    private static Method findMethod(Class<?> k, String name, Class<?>... types) {
+        while (k != null) {
+            try { Method m = k.getDeclaredMethod(name, types); m.setAccessible(true); return m; }
+            catch (NoSuchMethodException e) { k = k.getSuperclass(); }
+        }
+        return null;
+    }
+
+    private static volatile boolean sCrashHandler;
+
+    /**
+     * 原廠 process 閃退時把堆疊交給引擎（存檔、判斷是不是我們害的），再交回原本的處理器（照常閃退）。
+     * 下次開 360 可以在 ADAS 設定最上面看到原因，不用 adb。
+     */
+    private static void installCrashHandler(final Context ctx) {
+        if (sCrashHandler) return;
+        sCrashHandler = true;
+        try {
+            final Thread.UncaughtExceptionHandler prev = Thread.getDefaultUncaughtExceptionHandler();
+            Thread.setDefaultUncaughtExceptionHandler(new Thread.UncaughtExceptionHandler() {
+                public void uncaughtException(Thread th, Throwable e) {
+                    try {
+                        java.io.StringWriter sw = new java.io.StringWriter();
+                        e.printStackTrace(new java.io.PrintWriter(sw));
+                        String trace = "thread=" + th.getName() + "\n" + sw;
+                        if (engine() != null) engineCall("onCrash", new Class<?>[]{Context.class, String.class}, ctx, trace);
+                    } catch (Throwable ignore) {}
+                    if (prev != null) prev.uncaughtException(th, e);
+                }
+            });
+        } catch (Throwable ignore) {}
     }
 
     /** 注入在 I360CameraInterface 建構子裡：登記原廠的相機物件。 */
