@@ -66,7 +66,7 @@ class FactoryViewsTest {
                 },
                 [37] = {
                     Viewport = 2,
-                    Contents = { { TransParam = Rotate3DParam.Rear } },
+                    Contents = { { Views = { 1 } }, { TransParam = Rotate3DParam.Rear } },
                 },
             }
         end
@@ -122,5 +122,44 @@ class FactoryViewsTest {
     @Test
     fun keyLookupUsesSceneNumber() {
         assertNull(FactoryViews.forKey("BV_LEFT"))
+    }
+}
+
+class FactoryFixViewTest {
+    private val setting = "Common = { SvBv = 0, FOV = 35, }"
+    private val fix = """
+        function DefineFixViews()
+            local fixviews = {
+                [10] = { Pitch = 38, Mirror = false, Yaw = -270, CarOffset = { 0, 0, 0, }, EyeDist = 7500, CenPos = { 0, 200, 0, }, },
+                [51] = { Pitch = 38, Mirror = false, Yaw = 0, CarOffset = { 0, 0, 0, }, EyeDist = 7500, CenPos = { 0, 200, 0, }, },
+                [31] = SingleViewParam[1],
+            }
+            return fixviews
+        end
+    """.trimIndent()
+    private val scene = """
+        local scene = {
+            [4] = {
+                Viewport = 8,
+                Contents = { { Views = { 10, 51 }, Mesh = 2, Stream = true, Model = { WheelMode = true }, }, },
+            },
+            [56] = {
+                Viewport = 1,
+                Contents = { { Views = { 31 }, }, },
+            },
+        }
+    """.trimIndent()
+
+    @Test
+    fun fullScreen3dUsesLastFixView() {
+        val (m, noTop) = FactoryViews.parseAll(setting, scene, fix)
+        val p = m.getValue(4)
+        org.junit.Assert.assertEquals(0f, p.azDeg, 0.01f)       // 動畫的最後一個（51）
+        org.junit.Assert.assertEquals(38f, p.elDeg, 0.01f)
+        org.junit.Assert.assertEquals(35f, p.fovDeg, 0.01f)     // Common.FOV
+        org.junit.Assert.assertEquals(0.87f, p.clipB, 0.001f)
+        org.junit.Assert.assertEquals(1f, p.clipR, 0.001f)
+        org.junit.Assert.assertTrue(4 in noTop)
+        org.junit.Assert.assertNull(m[56])                      // 鏡頭畫面不是繞車鏡頭
     }
 }

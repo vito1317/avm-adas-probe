@@ -30,11 +30,18 @@ object FactoryViews {
     /** 場景編號 → 3D 那一格的參數。 */
     @Volatile var scenes: Map<Int, PerspectiveMapper.Params> = emptyMap()
         private set
+    /** 沒有俯視圖格子的場景（全螢幕 3D 等）：俯視標注不能畫。 */
+    @Volatile var noTop: Set<Int> = emptySet()
+        private set
     @Volatile var status: String = "還沒讀"
         private set
 
-    fun forKey(key: String): PerspectiveMapper.Params? =
-        Regex("^SCENE_(\\d+)").find(key)?.groupValues?.get(1)?.toIntOrNull()?.let { scenes[it] }
+    private fun sceneOf(key: String) = Regex("^SCENE_(\\d+)").find(key)?.groupValues?.get(1)?.toIntOrNull()
+
+    fun forKey(key: String): PerspectiveMapper.Params? = sceneOf(key)?.let { scenes[it] }
+
+    /** 這個場景確定沒有俯視圖（全 3D 模式）。 */
+    fun noTopFor(key: String): Boolean = sceneOf(key)?.let { it in noTop } ?: false
 
     fun load(ctx: Context) {
         try {
@@ -46,14 +53,23 @@ object FactoryViews {
             }
             val setting = read("cfg/setting.lua", "application/birdview/cfg/setting.lua", "birdview/cfg/setting.lua")
             val scene = read("scene/scene1.lua", "birdview/scene/scene1.lua", "application/birdview/scene/scene1.lua")
+            val fix = read("scene/fixview.lua", "birdview/scene/fixview.lua", "application/birdview/scene/fixview.lua") ?: ""
             if (setting == null || scene == null) { status = "讀不到原廠設定檔"; return }
-            scenes = parse(setting, scene)
+            val r = parseAll(setting, scene, fix)
+            scenes = r.first; noTop = r.second
             status = "已讀取原廠 3D 視角 ${scenes.size} 個（場景 ${scenes.keys.sorted().joinToString("、")}）"
         } catch (t: Throwable) { status = "讀取原廠視角失敗：$t" }
     }
 
-    /** 解析 setting.lua 與 scene1.lua，回傳場景編號 → 3D 參數。 */
-    fun parse(settingLua: String, sceneLua: String): Map<Int, PerspectiveMapper.Params> {
+    fun parse(settingLua: String, sceneLua: String, fixviewLua: String = ""): Map<Int, PerspectiveMapper.Params> =
+        parseAll(settingLua, sceneLua, fixviewLua).first
+
+    /**
+     * 解析 setting.lua、scene1.lua、fixview.lua → (場景編號 → 3D 參數, 沒有俯視圖的場景)。
+     * 3D 內容可以是 TransParam（Side3DParam／Rotate3DParam）或 Views（fixview.lua 的固定視角，
+     * 有動畫的取最後一個），只認繞車鏡頭（有 EyeDist）的，鏡頭畫面（SingleViewParam）不算。
+     */
+    fun parseAll(settingLua: String, sceneLua: String, fixviewLua: String): Pair<Map<Int, PerspectiveMapper.Params>, Set<Int>> {
         val setting = stripComments(settingLua)
         val common = block(setting, "Common")
         val defFov = common?.let { num(it, "FOV") } ?: 35f
@@ -74,16 +90,68 @@ object FactoryViews {
                 groups["$g.$side"] = v
             }
         }
+        // fixview.lua：[n] = { Pitch, Yaw, EyeDist, CenPos, Mirror }
+        val fixes = HashMap<Int, View3D>()
+        val fv = stripComments(fixviewLua)
+        for (m in Regex("\\[(\\d+)\\]\\s*=\\s*\\{").findAll(fv)) {
+            val b = braced(fv, m.range.last) ?: continue
+            if (Regex("\\[\\d+\\]\\s*=").containsMatchIn(b)) continue   // 外層（DefineFixViews 的整張表）
+            fixes[m.groupValues[1].toInt()] = view3d(b) ?: continue
+        }
         val out = HashMap<Int, PerspectiveMapper.Params>()
+        val noTop = HashSet<Int>()
         val scene = stripComments(sceneLua)
         val marks = Regex("\\[(\\d+)\\]\\s*=\\s*\\{").findAll(scene).toList()
-        for ((i, m) in marks.withIndex()) {
-            val body = scene.substring(m.range.last, if (i + 1 < marks.size) marks[i + 1].range.first else scene.length)
-            val tp = Regex("TransParam\\s*=\\s*((?:Side3DParam|Rotate3DParam)\\.\\w+)").find(body)?.groupValues?.get(1) ?: continue
-            val v = groups[tp] ?: continue
+        for (m in marks) {
+            val body = braced(scene, m.range.last) ?: continue
+            if (!body.contains("Contents")) continue
             val vp = Regex("Viewport\\s*=\\s*(\\d+)").find(body)?.groupValues?.get(1)?.toIntOrNull() ?: continue
+            val n = m.groupValues[1].toInt()
+            val contents = block(body, "Contents")?.let { items(it) } ?: continue
+            // fixview 1 就是原廠俯視圖：場景裡有它才有俯視格
+            fun views(c: String) = Regex("Views\\s*=\\s*\\{([^}]*)\\}").find(c)?.groupValues?.get(1)
+                ?.split(',')?.mapNotNull { it.trim().toIntOrNull() } ?: emptyList()
+            if (contents.none { views(it) == listOf(1) }) noTop.add(n)
             val clip = paneFor(vp, svbv) ?: continue
-            out[m.groupValues[1].toInt()] = toParams(v, v.fov ?: defFov, clip)
+            // 俯視 + 3D 版面：3D 是第二格；其他版面：第一格
+            val c = contents.getOrNull(if (vp == 2) 1 else 0) ?: continue
+            if (views(c) == listOf(1)) continue
+            val v = Regex("TransParam\\s*=\\s*((?:Side3DParam|Rotate3DParam)\\.\\w+)").find(c)?.groupValues?.get(1)?.let { groups[it] }
+                ?: Regex("Views\\s*=\\s*\\{([^}]*)\\}").find(c)?.groupValues?.get(1)
+                    ?.split(',')?.mapNotNull { it.trim().toIntOrNull() }?.lastOrNull()?.let { fixes[it] }
+                ?: continue
+            out[n] = toParams(v, v.fov ?: defFov, clip)
+        }
+        return out to noTop
+    }
+
+    private fun view3d(s: String): View3D? {
+        val cen = Regex("CenPos\\s*=\\s*\\{([^}]*)\\}").find(s)?.groupValues?.get(1)?.split(',')?.mapNotNull { it.trim().toFloatOrNull() }
+        return View3D(
+            yaw = num(s, "Yaw") ?: 0f, pitch = num(s, "Pitch") ?: return null, eyeDist = num(s, "EyeDist") ?: return null,
+            cen = if (cen != null && cen.size >= 3) floatArrayOf(cen[0], cen[1], cen[2]) else floatArrayOf(0f, 0f, 0f),
+            fov = num(s, "FOV"), mirror = Regex("Mirror\\s*=\\s*true").containsMatchIn(s)
+        )
+    }
+
+    /** 從 [open]（'{' 的位置）開始配對到對應的 '}'，回傳中間的文字。 */
+    private fun braced(s: String, open: Int): String? {
+        var depth = 0
+        for (i in open until s.length) {
+            when (s[i]) {
+                '{' -> depth++
+                '}' -> { depth--; if (depth == 0) return s.substring(open + 1, i) }
+            }
+        }
+        return null
+    }
+
+    /** 大括號清單裡每一個頂層 { ... } 項目。 */
+    private fun items(s: String): List<String> {
+        val out = ArrayList<String>()
+        var i = 0
+        while (i < s.length) {
+            if (s[i] == '{') { val b = braced(s, i) ?: break; out.add(b); i += b.length + 2 } else i++
         }
         return out
     }
@@ -95,6 +163,8 @@ object FactoryViews {
     fun paneFor(viewport: Int, svbv: Float): FloatArray? = when (viewport) {
         1 -> floatArrayOf(0f, 0f, 1f, 1f)
         2 -> { val x = 0.348f * (1f - svbv); floatArrayOf(x, 0f, x + 0.652f, 0.87f) }
+        7 -> floatArrayOf(0f, 0f, 0.40f, 1f)
+        8 -> floatArrayOf(0f, 0f, 1f, 0.87f)   // 全 3D：整個寬、工具列上方
         else -> null
     }
 

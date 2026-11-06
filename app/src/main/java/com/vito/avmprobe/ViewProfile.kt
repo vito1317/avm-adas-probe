@@ -63,7 +63,8 @@ data class ViewProfile(val top: AnnotationMapper.Params?, val p3: PerspectiveMap
                 k == TURN_R -> PerspectiveMapper.Params.DEFAULT_RIGHT
                 else -> null
             }
-            return ViewProfile(globalTop, p3)
+            // 全 3D 這類沒有俯視圖格子的場景：俯視標注不畫（不然會畫在 3D 畫面上）
+            return ViewProfile(if (FactoryViews.noTopFor(key.uppercase())) null else globalTop, p3)
         }
 
         /** 左右成對的視角名稱（BV_LEFT ↔ BV_RIGHT），沒有對應回 null。 */
