@@ -98,6 +98,33 @@ object Engine360 {
         }
     }
 
+    /**
+     * 自動對位用的資料存下來（原廠畫面、我們的俯視圖、結果）到「下載/avm-adas」：
+     * 實車對不準時，把這幾個檔傳給開發者，在電腦上用真實畫面重跑、找原因。
+     */
+    private fun dumpCalibration(ctx: Context, tag: String, scr: AutoCalibrator.Screen, bev: AutoCalibrator.Bev, result: JSONObject) {
+        cal.post {
+            try {
+                val ts = java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.US).format(java.util.Date())
+                val safe = tag.replace(Regex("[^A-Za-z0-9_]"), "_")
+                fun png(argb: IntArray, w: Int, h: Int): ByteArray {
+                    val b = android.graphics.Bitmap.createBitmap(argb, w, h, android.graphics.Bitmap.Config.ARGB_8888)
+                    val bos = java.io.ByteArrayOutputStream(); b.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, bos)
+                    return bos.toByteArray()
+                }
+                MediaSaver.save(ctx, "autocal_${ts}_${safe}_screen.png", "image/png", png(scr.argb, scr.w, scr.h))
+                MediaSaver.save(ctx, "autocal_${ts}_${safe}_bev.png", "image/png", png(bev.argb, bev.w, bev.h))
+                val meta = JSONObject().put("tag", tag)
+                    .put("screen", JSONObject().put("w", scr.w).put("h", scr.h).put("sx0", scr.sx0).put("sy0", scr.sy0)
+                        .put("sw", scr.sw).put("sh", scr.sh).put("screenW", scr.screenW).put("screenH", scr.screenH)
+                        .put("how", FactoryScreen.lastError.ifEmpty { "繪圖面直接複製" }))
+                    .put("bev", JSONObject().put("w", bev.w).put("h", bev.h).put("mpp", bev.mpp.toDouble()).put("ox", bev.ox.toDouble()).put("oy", bev.oy.toDouble()))
+                    .put("result", result)
+                MediaSaver.save(ctx, "autocal_${ts}_${safe}.json", "application/json", meta.toString(2).toByteArray())
+            } catch (t: Throwable) { Log.e(TAG, "dump", t) }
+        }
+    }
+
     private fun runCalibration(ctx: Context, key: String, scr: AutoCalibrator.Screen, bev: AutoCalibrator.Bev): String {
         val prefs = AppPrefs(ctx)
         val t0 = SystemClock.elapsedRealtime()
@@ -118,6 +145,10 @@ object Engine360 {
             }
         }
         val p3 = if (pane3[2] - pane3[0] > 0.15f) AutoCalibrator.calibrate3d(scr, pane3, bev) else null
+        dumpCalibration(ctx, "auto_$key", scr, bev, JSONObject()
+            .put("top", top?.let { ViewProfile(topParams, null).toJson().put("score", it.score.toDouble()) } ?: JSONObject.NULL)
+            .put("p3", p3?.let { ViewProfile(null, it.params).toJson().put("score", it.score.toDouble()) } ?: JSONObject.NULL)
+            .put("pane3", org.json.JSONArray(pane3.map { it.toDouble() })))
         if (topParams == null && p3 == null) return "自動對位：$key 找不到俯視圖或 3D（停車、周圍有地面紋理時再試）"
         prefs.setViewProfile(key, ViewProfile(topParams, p3?.params))
         prefs.setViewCalMode(key, "auto")
@@ -125,6 +156,71 @@ object Engine360 {
         view?.get()?.invalidateProfiles()
         val dt = (SystemClock.elapsedRealtime() - t0) / 1000f
         return "自動對位完成：$key（俯視 ${top?.score?.let { "%.2f".format(it) } ?: "—"}、3D ${p3?.score?.let { "%.2f".format(it) } ?: "—"}，${"%.1f".format(dt)} 秒）"
+    }
+
+    // ───────── 使用者拖動／縮放原廠 3D：停手後從上一組參數快速重新對位 ─────────
+
+    /** 拖動後的角度（只在目前這個視角有效，換視角就丟掉；不存檔，原廠下次會回到預設角度）。 */
+    private val overrides = java.util.concurrent.ConcurrentHashMap<String, ViewProfile>()
+    @Volatile private var gestureAt = 0L
+    private const val GESTURE_QUIET_MS = 1200L
+
+    /** FrameTap 在原廠 nativeDragControl／nativeDoubleDragControl／nativeScaleControl 之前呼叫。 */
+    @JvmStatic
+    fun onGesture(kind: Int, a: Int, b: Int) {
+        try {
+            gestureAt = SystemClock.elapsedRealtime()
+            main.post {
+                view?.get()?.suspend3d = true
+                main.removeCallbacks(retrackCheck)
+                main.postDelayed(retrackCheck, GESTURE_QUIET_MS)
+            }
+        } catch (_: Throwable) {}
+    }
+
+    private val retrackCheck = object : Runnable {
+        override fun run() {
+            val quiet = SystemClock.elapsedRealtime() - gestureAt
+            if (quiet < GESTURE_QUIET_MS) { main.postDelayed(this, GESTURE_QUIET_MS - quiet); return }
+            retrack()
+        }
+    }
+
+    private fun retrack() {
+        val key = lastViewKey; val av = view?.get(); val act = activity?.get(); val p = pipeline
+        if (key == null || av == null || act == null || p == null) { av?.suspend3d = false; return }
+        val prof = av.currentProfile()
+        val p3 = prof.p3 ?: run { av.suspend3d = false; return }
+        if (calibrating) { main.postDelayed(retrackCheck, 1000); return }
+        calibrating = true
+        p.requestBev { bev ->
+            main.post {
+                if (bev == null) { calibrating = false; return@post }
+                FactoryScreen.capture(act, hide = ownViews()) { scr ->
+                    if (scr == null) { calibrating = false; log("拖動後重新對位：擷取不到原廠畫面"); return@capture }
+                    cal.post {
+                        val t0 = SystemClock.elapsedRealtime()
+                        val r = try { AutoCalibrator.retrack3d(scr, p3, bev) } catch (t: Throwable) { null }
+                        calibrating = false
+                        main.post {
+                            if (lastViewKey != key || SystemClock.elapsedRealtime() - gestureAt < GESTURE_QUIET_MS) return@post
+                            if (r != null) {
+                                overrides[key] = prof.copy(p3 = r.params)
+                                av.invalidateProfiles()
+                                av.suspend3d = false
+                                log("拖動後重新對位：%.2f（%.1f 秒）".format(r.score, (SystemClock.elapsedRealtime() - t0) / 1000f))
+                            } else {
+                                // 找不到：恢復原本的標注（不要讓 3D 就這樣消失）
+                                av.suspend3d = false
+                                log("拖動後重新對位失敗，先用原本的對位")
+                            }
+                            dumpCalibration(act, "retrack_$key", scr, bev, JSONObject()
+                                .put("start", ViewProfile(null, p3).toJson()).put("result", r?.let { ViewProfile(null, it.params).toJson().put("score", it.score.toDouble()) } ?: JSONObject.NULL))
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /** 原廠切到還沒對位過的視角 → 等轉場動畫跑完，停著或很慢時自動對位一次。 */
@@ -158,6 +254,9 @@ object Engine360 {
 
     private fun setViewKey(key: String) {
         if (lastViewKey == key) return
+        // 換了視角：原廠會回到那個視角的預設角度 → 拖動後的角度只在原本那個視角有效
+        lastViewKey?.let { overrides.remove(it) }
+        view?.get()?.let { it.suspend3d = false; it.invalidateProfiles() }
         lastViewKey = key
         log("原廠視角：$key" + if (lastBvName.isNotEmpty() && !key.contains(lastBvName)) "（$lastBvName）" else "")
         view?.get()?.viewKey = key
@@ -289,7 +388,7 @@ object Engine360 {
 
         val av = AnnotationView(act).apply {
             tag = VIEW_TAG
-            profileFor = { k -> prefs.viewProfile(k) }
+            profileFor = { k -> overrides[k] ?: prefs.viewProfile(k) }
             onTapGround = { x, z -> pipeline?.tapSlot(x, z) ?: false }
             viewKey = lastViewKey
             drawRoad = prefs.annotDrawRoad

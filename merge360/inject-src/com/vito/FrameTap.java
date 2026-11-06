@@ -265,6 +265,19 @@ public final class FrameTap {
         } catch (Throwable ignore) {}
     }
 
+    /** 使用者拖動原廠 3D（單指）。 */
+    public static void onDrag(int a, int b) { gesture(1, a, b); }
+    /** 使用者雙指拖動。 */
+    public static void onDrag2(int a, int b) { gesture(2, a, b); }
+    /** 使用者縮放。 */
+    public static void onScale(int a) { gesture(3, a, 0); }
+
+    private static void gesture(int kind, int a, int b) {
+        try {
+            if (engine() != null) engineCall("onGesture", new Class<?>[]{int.class, int.class, int.class}, kind, a, b);
+        } catch (Throwable ignore) {}
+    }
+
     /** 注入在 I360CameraInterface 建構子裡：登記原廠的相機物件。 */
     public static void register(Object cam) {
         try {

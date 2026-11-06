@@ -64,6 +64,10 @@ class AnnotationView(context: Context) : View(context) {
     @Volatile var drawRoad = false
         set(v) { field = v; postInvalidate() }
 
+    /** 使用者正在拖動／縮放原廠 3D：先不畫 3D 標注（角度變了，畫了也對不上），停手重新對位後再畫。 */
+    @Volatile var suspend3d = false
+        set(v) { if (field != v) { field = v; postInvalidate() } }
+
     /** 3D 立體框高度倍率（[AppPrefs.obj3dHeight]）。 */
     @Volatile var heightScale = 0.25f
         set(v) { field = v; postInvalidate() }
@@ -135,7 +139,13 @@ class AnnotationView(context: Context) : View(context) {
         val prof = currentProfile()
         val top = prof.top
         if (top != null) drawTop(c, AnnotationMapper(top, width, height), p)
-        prof.p3?.let { draw3d(c, PerspectiveMapper(it, width, height), p) }
+        prof.p3?.let { p3 ->
+            if (suspend3d) {
+                val m3 = PerspectiveMapper(p3, width, height)
+                val t = "3D 重新對位中…"
+                c.drawText(t, (m3.clipLeft + m3.clipRight) / 2 - text.measureText(t) / 2, m3.clipTop + 40 * dp, text)
+            } else draw3d(c, PerspectiveMapper(p3, width, height), p)
+        }
         drawHud(c, p)
         status?.let { drawStatus(c, it, top?.let { t -> AnnotationMapper(t, width, height) }) }
     }

@@ -375,6 +375,32 @@ object AutoCalibrator {
     }
 
     /**
+     * 使用者拖動／縮放原廠 3D 之後，從上一組參數快速重新找（比整套 [calibrate3d] 快很多）：
+     * 拖動主要改方位角（繞車轉）、上下拖改俯角、縮放改距離 → 先繞一圈掃方位角，
+     * 再掃俯角與距離，最後細修。用模糊邊緣粗掃（峰寬），紋理細修。
+     */
+    fun retrack3d(scr: Screen, start: PerspectiveMapper.Params, bev: Bev, minScore: Float = 0.25f): P3Result? {
+        val pane = floatArrayOf(start.clipL, start.clipT, start.clipR, start.clipB)
+        val coarse = scorer3d(scr, pane, bev, 36, edges = true) ?: return null
+        val fine = scorer3d(scr, pane, bev, 72) ?: return null
+        // 方位角（繞一圈）× 俯角 × 距離一起粗掃：使用者常常同時轉、上下拖、縮放，分開掃會在第一步就丟掉正解
+        val grid = ArrayList<Pair<PerspectiveMapper.Params, Float>>()
+        for (k in 0 until 36) for (el in listOf(10f, 20f, 30f, 45f, 60f)) for (dk in listOf(0.7f, 1f, 1.4f)) {
+            val q = start.copy(azDeg = start.azDeg + k * 10f, elDeg = el, dist = (start.dist * dk).coerceIn(1f, 40f))
+            grid.add(q to coarse(q))
+        }
+        val cands = grid.sortedByDescending { it.second }.take(5).map { it.first }
+        var out: P3Result? = null
+        for (c0 in cands) {
+            val c = nelderMead(c0, coarse, 60)
+            var r = nelderMead(c.params, fine, 120)
+            val d = dollyZoom(r, fine); val r2 = nelderMead(d.params, fine, 80); if (r2.score > r.score) r = r2
+            if (out == null || r.score > out.score) out = r
+        }
+        return out?.takeIf { it.score >= minScore }
+    }
+
+    /**
      * 沿「推軌變焦」方向掃：距離變 d'、視角跟著變到讓看向點附近大小不變（tan(fov'/2) = tan(fov/2)·d/d'）。
      * 這兩個參數互相抵，自車附近幾乎一樣、只有遠處不同 —— 一般的單形法很難沿著這條谷走，專門掃一次。
      */

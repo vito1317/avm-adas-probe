@@ -106,6 +106,18 @@ NB=$(grep -c "Lcom/vito/FrameTap;->onBvState" "$BVDM" || true)
 [ "$NB" -gt 0 ] || { echo "⚠ onBvState 沒注入到"; exit 1; }
 echo "   onBvState() → ${BVDM#$DEC/}（$NB 處）"
 
+# (e) 使用者拖動／縮放原廠 3D 之前 → FrameTap.onDrag／onDrag2／onScale（原參數照傳）。
+#     合併版靠這個知道 3D 角度被改了，停手後重新對位。這幾個方法 .locals 0，沒有空暫存器，
+#     所以每種手勢一個掛鉤、只傳原本的參數，不另外放常數。
+perl -0777 -i -pe '
+  s/(invoke-static \{([pv]\d+), ([pv]\d+)\}, Lcom\/baony\/birdview\/BVDisplayManager;->nativeDragControl\(II\)V)/invoke-static {$2, $3}, Lcom\/vito\/FrameTap;->onDrag(II)V\n\n    $1/g;
+  s/(invoke-static \{([pv]\d+), ([pv]\d+)\}, Lcom\/baony\/birdview\/BVDisplayManager;->nativeDoubleDragControl\(II\)V)/invoke-static {$2, $3}, Lcom\/vito\/FrameTap;->onDrag2(II)V\n\n    $1/g;
+  s/(invoke-static \{([pv]\d+)\}, Lcom\/baony\/birdview\/BVDisplayManager;->nativeScaleControl\(I\)V)/invoke-static {$2}, Lcom\/vito\/FrameTap;->onScale(I)V\n\n    $1/g;
+' "$BVDM"
+NG=$(grep -cE "Lcom/vito/FrameTap;->(onDrag|onDrag2|onScale)" "$BVDM" || true)
+[ "$NG" -ge 3 ] || { echo "⚠ 手勢掛鉤只注入 $NG 處"; exit 1; }
+echo "   onDrag/onDrag2/onScale() → ${BVDM#$DEC/}（$NG 處）"
+
 echo "== 4/7 編譯 FrameTap → dex"
 mkdir -p "$WORK/j/com/vito"
 cp "$SELF/inject-src/com/vito/FrameTap.java" "$WORK/j/com/vito/FrameTap.java"

@@ -114,6 +114,30 @@ class AutoCalibratorTest {
         assertTrue("$tag 平均誤差 ${sum / n}", sum / n < sh * 0.02f)
     }
 
+    /** 使用者拖動原廠 3D（轉了 50°、往下拖 10°、拉近）之後，從上一組參數快速找回來。 */
+    @Test
+    fun retracksAfterUserDrag() {
+        val before = PerspectiveMapper.Params(0.38f, 0f, 1f, 1f, azDeg = 32f, elDeg = 20f, dist = 9.5f, fovDeg = 52f, tx = -2.2f, tz = 3.5f)
+        val after = before.copy(azDeg = 82f, elDeg = 30f, dist = 7.5f)
+        val top = AnnotationMapper.Params(0f, 0f, 0.38f, 1f, 0.19f, 0.48f, 0.085f, false)
+        val t0 = System.currentTimeMillis()
+        val r = AutoCalibrator.retrack3d(screen(synth(top, after)), before, bev)
+        val ms = System.currentTimeMillis() - t0
+        assertNotNull("拖動後要找得回來", r)
+        val mt = PerspectiveMapper(after, sw, sh); val mr = PerspectiveMapper(r!!.params, sw, sh)
+        var n = 0; var sum = 0f
+        for (x in listOf(-4f, -2.5f, -1.5f, 1.5f, 2.5f, 4f)) for (z in listOf(-5f, -3f, -1f, 1f, 3f, 5f)) {
+            if (abs(x) < 1.2f && abs(z) < 2.7f) continue
+            val a = mt.project(x, 0f, z) ?: continue
+            if (a[0] < 0.38f * sw || a[0] > sw || a[1] < 0 || a[1] > sh) continue
+            val b = mr.project(x, 0f, z) ?: continue
+            sum += hypot(a[0] - b[0], a[1] - b[1]); n++
+        }
+        println("RETRACK ${ms} ms score=${r.score} ${r.params} 平均 ${"%.1f".format(sum / n)} px（$n 點）")
+        assertTrue(n >= 5)
+        assertTrue("平均誤差 ${sum / n}", sum / n < sh * 0.02f)
+    }
+
     /** 倒車 3D：從車後上方往前看。 */
     @Test
     fun findsRear3dView() = check3d(PerspectiveMapper.Params(0.38f, 0f, 1f, 1f, azDeg = 175f, elDeg = 30f, dist = 8f, fovDeg = 60f, tx = 0f, tz = -1.5f), "倒車3D")
