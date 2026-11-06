@@ -227,6 +227,7 @@ object Engine360 {
         val av = AnnotationView(act).apply {
             tag = VIEW_TAG
             profileFor = { k -> prefs.viewProfile(k) }
+            onTapGround = { x, z -> pipeline?.tapSlot(x, z) ?: false }
             viewKey = lastViewKey
             drawRoad = prefs.annotDrawRoad
         }

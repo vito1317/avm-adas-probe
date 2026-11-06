@@ -88,6 +88,25 @@ class AnnotationView(context: Context) : View(context) {
         setWillNotDraw(false)
     }
 
+    /** 點俯視圖選停車格：回傳 true = 點到格子（這次觸控吃掉），false = 交給原廠。由 [Engine360] 接到偵測管線。 */
+    var onTapGround: ((Float, Float) -> Boolean)? = null
+
+    /**
+     * 只有點在俯視圖、而且點到空車位才吃掉觸控；其他地方回 false，觸控照常交給下面的原廠畫面。
+     */
+    override fun onTouchEvent(e: android.view.MotionEvent): Boolean {
+        if (e.actionMasked != android.view.MotionEvent.ACTION_DOWN) return false
+        val top = currentProfile().top ?: return false
+        val m = AnnotationMapper(top, width, height)
+        if (!m.inside(e.x, e.y)) return false
+        val sg = if (top.flip) -1f else 1f
+        val x = (e.x - m.sx(0f, 0f)) / (sg * m.pixelsPerMeter)
+        val z = -(e.y - m.sy(0f, 0f)) / (sg * m.pixelsPerMeter)
+        val hit = onTapGround?.invoke(x, z) ?: false
+        if (hit) postInvalidate()
+        return hit
+    }
+
     /** 任何執行緒都可以呼叫。 */
     fun update(p: JSONObject) {
         payload = p
@@ -126,7 +145,7 @@ class AnnotationView(context: Context) : View(context) {
             p.optJSONArray("slots")?.let { drawSlots(c, m, it) }
             p.optJSONObject("park")?.let { drawParkPath(c, m, it) }
             p.optJSONObject("turn")?.let { drawTurnPath(c, m, it) }
-            p.optJSONObject("lc")?.let { drawLaneChange(c, m, it) }
+            p.optJSONObject("lc")?.let { drawLaneChange(c, m, it); drawSideMotion(c, m, p, it) }
             p.optJSONArray("obs")?.let { drawObstacles(c, m, it) }
             p.optJSONArray("objs")?.let { drawObjects(c, m, it) }
         }
@@ -159,7 +178,11 @@ class AnnotationView(context: Context) : View(context) {
             p.optJSONObject("lc")?.let { lc ->
                 val col = laneChangeColor(lc)
                 groundPolygon3d(c, m, laneBand(lc), col, alpha = 35)
-                lc.optJSONArray("pts")?.let { groundPolygon3d(c, m, AnnotationMapper.corridor(points(it), AnnotationMapper.EGO_HW), col) }
+                lc.optJSONArray("pts")?.let { arr ->
+                    val pts = points(arr)
+                    groundPolygon3d(c, m, AnnotationMapper.corridor(pts, AnnotationMapper.EGO_HW), col)
+                    if (lc.has("ban")) cross(c, pts.mapNotNull { m.project(it[0], 0f, it[1]) })
+                }
             }
             p.optJSONObject("park")?.optJSONArray("pts")?.let {
                 groundPolygon3d(c, m, AnnotationMapper.corridor(points(it), AnnotationMapper.EGO_HW), Color.rgb(70, 170, 255))
@@ -324,11 +347,21 @@ class AnnotationView(context: Context) : View(context) {
                 if (k == 0) path.moveTo(m.sx(x, z), m.sy(x, z)) else path.lineTo(m.sx(x, z), m.sy(x, z))
             }
             path.close()
-            val col = if (s.optInt("o") == 1) Color.rgb(255, 90, 70) else Color.rgb(80, 230, 120)
-            fill.color = col; fill.alpha = 45
+            val sel = s.optInt("sel") == 1
+            val col = if (sel) Color.rgb(60, 150, 255) else if (s.optInt("o") == 1) Color.rgb(255, 90, 70) else Color.rgb(80, 230, 120)
+            fill.color = col; fill.alpha = if (sel) 80 else 45
             c.drawPath(path, fill)
             stroke.color = col
+            val old = stroke.strokeWidth
+            if (sel) stroke.strokeWidth = 5f * dp
             c.drawPath(path, stroke)
+            stroke.strokeWidth = old
+            if (sel) {
+                var cx = 0f; var cy = 0f
+                for (k in 0 until 4) { cx += m.sx(q.optDouble(k * 2).toFloat(), q.optDouble(k * 2 + 1).toFloat()); cy += m.sy(q.optDouble(k * 2).toFloat(), q.optDouble(k * 2 + 1).toFloat()) }
+                val t = "停這格"
+                c.drawText(t, cx / 4 - text.measureText(t) / 2, cy / 4, text)
+            }
         }
     }
 
@@ -354,6 +387,28 @@ class AnnotationView(context: Context) : View(context) {
         return listOf(floatArrayOf(a, -4f), floatArrayOf(a, 25f), floatArrayOf(b, 25f), floatArrayOf(b, -4f))
     }
 
+    /**
+     * 打燈那一側的車：畫出它接下來 3 秒會到哪（追蹤到的相對速度），看它會不會切進要去的位置。
+     */
+    private fun drawSideMotion(c: Canvas, m: AnnotationMapper, p: JSONObject, lc: JSONObject) {
+        val dir = lc.optInt("dir", 1)
+        val objs = p.optJSONArray("objs") ?: return
+        stroke.pathEffect = dash; stroke.color = Color.rgb(255, 70, 60); stroke.alpha = 230
+        for (i in 0 until objs.length()) {
+            val o = objs.optJSONObject(i) ?: continue
+            if (!o.has("vx")) continue
+            val x = o.optDouble("x").toFloat(); val z = o.optDouble("z").toFloat()
+            if (x * dir < 0.8f || abs(x) > 7f) continue
+            val vx = o.optDouble("vx").toFloat(); val vz = o.optDouble("vz").toFloat()
+            if (hypot(vx, vz) < 0.3f) continue
+            val x2 = x + vx * 3f; val z2 = z + vz * 3f
+            c.drawLine(m.sx(x, z), m.sy(x, z), m.sx(x2, z2), m.sy(x2, z2), stroke)
+            fill.color = Color.rgb(255, 70, 60); fill.alpha = 230
+            c.drawCircle(m.sx(x2, z2), m.sy(x2, z2), 5f * dp, fill)
+        }
+        stroke.pathEffect = null
+    }
+
     /** 變道：目標車道半透明標出來，再畫一條從目前車道切過去的車寬走廊。那一側有來車就變紅。 */
     private fun drawLaneChange(c: Canvas, m: AnnotationMapper, lc: JSONObject) {
         val col = laneChangeColor(lc)
@@ -363,7 +418,25 @@ class AnnotationView(context: Context) : View(context) {
         path.close()
         fill.color = col; fill.alpha = 35
         c.drawPath(path, fill)
-        lc.optJSONArray("pts")?.let { corridor(c, m, points(it), AnnotationMapper.EGO_HW, col) }
+        val pts = lc.optJSONArray("pts")?.let { points(it) } ?: return
+        corridor(c, m, pts, AnnotationMapper.EGO_HW, col)
+        if (lc.has("ban")) cross(c, pts.map { floatArrayOf(m.sx(it[0], it[1]), m.sy(it[0], it[1])) })
+    }
+
+    /** 禁止變換車道：在走廊中段打一個大叉（螢幕座標的路徑點）。 */
+    private fun cross(c: Canvas, screenPts: List<FloatArray>) {
+        if (screenPts.size < 2) return
+        val mid = screenPts[screenPts.size / 2]
+        val r = 22f * dp
+        val old = stroke.strokeWidth
+        stroke.pathEffect = null
+        stroke.color = Color.WHITE; stroke.alpha = 255; stroke.strokeWidth = 11f * dp
+        c.drawLine(mid[0] - r, mid[1] - r, mid[0] + r, mid[1] + r, stroke)
+        c.drawLine(mid[0] - r, mid[1] + r, mid[0] + r, mid[1] - r, stroke)
+        stroke.color = Color.rgb(230, 30, 30); stroke.strokeWidth = 7f * dp
+        c.drawLine(mid[0] - r, mid[1] - r, mid[0] + r, mid[1] + r, stroke)
+        c.drawLine(mid[0] - r, mid[1] + r, mid[0] + r, mid[1] - r, stroke)
+        stroke.strokeWidth = old
     }
 
     // ───────────────────────── 預測走廊（車寬） ─────────────────────────
@@ -478,6 +551,13 @@ class AnnotationView(context: Context) : View(context) {
             Unit
         }
         curbLine(p)?.let { msgs.add(it) }
+        p.optJSONObject("lc")?.let { lc ->
+            lc.optString("ban").takeIf { it.isNotEmpty() }?.let { msgs.add(0, it to Color.rgb(210, 30, 30)) }
+            if (lc.optInt("car") >= 1) {
+                val left = lc.optInt("dir") < 0
+                msgs.add(0, (if (left) "◀ 左側有車 暫緩變道" else "右側有車 暫緩變道 ▶") to Color.rgb(220, 30, 30))
+            }
+        }
         p.optJSONObject("tl")?.let { t ->
             when (t.optString("s")) {
                 "red" -> msgs.add("● 紅燈" to Color.rgb(200, 40, 40))

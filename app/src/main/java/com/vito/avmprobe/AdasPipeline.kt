@@ -321,6 +321,8 @@ class AdasPipeline(
     }
 
     @Volatile private var turnHit = false
+    @Volatile private var noLaneChange = false
+    @Volatile private var laneChangeBlocked = false
     private val sounder = AlertSounder { k -> playTone(k) }
 
     /** 每輪偵測後判斷要不要響（各種警示剛出現才響、各自冷卻，見 [AlertSounder]）。 */
@@ -331,8 +333,8 @@ class AdasPipeline(
         val lcaFresh = l != null && now - tracksAt < OBJ_TTL_MS
         sounder.update(now, AlertSounder.State(
             start = st != null && (st.lead || st.green),
-            ldw = ld != null && ld.any,
-            lcaDanger = lcaFresh && (l!!.L >= 2 || l.R >= 2),
+            ldw = (ld != null && ld.any) || noLaneChange,
+            lcaDanger = (lcaFresh && (l!!.L >= 2 || l.R >= 2)) || laneChangeBlocked,
             turnHit = turnHit,
             collision = AlertSounder.moving(vs.speedKmh, vs.gear) && currentObjects(now).any { it.clr < 0.5f }
         ))
@@ -671,7 +673,9 @@ class AdasPipeline(
                 .put("er", rd.edgeR?.let { r2(it) } ?: JSONObject.NULL))
         }
         if (now - slotsAt < BEV_TTL_MS && slots.isNotEmpty()) {
-            p.put("slots", slotsJson(slots, false))
+            val sj = slotsJson(slots, false)
+            for (i in slots.indices) if (slotSelection.isSelected(slots[i])) sj.getJSONObject(i).put("sel", 1)
+            p.put("slots", sj)
             if (spd(vs)) parkPathJson(slots)?.let { p.put("park", it) }
         }
         val obs = obstacles
@@ -693,10 +697,21 @@ class AdasPipeline(
             val len = ((vs.speedKmh ?: 30f) / 3.6f * 3f).coerceIn(10f, 30f)
             val path = st?.path?.takeIf { now - tracksAt < OBJ_TTL_MS && it.size >= 2 }
                 ?: lca.lanePath(dir * w.toDouble(), 0.0, len.toDouble())
-            val danger = st != null && now - tracksAt < OBJ_TTL_MS && (if (dir < 0) st.L >= 2 else st.R >= 2)
+            // 打燈那一側有車（相鄰車道／盲點，不只是快速接近的危險等級）→ 暫緩變道
+            val sideLv = if (st != null && now - tracksAt < OBJ_TTL_MS) (if (dir < 0) st.L else st.R) else 0
+            val danger = sideLv >= 1
+            laneChangeBlocked = danger
+            // 要切過去的那一側是實線／雙線 → 禁止變換車道：走廊打叉
+            val rdNow = road
+            val ban = if (rdNow != null && now - roadAt < BEV_TTL_MS) LaneChangeRule.check(rdNow.lines, vs.turn!!) else null
+            noLaneChange = ban != null
             val pts = JSONArray(); for (q in path) pts.put(JSONArray().put(r2(q[0])).put(r2(q[1])))
-            p.put("lc", JSONObject().put("pts", pts).put("dir", dir).put("w", r2(w))
-                .put("ok", !danger && (st?.pathOk ?: true)))
+            p.put("lc", JSONObject().put("pts", pts).put("dir", dir).put("w", r2(w)).put("car", sideLv)
+                .put("ok", !danger && ban == null && (st?.pathOk ?: true))
+                .apply { ban?.let { put("ban", LaneChangeRule.label(it)) } })
+        } else {
+            noLaneChange = false
+            laneChangeBlocked = false
         }
         TurnPathPlanner.plan(vs.turn, vs.steerDeg, vs.speedKmh)?.let { tp ->
             val outer = JSONArray(); for (q in tp.pts) outer.put(JSONArray().put(r2(q[0])).put(r2(q[1])))
@@ -722,8 +737,18 @@ class AdasPipeline(
 
     private fun spd(vs: VehicleState): Boolean { val s = vs.speedKmh; return s == null || s < 15f }
 
+    /** 使用者點選要停的格子（[AnnotationView] 點俯視圖）。 */
+    val slotSelection = SlotSelection()
+
+    /** 點了俯視圖的 (x, z)：點到空格就選它（再點一次取消）。回傳是否點到格子。 */
+    fun tapSlot(x: Float, z: Float): Boolean =
+        slotSelection.tap(slots, x, z, SystemClock.elapsedRealtime())
+
     private fun parkPathJson(list: List<ParkingSlot>): JSONObject? {
-        val free = list.filter { !it.occupied && (it.kind == 'p' || it.kind == 'a') }
+        // 使用者選了格子：只規劃到那一格
+        val chosen = slotSelection.track(list, SystemClock.elapsedRealtime())
+        val free = (if (chosen != null) listOf(chosen) else list.filter { !it.occupied })
+            .filter { it.kind == 'p' || it.kind == 'a' }
             .sortedBy { s -> (0 until 4).minOf { hypot(s.p[it * 2], s.p[it * 2 + 1]) } }
         for (s in free.take(3)) {
             val plan = ParkingPathPlanner.plan(s) ?: continue
