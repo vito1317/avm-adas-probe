@@ -1,0 +1,4 @@
+# 原廠 APK 與改過的 APK 是 baony 閉源程式（衍生版），不能進公開 repo
+*.apk
+*.idsig
+keys/

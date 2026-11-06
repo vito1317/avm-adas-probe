@@ -28,7 +28,10 @@ class FrameShareProvider : ContentProvider() {
             METHOD_ENABLED -> Bundle().apply { putBoolean(KEY_ENABLED, AppPrefs(ctx).frameShare) }
             METHOD_SURFACE -> {
                 if (!AppPrefs(ctx).frameShare) return null
-                val s = FrameShareHub.surface() ?: return null
+                // arg = "寬x高"（原廠相機的擷取尺寸）；沒給就用 1920x1080
+                val wh = arg?.split('x')?.mapNotNull { it.trim().toIntOrNull() }
+                val s = (if (wh != null && wh.size == 2 && wh[0] > 0 && wh[1] > 0)
+                    FrameShareHub.surface(wh[0], wh[1]) else FrameShareHub.surface()) ?: return null
                 try {
                     ctx.startForegroundService(Intent(ctx, OverlayService::class.java))
                 } catch (t: Throwable) {

@@ -163,6 +163,35 @@ class AppPrefs(context: Context) {
         get() = sp.getString("panel", PANEL_RIGHT)!!
         set(v) = sp.edit().putString("panel", v).apply()
 
+    // ───────── 合併版（引擎塞進原廠 360）：直接標注在原廠俯視圖上 ─────────
+
+    /** 合併版的總開關。預設開；連續啟動失敗時 [Engine360] 會自動關掉它。 */
+    var annotEnabled: Boolean
+        get() = sp.getBoolean("annotOn", true)
+        set(v) { sp.edit().putBoolean("annotOn", v).commit() }
+
+    /** 連續「啟動後沒撐過健康檢查」的次數（崩潰保護）。 */
+    var annotBoots: Int
+        get() = sp.getInt("annotBoots", 0)
+        set(v) { sp.edit().putInt("annotBoots", v).commit() }
+
+    /** 原廠俯視圖 → 螢幕的對應（[AnnotationMapper.Params]）。 */
+    var annotParams: AnnotationMapper.Params
+        get() = AnnotationMapper.Params(
+            clipL = sp.getFloat("anL", AnnotationMapper.Params.DEFAULT.clipL),
+            clipT = sp.getFloat("anT", AnnotationMapper.Params.DEFAULT.clipT),
+            clipR = sp.getFloat("anR", AnnotationMapper.Params.DEFAULT.clipR),
+            clipB = sp.getFloat("anB", AnnotationMapper.Params.DEFAULT.clipB),
+            cx = sp.getFloat("anCx", AnnotationMapper.Params.DEFAULT.cx),
+            cy = sp.getFloat("anCy", AnnotationMapper.Params.DEFAULT.cy),
+            scale = sp.getFloat("anS", AnnotationMapper.Params.DEFAULT.scale),
+            flip = sp.getBoolean("anF", AnnotationMapper.Params.DEFAULT.flip)
+        )
+        set(v) = sp.edit()
+            .putFloat("anL", v.clipL).putFloat("anT", v.clipT).putFloat("anR", v.clipR).putFloat("anB", v.clipB)
+            .putFloat("anCx", v.cx).putFloat("anCy", v.cy).putFloat("anS", v.scale).putBoolean("anF", v.flip)
+            .apply()
+
     /** 3D 面板範圍（螢幕比例）。避開俯視區，否則截圖會截到自己。 */
     fun panelRect(): RectF? = when (panel) {
         PANEL_RIGHT -> RectF(0.5f, 0f, 1f, 0.86f)

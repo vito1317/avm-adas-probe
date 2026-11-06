@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 只拿來產生 dex：這個 APK 本身不會被安裝，裡面的程式碼會被塞進原廠 360 的 APK。 -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application android:label="engine360" />
+</manifest>

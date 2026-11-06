@@ -42,12 +42,15 @@ object FrameShareHub {
     private val logLines = ArrayDeque<String>()
     private val fmt = SimpleDateFormat("HH:mm:ss", Locale.US)
 
-    /** 交給原廠相機的 Surface；第一次呼叫時建立 ImageReader。 */
+    /**
+     * 交給原廠相機的 Surface；第一次呼叫時建立 ImageReader。
+     * [w]×[h] 用原廠相機自己的擷取尺寸（它截圖的 ImageReader 也是這個尺寸），HAL 一定支援。
+     */
     @Synchronized
-    fun surface(): Surface? {
+    fun surface(w: Int = W, h: Int = H): Surface? {
         surfaceRequests++
         val r = reader ?: try {
-            ImageReader.newInstance(W, H, ImageFormat.YUV_420_888, 3).also { rd ->
+            ImageReader.newInstance(w, h, ImageFormat.YUV_420_888, 3).also { rd ->
                 rd.setOnImageAvailableListener({ src ->
                     val img = try { src.acquireLatestImage() } catch (_: Throwable) { null }
                         ?: return@setOnImageAvailableListener
@@ -63,7 +66,7 @@ object FrameShareHub {
                     }
                 }, handler)
                 reader = rd
-                log("建立 ImageReader ${W}x${H}")
+                log("建立 ImageReader ${w}x${h}")
             }
         } catch (t: Throwable) {
             log("建立 ImageReader 失敗：$t")
