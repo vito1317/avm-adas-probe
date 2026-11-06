@@ -105,6 +105,18 @@ object Engine360Settings {
             setOnClickListener { Dashcam.lock(); text = "已鎖定（關檔時移到 locked 資料夾）" }
         })
 
+        val brakeInfo = TextView(act).apply { textSize = 11f; typeface = Typeface.MONOSPACE }
+        col.addView(Button(act).apply {
+            text = "煞車訊號探測（按下後 15 秒內踩放煞車 3 次，打 P 檔）"; isAllCaps = false
+            setOnClickListener {
+                isEnabled = false; text = "記錄中…請踩放煞車 3 次"
+                Engine360.probeBrake(act, { p -> brakeInfo.text = p }) { msg ->
+                    isEnabled = true; text = "煞車訊號探測（再按一次重做）"; brakeInfo.text = msg
+                }
+            }
+        })
+        col.addView(brakeInfo)
+
         val exportInfo = TextView(act).apply { textSize = 11f; typeface = Typeface.MONOSPACE }
         col.addView(Button(act).apply {
             text = "匯出原廠 3D 車模檔（自動找，給開發者分析 3D 角度）"; isAllCaps = false

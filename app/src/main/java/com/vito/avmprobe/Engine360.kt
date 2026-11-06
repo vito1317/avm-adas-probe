@@ -455,6 +455,15 @@ object Engine360 {
         }
     }
 
+    /** 設定裡「煞車訊號探測」：背景記錄 15 秒（使用者踩放煞車），[progress]／[done] 在主執行緒回報。 */
+    fun probeBrake(ctx: Context, progress: (String) -> Unit, done: (String) -> Unit) {
+        Thread {
+            val msg = try { BrakeProbe.run(ctx) { s -> main.post { progress(s) } } } catch (t: Throwable) { "探測失敗：$t" }
+            log(msg.lineSequence().first())
+            main.post { done(msg) }
+        }.start()
+    }
+
     /** 設定裡「測試提示音」：依序播三種提示音（起步／轉綠、偏離車道、危險），確認有聲音、音量夠。 */
     fun testSounds(act: Activity) {
         val tg = try { android.media.ToneGenerator(android.media.AudioManager.STREAM_MUSIC, 90) } catch (_: Throwable) {
