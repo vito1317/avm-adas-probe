@@ -27,21 +27,23 @@ class PerspectiveMapper(val p: Params, val screenW: Int, val screenH: Int) {
         val azDeg: Float, val elDeg: Float, val dist: Float, val fovDeg: Float,
         val tx: Float, val tz: Float,
         /** 看向的點離地多高（m）：整個畫面上下移。 */
-        val ty: Float = 0f
+        val ty: Float = 0f,
+        /** 原廠畫面左右翻轉（高速打方向燈的往後看視角，像照後鏡）。 */
+        val mirror: Boolean = false
     ) {
         /** 左右鏡像（右燈視角的預設值 = 左燈視角的鏡像）。 */
         fun mirrored() = copy(azDeg = -azDeg, tx = -tx)
 
         companion object {
             /**
-             * 打左燈的原廠 3D 視角：用實車截圖（2026-11-06，1920×720）的地面對應點反推
-             * （停車格線、格號、柏油邊界，重投影誤差約 5 px），立體自車外框疊上去跟原廠車模吻合。
-             * 原廠鏡頭在車的**左後方**、俯角 14°，往前看左側。3D 格子在螢幕 x 34.8%～100%、
-             * 下緣到工具列上方（86.8%）。
+             * 打左燈（中速）的原廠 3D 視角：原廠 setting.lua 的 Side3DParam.Left
+             * （Yaw 30、Pitch 15、EyeDist 7500、CenPos {0, 500, −500}、FOV 32），換算見 [FactoryViews.toParams]。
+             * 3D 格子在螢幕 x 34.8%～100%、上方 87%（viewport.lua 的 BVSV 版面）。
+             * 車上讀得到原廠設定檔時用 [FactoryViews] 讀到的值（含使用者在原廠設定改過的）。
              */
-            val DEFAULT_LEFT = Params(
-                clipL = 0.348f, clipT = 0f, clipR = 1f, clipB = 0.868f,
-                azDeg = -34.6f, elDeg = 13.9f, dist = 9.06f, fovDeg = 37.7f, tx = 0.83f, tz = 1.94f
+            val DEFAULT_LEFT = FactoryViews.toParams(
+                FactoryViews.View3D(30f, 15f, 7500f, floatArrayOf(0f, 500f, -500f), 32f, false),
+                32f, floatArrayOf(0.348f, 0f, 1f, 0.87f)
             )
             val DEFAULT_RIGHT = DEFAULT_LEFT.mirrored()
         }
@@ -93,7 +95,7 @@ class PerspectiveMapper(val p: Params, val screenW: Int, val screenH: Int) {
      * 自動對位用：拿原廠畫面的像素去對我們俯視圖上同一個地面點。
      */
     fun unprojectToGround(sx: Float, sy: Float): FloatArray? {
-        val xc = (sx - ox) / focal
+        val xc = (if (p.mirror) ox - sx else sx - ox) / focal
         val yc = -(sy - oy) / focal
         // 世界方向 = f + xc·r + yc·u
         val dx = fx + xc * rx + yc * ux
@@ -111,6 +113,7 @@ class PerspectiveMapper(val p: Params, val screenW: Int, val screenH: Int) {
         if (zc < 0.2f) return null
         val xc = dx * rx + dy * ry + dz * rz
         val yc = dx * ux + dy * uy + dz * uz
-        return floatArrayOf(ox + xc * focal / zc, oy - yc * focal / zc)
+        val px = xc * focal / zc
+        return floatArrayOf(if (p.mirror) ox - px else ox + px, oy - yc * focal / zc)
     }
 }

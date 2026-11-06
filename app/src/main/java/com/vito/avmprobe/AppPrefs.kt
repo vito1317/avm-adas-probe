@@ -242,7 +242,9 @@ class AppPrefs(context: Context) {
     fun viewProfile(key: String, bvName: String = ""): ViewProfile {
         val raw = sp.getString("view_$key", null)
         if (raw != null) try {
-            val prof = ViewProfile.fromJson(org.json.JSONObject(raw))
+            var prof = ViewProfile.fromJson(org.json.JSONObject(raw))
+            // 讀得到原廠這個場景的 3D 參數 → 一律用原廠的（之前自動／估的對位作廢）；使用者手動調過的除外
+            if (viewCalMode(key) != "manual") FactoryViews.forKey(key)?.let { prof = prof.copy(p3 = it) }
             // 存的沒有 3D（只對位過俯視、或被清掉）→ 用實車校準的左右燈預設；使用者手動關掉 3D 的不補
             if (prof.p3 == null && viewCalMode(key) != "manual")
                 return prof.copy(p3 = ViewProfile.defaultFor(key, annotParams, bvName).p3)

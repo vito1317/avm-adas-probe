@@ -238,6 +238,11 @@ object Engine360Settings {
 
         // 3D／鏡頭畫面
         section("3D／鏡頭畫面標注（立體紫框疊到原廠 3D 車模上，粗線那面是車頭）")
+        col.addView(TextView(act).apply {
+            text = FactoryViews.status + if (FactoryViews.forKey(key) != null && prefs.viewCalMode(key) != "manual")
+                "\n這個視角直接用原廠的 3D 參數（不用校準）" else ""
+            setTextColor(android.graphics.Color.rgb(120, 200, 120))
+        })
         col.addView(CheckBox(act).apply {
             text = "這個視角有 3D 或鏡頭畫面"; isChecked = prof.p3 != null
             setOnCheckedChangeListener { _, v ->
