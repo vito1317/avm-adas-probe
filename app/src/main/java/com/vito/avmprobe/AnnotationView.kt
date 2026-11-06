@@ -456,6 +456,7 @@ class AnnotationView(context: Context) : View(context) {
             else if (l.optInt("R") == 1) msgs.add("右側有車 ▶" to Color.rgb(230, 140, 20))
             Unit
         }
+        curbLine(p)?.let { msgs.add(it) }
         p.optJSONObject("tl")?.let { t ->
             when (t.optString("s")) {
                 "red" -> msgs.add("● 紅燈" to Color.rgb(200, 40, 40))
@@ -480,6 +481,35 @@ class AnnotationView(context: Context) : View(context) {
     }
 
     /** 診斷文字：放在俯視圖那格左下；這個視角沒有俯視圖就放畫面左下。 */
+    /**
+     * 路邊（右側）紅線／黃線：慢速時提醒能不能停。只看右側 —— 左側多半是中線（常常是黃的），
+     * 講「左側黃線」反而誤導。線要大致跟車身平行、在右側 0.9～3.5 m、跟車身前後有重疊。
+     */
+    private fun curbLine(p: JSONObject): Pair<String, Int>? {
+        val spd = p.optJSONObject("veh")?.let { if (it.isNull("speed")) null else it.optDouble("speed") }
+        if (spd != null && spd > 15.0) return null
+        val lines = p.optJSONObject("road")?.optJSONArray("lines") ?: return null
+        var best: Char? = null; var bestX = Float.MAX_VALUE
+        for (i in 0 until lines.length()) {
+            val l = lines.optJSONObject(i) ?: continue
+            val k = l.optString("k").firstOrNull() ?: continue
+            if (k != 'r' && k != 'y') continue
+            val x1 = l.optDouble("x1").toFloat(); val z1 = l.optDouble("z1").toFloat()
+            val x2 = l.optDouble("x2").toFloat(); val z2 = l.optDouble("z2").toFloat()
+            val dx = x2 - x1; val dz = z2 - z1
+            if (abs(dz) < 2f * abs(dx) || hypot(dx, dz) < 1.5f) continue          // 要跟車身平行、夠長
+            if (maxOf(z1, z2) < -3f || minOf(z1, z2) > 3f) continue                // 要在車旁邊
+            val xm = (x1 + x2) / 2f
+            if (xm < 0.9f || xm > 3.5f) continue                                     // 右側路邊
+            if (xm < bestX) { bestX = xm; best = k }
+        }
+        return when (best) {
+            'r' -> "右側紅線：禁止臨停、停車" to Color.rgb(200, 40, 40)
+            'y' -> "右側黃線：禁止停車（可臨停）" to Color.rgb(200, 150, 20)
+            else -> null
+        }
+    }
+
     private fun drawStatus(c: Canvas, s: String, m: AnnotationMapper?) {
         val lines = s.split('\n').take(8)
         val lh = 16 * dp

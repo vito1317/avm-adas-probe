@@ -55,6 +55,12 @@ class AdasPipeline(
         private const val EGO_HW = 0.925f
         private const val EGO_HL = 2.42f
         private const val SLOT_TL = "tl"
+        /** 前方去畸變虛擬鏡頭的視角：寬看近處與隔壁車道，窄把遠處放大（約是魚眼原圖的兩倍大）。 */
+        private const val FRONT_WIDE_FOV = 100.0
+        private const val FRONT_NARROW_FOV = 50.0
+        /** 紅綠燈：往上 14°、視角 40°（10～30 m 外的號誌都落在這格，而且被放大）。 */
+        private const val TL_PITCH = -14.0
+        private const val TL_FOV = 40.0
         private val NAMES = mapOf(
             "car" to "轎車", "van" to "箱型車", "truck" to "卡車", "bus" to "公車", "moto" to "機車",
             "bigbike" to "重機", "bike" to "腳踏車", "ped" to "行人", "cone" to "三角錐"
@@ -93,7 +99,6 @@ class AdasPipeline(
     private val ldw = LaneDepartureWarning()
     @Volatile private var startState: StartAssist.State? = null
     @Volatile private var ldwState: LaneDepartureWarning.State? = null
-    private var lastBeepAt = 0L
     private var tone: android.media.ToneGenerator? = null
 
     // ── ground 執行緒（俯視圖辨識）──
@@ -202,7 +207,11 @@ class AdasPipeline(
         val sl = slots()
         if (sl.isNotEmpty()) {
             val s = sl[(slotIdx++) % sl.size]
-            if (s == SLOT_TL) runTrafficLightPass(det, g, qw, qh) else runCamera(det, g, s, qw, qh, vs, t0)
+            when {
+                s == SLOT_TL -> runTrafficLightVirtual(det, g)
+                s == "front:w" || s == "front:n" -> runFrontVirtual(det, g, s, vs, t0)
+                else -> runCamera(det, g, s, qw, qh, vs, t0)
+            }
         }
         val now = SystemClock.elapsedRealtime()
         if (prefs.camBev && !groundBusy) runBev(g, now)
@@ -216,8 +225,9 @@ class AdasPipeline(
     private fun slots(): List<String> {
         val en = prefs.camDetect.mapNotNull { LETTER[it] }.toSet()
         val out = listOf(
-            "left:a", "right:a", "rear:c", "left:b", "right:b", "front:c",
-            "left:a", "right:a", "rear:c", "left:b", "right:b", "front:c"
+            // 前方改用去畸變的虛擬鏡頭：寬（近處、隔壁車道）與窄（遠處放大）輪流
+            "left:a", "right:a", "rear:c", "left:b", "right:b", "front:w",
+            "left:a", "right:a", "rear:c", "left:b", "right:b", "front:n"
         ).filter { it.substringBefore(':') in en }.toMutableList()
         if (prefs.camTrafficLight) out.add(SLOT_TL)
         return out
@@ -263,7 +273,11 @@ class AdasPipeline(
             boxes.add(QuadOverlayView.Box(RectF(d.rect), "${NAMES[d.type] ?: d.label} ${"%.1f".format(w[2])}m", w[2] < 1.2f))
         }
         camResults[slot] = CamResult(now, objs, boxes)
+        afterDetections(tDets, vs, now)
+    }
 
+    /** 每輪偵測之後（不管哪顆鏡頭、魚眼或去畸變）：追蹤、變道、起步、LDW、提示音。 */
+    private fun afterDetections(tDets: List<Det>, vs: VehicleState, now: Long) {
         val ego = egoMps(vs)
         tracks = trackMgr.update(tDets, now, ego, egoYawRate = null, cam = null)
         tracksAt = now
@@ -290,16 +304,33 @@ class AdasPipeline(
         beepIfNeeded(now)
     }
 
+    @Volatile private var turnHit = false
+    private val sounder = AlertSounder { k -> playTone(k) }
+
+    /** 每輪偵測後判斷要不要響（各種警示剛出現才響、各自冷卻，見 [AlertSounder]）。 */
     private fun beepIfNeeded(now: Long) {
-        val st = startState; val ld = ldwState
-        val want = (st != null && (st.lead || st.green)) || (ld != null && ld.any)
-        if (!want || now - lastBeepAt < 2000L) return
-        lastBeepAt = now
+        if (!prefs.alertSound) return
+        val vs = VehicleBus.signals.snapshot()
+        val st = startState; val ld = ldwState; val l = lcaState
+        val lcaFresh = l != null && now - tracksAt < OBJ_TTL_MS
+        sounder.update(now, AlertSounder.State(
+            start = st != null && (st.lead || st.green),
+            ldw = ld != null && ld.any,
+            lcaDanger = lcaFresh && (l!!.L >= 2 || l.R >= 2),
+            turnHit = turnHit,
+            collision = AlertSounder.moving(vs.speedKmh, vs.gear) && currentObjects(now).any { it.clr < 0.5f }
+        ))
+    }
+
+    /** 用媒體音量（車機的通知音量常常是關的）。 */
+    private fun playTone(k: AlertSounder.Kind) {
         try {
-            val tg = tone ?: android.media.ToneGenerator(
-                android.media.AudioManager.STREAM_NOTIFICATION, 80
-            ).also { tone = it }
-            tg.startTone(android.media.ToneGenerator.TONE_PROP_BEEP2, 250)
+            val tg = tone ?: android.media.ToneGenerator(android.media.AudioManager.STREAM_MUSIC, 90).also { tone = it }
+            when (k) {
+                AlertSounder.Kind.INFO -> tg.startTone(android.media.ToneGenerator.TONE_PROP_BEEP2, 300)
+                AlertSounder.Kind.LANE -> tg.startTone(android.media.ToneGenerator.TONE_CDMA_PIP, 400)
+                AlertSounder.Kind.DANGER -> tg.startTone(android.media.ToneGenerator.TONE_CDMA_EMERGENCY_RINGBACK, 700)
+            }
         } catch (_: Throwable) { tone = null }
     }
 
@@ -333,6 +364,123 @@ class AdasPipeline(
             else -> ra
         }
         return floatArrayOf(lx, rx, ang)
+    }
+
+    // ───────────── 前方：去畸變的虛擬鏡頭（魚眼原圖裡遠方的車和紅綠燈太小又變形）─────────────
+
+    private val virtualViews = HashMap<String, VirtualView>()
+    private val virtualArgb = HashMap<String, IntArray>()
+
+    /** 前方三個虛擬鏡頭；尺寸跟模型輸入一樣，不用再縮放。 */
+    private fun virtualView(g: AvmGeometry, key: String, size: Int): VirtualView? {
+        virtualViews[key]?.let { if (it.size == size) return it }
+        val v = try {
+            when (key) {
+                "front:w" -> VirtualView(g, "front", 0.0, 2.0, FRONT_WIDE_FOV, size)
+                "front:n" -> VirtualView(g, "front", 0.0, 1.0, FRONT_NARROW_FOV, size)
+                SLOT_TL -> VirtualView(g, "front", 0.0, TL_PITCH, TL_FOV, size)
+                else -> null
+            }
+        } catch (_: Throwable) { null } ?: return null
+        virtualViews[key] = v
+        return v
+    }
+
+    /** 取樣出虛擬鏡頭的 ARGB 影像（size×size）。 */
+    private fun renderVirtual(v: VirtualView, key: String): IntArray {
+        val n = v.size * v.size
+        val buf = virtualArgb[key]?.takeIf { it.size == n } ?: IntArray(n).also { virtualArgb[key] = it }
+        frame.sampleLut(v.lut(frame.width, frame.height), buf)
+        return buf
+    }
+
+    /** 把 ARGB 影像（src×src）依 letterbox 填進模型輸入。 */
+    private fun fillFromArgb(argb: IntArray, src: Int, buf: java.nio.ByteBuffer, nchw: Boolean, size: Int, lb: Letterbox) {
+        val gray = 114f / 255f
+        val plane = size * size
+        for (j in 0 until size) {
+            val sy = ((j + 0.5f - lb.padY) / lb.scale).toInt()
+            for (i in 0 until size) {
+                val sx = ((i + 0.5f - lb.padX) / lb.scale).toInt()
+                var r = gray; var gg = gray; var b = gray
+                if (sx in 0 until src && sy in 0 until src && j + 0.5f >= lb.padY && i + 0.5f >= lb.padX) {
+                    val p = argb[sy * src + sx]
+                    r = ((p shr 16) and 0xFF) / 255f; gg = ((p shr 8) and 0xFF) / 255f; b = (p and 0xFF) / 255f
+                }
+                val k = j * size + i
+                if (nchw) {
+                    buf.putFloat(k * 4, r); buf.putFloat((plane + k) * 4, gg); buf.putFloat((2 * plane + k) * 4, b)
+                } else {
+                    buf.putFloat(k * 12, r); buf.putFloat(k * 12 + 4, gg); buf.putFloat(k * 12 + 8, b)
+                }
+            }
+        }
+    }
+
+    private fun runFrontVirtual(det: Yolo, g: AvmGeometry, slot: String, vs: VehicleState, atMs: Long) {
+        val v = virtualView(g, slot, det.inputSize) ?: return
+        val argb = renderVirtual(v, slot)
+        val (dets, inf) = det.detectWith(v.size, v.size, 0f, 0f) { buf, nchw, size, lb ->
+            fillFromArgb(argb, v.size, buf, nchw, size, lb)
+        }
+        emaInfer = ema(emaInfer, inf.toFloat())
+        val now = SystemClock.elapsedRealtime()
+        val objs = ArrayList<WObj>()
+        val tDets = ArrayList<Det>()
+        for (d in dets) {
+            if (d.type == ObjTypes.LIGHT) { considerTrafficLightVirtual(v, argb, d, now); continue }
+            val w = toWorldVirtual(v, d.rect.centerX().toDouble(), d.rect.bottom.toDouble(), d.type) ?: continue
+            objs.add(WObj(d.type, w[0], w[1], d.score, w[2]))
+            if (w[3] > 0f) tDets.add(Det(d.type, w[0], w[1], d.score, cam = "front", atMs = atMs))
+        }
+        camResults[slot] = CamResult(now, objs, emptyList())
+        afterDetections(tDets, vs, now)
+    }
+
+    /** 虛擬鏡頭裡偵測框底部中點 → 世界座標（跟 [toWorld] 同一套處理：太遠用方位角、推到物件中心、離自車距離）。 */
+    private fun toWorldVirtual(v: VirtualView, u: Double, vv: Double, t: String): FloatArray? {
+        val c = v.cam
+        val gp = v.groundAt(u, vv)
+        val nx: Double; val nz: Double; val real: Float
+        if (gp != null && hypot(gp[0] - c.px, gp[1] - c.pz) < 40.0) {
+            nx = gp[0]; nz = gp[1]; real = 1f
+        } else {
+            val r = v.rayAt(u, vv)
+            val az = atan2(r[0], r[2])
+            nx = c.px + Math.sin(az) * 15.0; nz = c.pz + Math.cos(az) * 15.0; real = 0f
+        }
+        return finishWorld(c, nx, nz, real, t)
+    }
+
+    private fun runTrafficLightVirtual(det: Yolo, g: AvmGeometry) {
+        val v = virtualView(g, SLOT_TL, det.inputSize) ?: return
+        val argb = renderVirtual(v, SLOT_TL)
+        val (dets, inf) = det.detectWith(v.size, v.size, 0f, 0f) { buf, nchw, size, lb ->
+            fillFromArgb(argb, v.size, buf, nchw, size, lb)
+        }
+        emaInfer = ema(emaInfer, inf.toFloat())
+        val now = SystemClock.elapsedRealtime()
+        for (d in dets) if (d.type == ObjTypes.LIGHT) considerTrafficLightVirtual(v, argb, d, now)
+    }
+
+    private fun considerTrafficLightVirtual(v: VirtualView, argb: IntArray, d: Detection, now: Long) {
+        val r = d.rect
+        if (r.width() < 3f || r.height() < 3f) return
+        val ow = r.width().toInt().coerceIn(6, 48)
+        val oh = r.height().toInt().coerceIn(6, 48)
+        val crop = IntArray(ow * oh)
+        val x0 = r.left.toInt().coerceIn(0, v.size - 1); val y0 = r.top.toInt().coerceIn(0, v.size - 1)
+        val x1 = r.right.toInt().coerceIn(x0 + 1, v.size); val y1 = r.bottom.toInt().coerceIn(y0 + 1, v.size)
+        for (j in 0 until oh) for (i in 0 until ow) {
+            val sx = x0 + (x1 - x0) * i / ow; val sy = y0 + (y1 - y0) * j / oh
+            crop[j * ow + i] = argb[sy * v.size + sx]
+        }
+        val (state, conf) = TrafficLightState.classify(crop, ow, oh)
+        val score = d.score * if (state == "off") 0.3f else conf
+        val cur = tl
+        if (cur != null && now - cur.at < 300 && cur.c >= score) return
+        val ray = v.rayAt(r.centerX().toDouble(), r.centerY().toDouble())
+        tl = TlResult(now, state, score, Math.toDegrees(atan2(ray[0], ray[2])).toFloat(), RectF(r))
     }
 
     private fun runTrafficLightPass(det: Yolo, g: AvmGeometry, qw: Int, qh: Int) {
@@ -383,6 +531,11 @@ class AdasPipeline(
             nz = camP.pz + Math.cos(az) * 15.0
             real = 0f
         }
+        return finishWorld(camP, nx, nz, real, t)
+    }
+
+    /** 地面點（或方位角推估點）→ 推到物件中心、算離自車外框多遠。[real] = 1 是真的地面交點。 */
+    private fun finishWorld(camP: CamParams, nx: Double, nz: Double, real: Float, t: String): FloatArray? {
         if (abs(nx) < EGO_HW + 0.05 && abs(nz) < EGO_HL + 0.05) return null
         val dx = nx - camP.px; val dz = nz - camP.pz
         val d = max(hypot(dx, dz), 1e-3)
@@ -512,12 +665,14 @@ class AdasPipeline(
                 .put("w", r2(o.w)).put("l", r2(o.l)).put("c", r2(o.conf)))
             p.put("obs", oa)
         }
+        if (TurnPathPlanner.plan(vs.turn, vs.steerDeg, vs.speedKmh) == null) turnHit = false
         TurnPathPlanner.plan(vs.turn, vs.steerDeg, vs.speedKmh)?.let { tp ->
             val outer = JSONArray(); for (q in tp.pts) outer.put(JSONArray().put(r2(q[0])).put(r2(q[1])))
             val inner = JSONArray(); for (q in tp.inner) inner.put(JSONArray().put(r2(q[0])).put(r2(q[1])))
             // 掃過範圍（兩端沿車身收口）：標注直接畫這個多邊形
             val swept = JSONArray(); for (q in tp.sweptPolygon()) swept.put(JSONArray().put(r2(q[0])).put(r2(q[1])))
             val hits = TurnPathPlanner.conflicts(tp, currentObjects(now).map { StartAssist.Obj(it.t, it.x, it.z) })
+            turnHit = hits.isNotEmpty()
             p.put("turn", JSONObject().put("o", outer).put("i", inner).put("sw", swept).put("d", tp.dir.toString())
                 .put("r", r2(tp.radius)).put("hit", hits.size))
         }

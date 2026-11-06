@@ -152,6 +152,29 @@ class AvmGeometry(val cams: List<CamParams>, val bev: BevSpec, val carLength: Do
     }
 
     /**
+     * 車身座標的**方向**（不必單位化）→ 象限內像素 (u, v)；超出 maxDeg 或落在象限外 → null。
+     * 跟 [groundToPixel] 一樣的魚眼模型，只是不限地面點（去畸變的虛擬鏡頭要用）。
+     */
+    fun dirToPixel(c: CamParams, dx: Double, dy: Double, dz: Double, qw: Int, qh: Int): DoubleArray? {
+        val m = c.rot
+        val x = m[0] * dx + m[3] * dy + m[6] * dz
+        val y = m[1] * dx + m[4] * dy + m[7] * dz
+        val z = m[2] * dx + m[5] * dy + m[8] * dz
+        val r = sqrt(x * x + y * y)
+        val th = atan2(r, z)
+        if (th > c.maxRad) return null
+        val t2 = th * th
+        val rd = th * (1.0 + c.k1 * t2 + c.k2 * t2 * t2)
+        val ca: Double
+        val sa: Double
+        if (r > 0.0) { ca = x / r; sa = y / r } else { ca = 1.0; sa = 0.0 }
+        var u = c.cx * qw + c.fx * qw * rd * ca
+        val v = c.cy * qh + c.fy * qw * rd * sa
+        if (c.mirror) u = qw - u
+        return if (u >= 0.0 && u < qw && v >= 0.0 && v < qh) doubleArrayOf(u, v) else null
+    }
+
+    /**
      * BEV 查表：每個 BEV 像素（row-major，bev.width × bev.height）→ 原始 frameW×frameH 2x2 畫面的像素索引，
      * 車身範圍或沒有鏡頭看得到 = -1。多顆都看得到時取 θ 最小（最靠光軸）的那顆，同 θ 取 quad 小的。
      */

@@ -52,6 +52,7 @@ object Engine360Settings {
         check("啟用偵測與標注（關掉後下次進 360 起不再接相機）", { prefs.annotEnabled }) {
             prefs.annotEnabled = it; prefs.annotBoots = 0; prefs.annotCrashes = 0
         }
+        check("提示音（用媒體音量）", { prefs.alertSound }) { prefs.alertSound = it }
         check("車道偵測（偏離車道警示、變道輔助要用）", { prefs.groundMode == AppPrefs.GROUND_VIRTUAL }) {
             prefs.groundMode = if (it) AppPrefs.GROUND_VIRTUAL else AppPrefs.GROUND_OFF
         }

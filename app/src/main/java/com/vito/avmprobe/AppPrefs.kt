@@ -82,6 +82,9 @@ class AppPrefs(context: Context) {
         set(v) = sp.edit().putBoolean("realGround", v).apply()
 
     /** 3D 地面：real＝實景貼圖、virtual＝辨識出的虛擬道路、off＝不畫。 */
+    /** 使用者有沒有選過地面模式（合併版沒選過就預設開車道偵測）。 */
+    val groundModeSet: Boolean get() = sp.contains("groundMode")
+
     var groundMode: String
         get() = sp.getString("groundMode", null) ?: if (realGround) GROUND_REAL else GROUND_OFF
         set(v) {
@@ -201,6 +204,11 @@ class AppPrefs(context: Context) {
             .putFloat("anL", v.clipL).putFloat("anT", v.clipT).putFloat("anR", v.clipR).putFloat("anB", v.clipB)
             .putFloat("anCx", v.cx).putFloat("anCy", v.cy).putFloat("anS", v.scale).putBoolean("anF", v.flip)
             .apply()
+
+    /** 提示音（起步、偏離車道、變道來車、轉彎路徑有人車、移動中太近）。 */
+    var alertSound: Boolean
+        get() = sp.getBoolean("alertSound", true)
+        set(v) = sp.edit().putBoolean("alertSound", v).apply()
 
     /** 合併版：在俯視圖上畫出偵測到的車道線（除錯用，預設關）。 */
     var annotDrawRoad: Boolean

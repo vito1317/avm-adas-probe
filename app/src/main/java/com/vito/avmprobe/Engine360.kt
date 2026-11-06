@@ -75,6 +75,8 @@ object Engine360 {
         try {
             val app = act.applicationContext
             val prefs = AppPrefs(app)
+            // 合併版：偏離車道、變道、路邊紅黃線都要車道偵測，沒選過就預設開（標準版 App 預設是關）
+            if (!prefs.groundModeSet) prefs.groundMode = AppPrefs.GROUND_VIRTUAL
             crashGuard(act, prefs)
             if (!signalsAttached) {
                 signalsAttached = true
