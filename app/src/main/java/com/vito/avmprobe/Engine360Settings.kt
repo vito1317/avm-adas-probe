@@ -84,6 +84,27 @@ object Engine360Settings {
             col.addView(b)
         }
 
+        section("行車記錄器（發動就循環錄影：合成 360 畫面＋辨識結果＋車速／方向燈／煞車）")
+        col.addView(TextView(act).apply {
+            textSize = 11f; typeface = Typeface.MONOSPACE
+            text = Dashcam.recorder?.summary() ?: "未啟動"
+        })
+        check("錄影", { prefs.dashcamOn }) { on ->
+            prefs.dashcamOn = on
+            if (on) Dashcam.start(act, prefs) else Dashcam.stop()
+        }
+        col.addView(Button(act).apply {
+            isAllCaps = false
+            val opts = listOf(4, 8, 16, 32, 64)
+            fun label() { text = "最多用 ${prefs.dashcamQuotaGb} GB（按一下切換；滿了刪最舊的，鎖定的不刪）" }
+            label()
+            setOnClickListener { prefs.dashcamQuotaGb = opts[(opts.indexOf(prefs.dashcamQuotaGb) + 1).mod(opts.size)]; label() }
+        })
+        col.addView(Button(act).apply {
+            text = "鎖定這段影片（不會被循環刪除）"; isAllCaps = false
+            setOnClickListener { Dashcam.lock(); text = "已鎖定（關檔時移到 locked 資料夾）" }
+        })
+
         col.addView(Button(act).apply {
             text = "存一張原始影格（停車格認錯、偵測怪怪的時候按，給開發者分析）"; isAllCaps = false
             setOnClickListener { Engine360.saveRaw(act) }

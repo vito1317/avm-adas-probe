@@ -270,7 +270,33 @@ public final class FrameTap {
         try {
             synchronized (sCams) { sCams.add(new WeakReference<>(cam)); }
             Log.i(TAG, "登記相機物件 " + cam.getClass().getSimpleName());
+            scheduleBackgroundStart();
         } catch (Throwable ignore) {}
+    }
+
+    private static volatile boolean sBgScheduled;
+
+    /**
+     * 原廠相機開機就建好（不用等使用者打開 360 畫面）→ 8 秒後啟動合併版引擎的背景部分
+     * （車機訊號、行車記錄器），再等相機穩定後接上我們的輸出。B 模式（沒有引擎）不做。
+     */
+    private static void scheduleBackgroundStart() {
+        if (sBgScheduled) return;
+        sBgScheduled = true;
+        sMain.postDelayed(new Runnable() {
+            public void run() {
+                try {
+                    if (engine() == null) return;
+                    Context c = ctx();
+                    if (c == null) { sBgScheduled = false; return; }
+                    installCrashHandler(c);
+                    engineCall("startBackground", new Class<?>[]{Context.class}, c);
+                    if (enabled() && !sWaiting) { sWaiting = true; waitStableThenAttach(0, 0); }
+                } catch (Throwable t) {
+                    Log.e(TAG, "背景啟動失敗（不影響原廠）：" + t);
+                }
+            }
+        }, 8000);
     }
 
     private static List<Object> liveCams() {

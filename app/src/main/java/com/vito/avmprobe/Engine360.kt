@@ -155,22 +155,38 @@ object Engine360 {
         } catch (_: Throwable) {}
     }
 
+    /**
+     * 不靠原廠畫面也要跑的部分（車機訊號、影格接收、行車記錄器）。
+     * 原廠相機開機就建好時（FrameTap 在相機建構時排程）呼叫，畫面 attach 時也會呼叫；重複呼叫沒事。
+     */
     @JvmStatic
-    fun attach(act: Activity) {
+    fun startBackground(ctx: Context) {
         try {
-            val app = act.applicationContext
+            val app = ctx.applicationContext ?: ctx
             val prefs = AppPrefs(app)
             // 合併版：偏離車道、變道、路邊紅黃線都要車道偵測，沒選過就預設開（標準版 App 預設是關）
             if (!prefs.groundModeSet) prefs.groundMode = AppPrefs.GROUND_VIRTUAL
-            crashGuard(act, prefs)
             if (!signalsAttached) {
                 signalsAttached = true
                 try { VehicleBus.signals.attach(HeadUnitSignalAdapter(app, bindEnabled = prefs.headUnitBind)) }
                 catch (t: Throwable) { log("車機訊號接不上：$t") }
             }
+            if (FrameShareHub.listener == null) FrameShareHub.listener = { img -> onFrame(app, prefs, img) }
+            if (prefs.annotEnabled) Dashcam.start(app, prefs)
+        } catch (t: Throwable) {
+            Log.e(TAG, "startBackground 失敗（不影響原廠）", t)
+        }
+    }
+
+    @JvmStatic
+    fun attach(act: Activity) {
+        try {
+            val app = act.applicationContext
+            val prefs = AppPrefs(app)
+            crashGuard(act, prefs)
+            startBackground(app)
             activity = WeakReference(act)
             addViews(act, prefs)
-            FrameShareHub.listener = { img -> onFrame(app, prefs, img) }
             if (!ticking) { ticking = true; main.post(statusTick) }
             log("合併版已掛上 ${act.javaClass.simpleName}（ADAS ${if (prefs.annotEnabled) "開" else "關"}）")
         } catch (t: Throwable) {
@@ -256,11 +272,21 @@ object Engine360 {
     }
 
     /** 影格執行緒。標注圖層不在畫面上（離開 360 畫面）時不跑偵測，省電也不搶原廠的 CPU。 */
+    @Volatile private var latestPayload: JSONObject? = null
+
+    /**
+     * 影格執行緒。原廠 360 畫面開著（標注要畫）或行車記錄器在錄 → 跑偵測；都沒有就不跑，不搶原廠的 CPU。
+     */
     private fun onFrame(ctx: Context, prefs: AppPrefs, img: Image) {
         val v = view?.get()
-        if (v == null || !v.isAttachedToWindow || !prefs.annotEnabled) return
+        val visible = v != null && v.isAttachedToWindow
+        val recording = Dashcam.recorder?.running == true
+        if (!prefs.annotEnabled || (!visible && !recording)) return
         try {
-            val p = pipeline ?: AdasPipeline(ctx, prefs) { j -> view?.get()?.update(j) }.also { pipeline = it }
+            val p = pipeline ?: AdasPipeline(ctx, prefs) { j -> latestPayload = j; view?.get()?.update(j) }.also {
+                it.afterFrame = { pp -> Dashcam.onFrame(pp, latestPayload) }
+                pipeline = it
+            }
             p.onFrame(img)
         } catch (t: Throwable) {
             Log.e(TAG, "frame 失敗：${t.message}", t)

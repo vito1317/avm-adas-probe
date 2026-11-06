@@ -205,6 +205,16 @@ class AppPrefs(context: Context) {
             .putFloat("anCx", v.cx).putFloat("anCy", v.cy).putFloat("anS", v.scale).putBoolean("anF", v.flip)
             .apply()
 
+    /** 行車記錄器（合併版：發動就循環錄影）。 */
+    var dashcamOn: Boolean
+        get() = sp.getBoolean("dashcamOn", true)
+        set(v) = sp.edit().putBoolean("dashcamOn", v).apply()
+
+    /** 行車記錄器最多用多少空間（GB），超過刪最舊的。 */
+    var dashcamQuotaGb: Int
+        get() = sp.getInt("dashcamQuota", 8)
+        set(v) = sp.edit().putInt("dashcamQuota", v).apply()
+
     /** 提示音（起步、偏離車道、變道來車、轉彎路徑有人車、移動中太近）。 */
     var alertSound: Boolean
         get() = sp.getBoolean("alertSound", true)

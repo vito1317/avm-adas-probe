@@ -529,7 +529,15 @@ class AnnotationView(context: Context) : View(context) {
 
     // ───────────────────────── 畫面上方的警示 ─────────────────────────
 
-    private fun drawHud(c: Canvas, p: JSONObject?) {
+    /**
+     * 行車記錄用：把俯視圖標注（[top] 對位到錄影畫面的俯視格）與上方警示畫到任意 Canvas（[cw]×[ch]）。
+     */
+    fun paintRecording(c: Canvas, cw: Int, ch: Int, top: AnnotationMapper.Params, p: JSONObject?) {
+        drawTop(c, AnnotationMapper(top, cw, ch), p)
+        drawHud(c, p, cw)
+    }
+
+    private fun drawHud(c: Canvas, p: JSONObject?, cw: Int = width) {
         if (p == null) return
         val msgs = ArrayList<Pair<String, Int>>()
         var minClr = Float.MAX_VALUE
@@ -578,7 +586,7 @@ class AnnotationView(context: Context) : View(context) {
         val padX = 14 * dp; val h = 34 * dp
         for ((s, col) in msgs) {
             val w = hud.measureText(s) + padX * 2
-            val x = (width - w) / 2f
+            val x = (cw - w) / 2f
             rect.set(x, y, x + w, y + h)
             fill.color = col; fill.alpha = 225
             c.drawRoundRect(rect, h / 2, h / 2, fill)

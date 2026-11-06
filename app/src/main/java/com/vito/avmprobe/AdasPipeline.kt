@@ -152,6 +152,38 @@ class AdasPipeline(
     private var snapLut: IntArray? = null
     private var snapLutKey = 0L
 
+    /**
+     * 每一幀偵測完、結果送出之後呼叫（影格執行緒）：行車記錄用來取這一幀的俯視圖與前方畫面。
+     */
+    @Volatile var afterFrame: ((AdasPipeline) -> Unit)? = null
+
+    /** 這一幀的俯視圖畫進 [out]（geo.bev 的寬×高）。在影格執行緒上呼叫。 */
+    fun renderBevInto(out: IntArray): Boolean {
+        val g = geo ?: return false
+        if (out.size != g.bev.width * g.bev.height || frame.width == 0) return false
+        val key = (frame.width.toLong() shl 32) or frame.height.toLong()
+        val table = snapLut?.takeIf { snapLutKey == key } ?: g.buildBevLut(frame.width, frame.height).also { snapLut = it; snapLutKey = key }
+        frame.sampleLut(table, out)
+        return true
+    }
+
+    /** 這一幀的前方去畸變畫面（寬視角）畫進 [out]（[size]×[size]）。在影格執行緒上呼叫。 */
+    fun renderFrontInto(out: IntArray, size: Int): Boolean {
+        val g = geo ?: return false
+        if (frame.width == 0) return false
+        val v = recFront?.takeIf { it.size == size } ?: try { VirtualView(g, "front", 0.0, 6.0, 110.0, size) } catch (_: Throwable) { null }
+        recFront = v ?: return false
+        frame.sampleLut(v.lut(frame.width, frame.height), out)
+        return true
+    }
+    private var recFront: VirtualView? = null
+
+    val bevWidth: Int get() = geo?.bev?.width ?: 0
+    val bevHeight: Int get() = geo?.bev?.height ?: 0
+    val bevMpp: Float get() = geo?.bev?.mpp?.toFloat() ?: 0.04f
+    val bevOriginX: Float get() = geo?.bev?.originX?.toFloat() ?: 0f
+    val bevOriginY: Float get() = geo?.bev?.originY?.toFloat() ?: 0f
+
     /** 下一幀算一張俯視圖給自動對位（不管「俯視辨識」有沒有開）。[done] 在影格執行緒上被呼叫。 */
     fun requestBev(done: (AutoCalibrator.Bev?) -> Unit) { bevCb = done }
 
@@ -736,6 +768,7 @@ class AdasPipeline(
         if (t != null && now - t.at < TL_TTL_MS) p.put("tl", JSONObject().put("s", t.s).put("c", r2(t.c)).put("ax", r2(t.ax)))
         lastPayload = p
         sink(p)
+        afterFrame?.invoke(this)
     }
 
     private fun spd(vs: VehicleState): Boolean { val s = vs.speedKmh; return s == null || s < 15f }
