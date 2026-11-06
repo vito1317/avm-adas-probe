@@ -51,10 +51,12 @@ object Dashcam {
     @Volatile var braking = false; private set
 
     val recorder: DashcamRecorder? get() = rec
+    @Volatile private var appCtx: Context? = null
 
     fun start(ctx: Context, prefs: AppPrefs) {
         if (!prefs.dashcamOn) return
         val app = ctx.applicationContext
+        appCtx = app
         if (rec == null) {
             rec = DashcamRecorder(app) { prefs.dashcamQuotaGb.toLong() * 1024 * 1024 * 1024 }
             painter = AnnotationView(app)
@@ -114,9 +116,16 @@ object Dashcam {
         )
         painter?.paintRecording(c, W, H, top, p)
         // 自車
-        box.color = Color.argb(200, 230, 230, 230)
         val pm = top.scale * H
-        c.drawRoundRect(RectF(ox * k - 0.925f * pm, oy * k - 2.42f * pm, ox * k + 0.925f * pm, oy * k + 2.42f * pm), 10f, 10f, box)
+        val sprite = appCtx?.let { EgoSprite.get(it) }
+        if (sprite != null) {
+            // 原廠俯視圖上截下來的車模
+            c.drawBitmap(sprite, null, RectF(ox * k - EgoSprite.HW * pm, oy * k - EgoSprite.HL * pm,
+                ox * k + EgoSprite.HW * pm, oy * k + EgoSprite.HL * pm), paint)
+        } else {
+            box.color = Color.argb(200, 230, 230, 230)
+            c.drawRoundRect(RectF(ox * k - 0.925f * pm, oy * k - 2.42f * pm, ox * k + 0.925f * pm, oy * k + 2.42f * pm), 10f, 10f, box)
+        }
         // 角落：時間、車速、方向燈、檔位、煞車、錄影中
         val veh = p?.optJSONObject("veh")
         box.color = Color.argb(150, 0, 0, 0)

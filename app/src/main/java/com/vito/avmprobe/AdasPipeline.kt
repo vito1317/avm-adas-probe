@@ -388,6 +388,21 @@ class AdasPipeline(
     private fun egoMps(vs: VehicleState): Float? =
         vs.speedKmh?.div(3.6f)?.let { if (vs.gear == 'R') -it else it }
 
+    /** 物件中心落在哪一格（或離格子中心 1.5 m 內）→ 那一格長邊的方向（弧度，0 = 跟自車同向）。 */
+    private fun slotYaw(sl: List<ParkingSlot>, x: Float, z: Float): Float? {
+        var best: ParkingSlot? = null; var bd = 1.5f
+        for (s in sl) {
+            if (s.p.size < 8) continue
+            val cx = (s.p[0] + s.p[2] + s.p[4] + s.p[6]) / 4f; val cz = (s.p[1] + s.p[3] + s.p[5] + s.p[7]) / 4f
+            val d = hypot(cx - x, cz - z)
+            if (d < bd) { bd = d; best = s }
+        }
+        val p = best?.p ?: return null
+        val e1x = p[2] - p[0]; val e1z = p[3] - p[1]; val e2x = p[4] - p[2]; val e2z = p[5] - p[3]
+        val (dx, dz) = if (hypot(e1x, e1z) >= hypot(e2x, e2z)) e1x to e1z else e2x to e2z
+        return atan2(dx, dz)
+    }
+
     private fun yaw(tr: Track, ego: Float?): Float? {
         if (ego == null || tr.t == "cone" || tr.t == "ped") return null
         val avx = tr.vx
@@ -704,6 +719,9 @@ class AdasPipeline(
                 j.put("id", tr.id).put("vx", r2(tr.vx)).put("vz", r2(tr.vz))
                 yaw(tr, ego)?.let { y -> j.put("yaw", r2(y)) }
             }
+            // 停著的車看不出方向 → 停在偵測到的格子裡就照格子的方向（停車場裡橫的、斜的都畫對）
+            if (!j.has("yaw") && (o.t == "car" || o.t == "van" || o.t == "truck" || o.t == "bus") && now - slotsAt < BEV_TTL_MS)
+                slotYaw(slots, o.x, o.z)?.let { y -> j.put("yaw", r2(y)) }
             objs.put(j)
         }
         if (now - conesAt < BEV_TTL_MS) for (c in cones) {

@@ -98,6 +98,19 @@ object Engine360 {
         }
     }
 
+    /** 從原廠畫面截下俯視圖上的車模（給行車記錄器用），用目前視角的俯視對位。 */
+    fun captureEgoSprite(done: (String) -> Unit) {
+        val act = activity?.get() ?: return done("原廠 360 畫面沒開")
+        val top = view?.get()?.currentProfile()?.top ?: return done("這個視角沒有俯視圖，切到有俯視圖的畫面再按")
+        FactoryScreen.capture(act, maxW = 1920, hide = ownViews()) { scr ->
+            if (scr == null) { done("擷取不到原廠畫面：" + FactoryScreen.lastError); return@capture }
+            cal.post {
+                val msg = try { EgoSprite.save(act, scr, top) } catch (t: Throwable) { "存車模圖案失敗：$t" }
+                log(msg); main.post { done(msg) }
+            }
+        }
+    }
+
     /**
      * 自動對位用的資料存下來（原廠畫面、我們的俯視圖、結果）到「下載/avm-adas」：
      * 實車對不準時，把這幾個檔傳給開發者，在電腦上用真實畫面重跑、找原因。
@@ -156,6 +169,7 @@ object Engine360 {
         prefs.setViewProfile(key, ViewProfile(topParams, keep3d))
         prefs.setViewCalMode(key, "auto")
         topParams?.let { prefs.annotParams = it }
+        try { log(EgoSprite.save(ctx, scr, topParams)) } catch (t: Throwable) { log("存車模圖案失敗：$t") }
         view?.get()?.invalidateProfiles()
         val dt = (SystemClock.elapsedRealtime() - t0) / 1000f
         return "自動對位完成：$key（俯視 ${top?.score?.let { "%.2f".format(it) } ?: "—"}，${"%.1f".format(dt)} 秒；3D 請手動對位）"
