@@ -1245,7 +1245,16 @@ class ParkingSlotDetector {
                     !realEnd(la, f, eA, s) && !realEnd(lb, f, eB, s)) {
                     sb.append('l')
                 }
-                if (sb.isNotEmpty()) cells.add(Cell(a, b, f, wdt, c, null, s, DEPTH_DEF, true, sb.toString()))
+                // 深度：分隔線真的在 4.2～6.5 m 處結束（後面看得到地面但沒線）就用它，不要一律套預設 5.5 m
+                // （實車：自車旁的空格被畫得比實際深 0.3 m）。被自車擋住、補長的那條不算。
+                fun endDepth(l: Line, e: Double, len: Double, adj: Boolean) =
+                    if (!adj && len in 4.2..6.5 && realEnd(l, f, e, s)) len else Double.NaN
+                // 只在明顯比預設短（差 0.3 m 以上）時才用；不會因此把格子畫得比預設深
+                // （合成場景的分隔線會比格子後緣多畫一點，用它反而變深）
+                val lineDepth = listOf(endDepth(la, eA, lA, a in egoAdj), endDepth(lb, eB, lB, b in egoAdj))
+                    .filter { !it.isNaN() }.maxOrNull()
+                val depth = if (lineDepth != null && lineDepth < DEPTH_DEF - 0.3) lineDepth else DEPTH_DEF
+                if (sb.isNotEmpty()) cells.add(Cell(a, b, f, wdt, c, null, s, depth, true, sb.toString()))
             }
         }
     }
@@ -1308,8 +1317,8 @@ class ParkingSlotDetector {
         val w = c.w
         val c0 = c.c0; val c1 = c.c1; val s = c.s
         val tA0 = c0.tA; val tB0 = c0.tB
-        val tA1 = c1?.tA ?: (tA0 + s * DEPTH_DEF)
-        val tB1 = c1?.tB ?: (tB0 + s * DEPTH_DEF)
+        val tA1 = c1?.tA ?: (tA0 + s * c.len)      // 單側格：c.len = 深度（分隔線結束處，否則預設）
+        val tB1 = c1?.tB ?: (tB0 + s * c.len)
         val len = 0.5 * (abs(tA1 - tA0) + abs(tB1 - tB0))
         val perp = c0.perp && (c1 == null || c1.perp)
         val ang = !c0.perp && (c1 == null || !c1.perp)
@@ -1571,7 +1580,7 @@ class ParkingSlotDetector {
     private fun cellRange(cell: Cell, which: Int): DoubleArray {
         val t0 = if (which == 0) cell.c0.tA else cell.c0.tB
         val c1 = cell.c1
-        val t1 = if (c1 != null) (if (which == 0) c1.tA else c1.tB) else t0 + cell.s * DEPTH_DEF
+        val t1 = if (c1 != null) (if (which == 0) c1.tA else c1.tB) else t0 + cell.s * cell.len
         return doubleArrayOf(min(t0, t1), max(t0, t1))
     }
 
