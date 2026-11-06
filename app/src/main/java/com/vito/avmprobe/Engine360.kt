@@ -53,6 +53,22 @@ object Engine360 {
     @JvmStatic
     fun log(msg: String) { try { FrameShareHub.log(msg) } catch (_: Throwable) {} }
 
+    @Volatile private var lastViewKey: String? = null
+
+    /**
+     * 原廠切換視角時（注入在 nativesetBvState 前）：[name] 是 BV_state 列舉名稱（BV_LEFT、BV_REAR_3D…）。
+     * 標注圖層改用那個視角存的對位。
+     */
+    @JvmStatic
+    fun onViewState(value: Int, name: String) {
+        try {
+            if (lastViewKey == name) return
+            lastViewKey = name
+            log("原廠視角：$name（$value）")
+            view?.get()?.viewKey = name
+        } catch (_: Throwable) {}
+    }
+
     @JvmStatic
     fun attach(act: Activity) {
         try {
@@ -96,7 +112,9 @@ object Engine360 {
 
         val av = AnnotationView(act).apply {
             tag = VIEW_TAG
-            params = prefs.annotParams
+            profileFor = { k -> prefs.viewProfile(k) }
+            viewKey = lastViewKey
+            drawRoad = prefs.annotDrawRoad
         }
         decor.addView(av, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         view = WeakReference(av)
@@ -131,6 +149,15 @@ object Engine360 {
         } catch (t: Throwable) {
             Log.e(TAG, "frame 失敗：${t.message}", t)
         }
+    }
+
+    /** 設定裡「存原始影格」：下一幀存檔，完成後跳提示。沒在跑偵測時直接說明。 */
+    fun saveRaw(act: Activity) {
+        val p = pipeline
+        if (p == null) {
+            Toast.makeText(act, "還沒收到影格，存不了（看診斷文字）", Toast.LENGTH_LONG).show(); return
+        }
+        p.requestSaveRaw { msg -> main.post { try { Toast.makeText(act, msg, Toast.LENGTH_LONG).show() } catch (_: Throwable) {} } }
     }
 
     /** 沒影格時把診斷文字顯示在俯視圖上，有影格就收掉。 */

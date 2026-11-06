@@ -43,13 +43,30 @@ object TurnPathPlanner {
      * @param inner 內側後輪掃過的路徑 —— 兩條之間就是內輪差
      * @param dir 'L' 或 'R'
      * @param radius 後軸中心的轉彎半徑（m）
+     * @param innerFront 內側車頭角的路徑。畫掃過範圍時兩端要沿車身收口
+     *   （內側後輪 → 內側車頭角 → 外側車頭角），不然直接連會斜切過車身變成三角形
      */
     data class TurnPath(
         val pts: List<FloatArray>,
         val inner: List<FloatArray>,
         val dir: Char,
-        val radius: Float
-    )
+        val radius: Float,
+        val innerFront: List<FloatArray> = emptyList()
+    ) {
+        /**
+         * 車身掃過的範圍（閉合多邊形）：外側車頭角往前 → 終點車身前緣 → 內側後輪往回 → 起點車身內側。
+         * 兩端都沿著車身輪廓收口。
+         */
+        fun sweptPolygon(): List<FloatArray> {
+            if (pts.size < 2 || inner.size < 2) return emptyList()
+            val out = ArrayList<FloatArray>(pts.size + inner.size + 2)
+            out.addAll(pts)
+            innerFront.lastOrNull()?.let { out.add(it) }
+            out.addAll(inner.asReversed())
+            innerFront.firstOrNull()?.let { out.add(it) }
+            return out
+        }
+    }
 
     /**
      * @param turn 方向燈 'L'/'R'/'H'，沒打傳 null
@@ -87,15 +104,19 @@ object TurnPathPlanner {
         val n = maxOf(2, Math.ceil(r * total / STEP_M).toInt())
         val outer = ArrayList<FloatArray>(n + 1)
         val innerPts = ArrayList<FloatArray>(n + 1)
+        val innerFront = ArrayList<FloatArray>(n + 1)
         for (i in 0..n) {
             val t = total * i / n
             val yaw = sgn * t
             val bx = sgn * r * (1.0 - cos(t))
             val bz = zra + r * sin(t)
-            outer.add(body(bx, bz, yaw, sgn * hw, frontZ))   // 外側車頭角
-            innerPts.add(body(bx, bz, yaw, -sgn * hw, 0.0))  // 內側後輪（就在後軸上）
+            // 轉彎中心在後軸的「轉向那一側」（右轉在右邊）：離中心最遠的是**另一側**的車頭角，
+            // 最近的是轉向那一側的後輪。右轉 → 外側 = 左前角、內側 = 右後輪。
+            outer.add(body(bx, bz, yaw, -sgn * hw, frontZ))      // 外側車頭角
+            innerPts.add(body(bx, bz, yaw, sgn * hw, 0.0))       // 內側後輪（就在後軸上）
+            innerFront.add(body(bx, bz, yaw, sgn * hw, frontZ))  // 內側車頭角（收口用）
         }
-        return TurnPath(outer, innerPts, if (sgn > 0) 'R' else 'L', r.toFloat())
+        return TurnPath(outer, innerPts, if (sgn > 0) 'R' else 'L', r.toFloat(), innerFront)
     }
 
     /**

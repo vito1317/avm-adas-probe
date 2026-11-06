@@ -20,10 +20,12 @@ class TurnPathPlannerTest {
         assertEquals('R', p!!.dir)
         val last = p.pts.last()
         assertTrue("終點要在右前方，實際 (${last[0]}, ${last[1]})", last[0] > 1.0f && last[1] > 0f)
-        // 起點是外側（右）前角，應該貼著車身右前
+        // 右轉的外側是**左**前角（離轉彎中心最遠）：起點貼著車身左前
         val first = p.pts.first()
-        assertEquals(geo.width.toFloat() / 2, first[0], 0.05f)
+        assertEquals(-geo.width.toFloat() / 2, first[0], 0.05f)
         assertEquals(geo.length.toFloat() / 2, first[1], 0.05f)
+        // 內側後輪是**右**後輪
+        assertEquals(geo.width.toFloat() / 2, p.inner.first()[0], 0.05f)
     }
 
     /** 左右要對稱。 */
@@ -39,16 +41,23 @@ class TurnPathPlannerTest {
         }
     }
 
-    /** 內輪差：內側後輪一定比外側車頭角更靠轉彎內側。 */
+    /**
+     * 內輪差：內側後輪一路都比外側車頭角更靠近轉彎中心。
+     * 轉彎中心在後軸那條線上、轉向那一側 r 處：右轉 = (r, rearAxleZ)。
+     */
     @Test
     fun innerWheelCutsInside() {
         val p = TurnPathPlanner.plan('R', 250f, 8f, geo)!!
-        // 右轉時，內側（右後輪）的 x 應該一路都小於外側前角的 x
+        val cx = p.radius; val cz = geo.rearAxleZ.toFloat()
         var checked = 0
         for (i in p.pts.indices) {
             val o = p.pts[i]
             val inn = p.inner[i]
-            assertTrue("第 $i 點內側沒有比外側內縮：外 ${o[0]} 內 ${inn[0]}", inn[0] <= o[0] + 1e-3f)
+            val ro = hypot(o[0] - cx, o[1] - cz)
+            val ri = hypot(inn[0] - cx, inn[1] - cz)
+            assertTrue("第 $i 點內側後輪沒有比外側車頭角靠近中心：外 $ro 內 $ri", ri < ro)
+            // 內側後輪就在後軸、轉向那一側：半徑 = r − 半車寬（剛體繞中心轉，一路不變）
+            assertEquals(p.radius - geo.width.toFloat() / 2, ri, 0.02f)
             checked++
         }
         assertTrue(checked > 5)
@@ -141,5 +150,24 @@ class TurnPathPlannerTest {
         assertEquals(expect.toFloat(), p.radius, 0.01f)
         assertTrue("半徑要是正的", p.radius > 0f)
         assertTrue("打 200° 的半徑應該在合理範圍，實際 ${p.radius}", abs(p.radius) in 3f..40f)
+    }
+}
+
+class TurnSweptPolygonTest {
+
+    @org.junit.Test
+    fun endsCloseAlongTheCarBodyNotDiagonally() {
+        val tp = TurnPathPlanner.plan('R', 200f, 10f)!!
+        val poly = tp.sweptPolygon()
+        org.junit.Assert.assertEquals(tp.pts.size + tp.inner.size + 2, poly.size)
+        // 起點收口：內側後輪 → 內側車頭角 → 外側車頭角，三點都在現在的車身上
+        val geo = VehicleGeometry()
+        val start = listOf(poly.last(), poly[0], tp.inner[0])   // 內側車頭角、外側車頭角、內側後輪
+        for (q in start) {
+            org.junit.Assert.assertTrue(kotlin.math.abs(q[0]) <= geo.width / 2 + 1e-3)
+            org.junit.Assert.assertTrue(q[1] <= geo.length / 2 + 1e-3 && q[1] >= geo.rearAxleZ - 1e-3)
+        }
+        // 內側車頭角跟內側後輪在同一側（右轉的內側是右邊：x > 0）
+        org.junit.Assert.assertTrue(poly.last()[0] > 0f && tp.inner[0][0] > 0f && poly[0][0] < 0f)
     }
 }

@@ -28,6 +28,7 @@ class AnnotationView(context: Context) : View(context) {
         private const val STALE_MS = 1500L
         private const val WARN = 1.2f
         private const val CRIT = 0.5f
+        private const val TURN_HOLD_MS = 2000L
         private val NAMES = mapOf(
             "car" to "轎車", "van" to "箱型車", "truck" to "卡車", "bus" to "公車", "moto" to "機車",
             "bigbike" to "重機", "bike" to "腳踏車", "ped" to "行人", "cone" to "三角錐"
@@ -43,10 +44,29 @@ class AnnotationView(context: Context) : View(context) {
 
     @Volatile private var payload: JSONObject? = null
     @Volatile private var payloadAt = 0L
-    @Volatile var params: AnnotationMapper.Params = AnnotationMapper.Params.DEFAULT
-        set(v) { field = v; postInvalidate() }
+    /**
+     * 原廠目前的視角（BV_state 名稱，由注入的掛鉤告訴我們）。null = 還不知道，
+     * 就用方向燈當視角（打燈原廠會切側邊 3D）。
+     */
+    @Volatile var viewKey: String? = null
+        set(v) { if (field != v) { field = v; postInvalidate() } }
+    /** 每個視角的標注設定（由 [Engine360] 從設定檔讀；改了設定要呼叫 [invalidateProfiles]）。 */
+    var profileFor: (String) -> ViewProfile = { ViewProfile.defaultFor(it, AnnotationMapper.Params.DEFAULT) }
+    private val profiles = java.util.concurrent.ConcurrentHashMap<String, ViewProfile>()
+    fun invalidateProfiles() { profiles.clear(); postInvalidate() }
+    /** 對位模式：在目前視角畫出自車外框（俯視圖）／立體自車線框（3D），以及範圍框與格線。 */
     @Volatile var calibrating = false
         set(v) { field = v; postInvalidate() }
+    /**
+     * 要不要把偵測到的車道線畫出來。原廠俯視圖本來就是真實地面影像，地上的線看得到；
+     * 再疊一層偵測結果只會多出逐幀抖動、偶有誤判的「飄動白線」。預設不畫（偵測照跑，LDW／變道要用）。
+     */
+    @Volatile var drawRoad = false
+        set(v) { field = v; postInvalidate() }
+
+    private var lastTurn: Char? = null
+    private var lastTurnAt = 0L
+
     /** 還沒有影格時顯示的診斷文字（null = 不顯示）。 */
     @Volatile var status: String? = null
         set(v) { if (field != v) { field = v; postInvalidate() } }
@@ -75,15 +95,34 @@ class AnnotationView(context: Context) : View(context) {
         postInvalidate()
     }
 
-    override fun onDraw(c: Canvas) {
-        val m = AnnotationMapper(params, width, height)
-        val p = payload?.takeIf { SystemClock.elapsedRealtime() - payloadAt < STALE_MS }
+    /** 現在套用的是哪個視角：原廠告訴我們的優先，不知道就看方向燈。 */
+    fun currentKey(): String {
+        viewKey?.let { return it }
+        return when (activeTurn(payload)) {
+            'L' -> ViewProfile.TURN_L
+            'R' -> ViewProfile.TURN_R
+            else -> ViewProfile.DEFAULT
+        }
+    }
 
+    fun currentProfile(): ViewProfile = currentKey().let { k -> profiles.getOrPut(k) { profileFor(k) } }
+
+    override fun onDraw(c: Canvas) {
+        val p = payload?.takeIf { SystemClock.elapsedRealtime() - payloadAt < STALE_MS }
+        val prof = currentProfile()
+        val top = prof.top
+        if (top != null) drawTop(c, AnnotationMapper(top, width, height), p)
+        prof.p3?.let { draw3d(c, PerspectiveMapper(it, width, height), p) }
+        drawHud(c, p)
+        status?.let { drawStatus(c, it, top?.let { t -> AnnotationMapper(t, width, height) }) }
+    }
+
+    private fun drawTop(c: Canvas, m: AnnotationMapper, p: JSONObject?) {
         c.save()
         c.clipRect(m.clipLeft, m.clipTop, m.clipRight, m.clipBottom)
         if (calibrating) drawCalibration(c, m)
         if (p != null) {
-            p.optJSONObject("road")?.optJSONArray("lines")?.let { drawRoad(c, m, it) }
+            if (drawRoad) p.optJSONObject("road")?.optJSONArray("lines")?.let { drawRoad(c, m, it) }
             p.optJSONArray("slots")?.let { drawSlots(c, m, it) }
             p.optJSONObject("park")?.let { drawParkPath(c, m, it) }
             p.optJSONObject("turn")?.let { drawTurnPath(c, m, it) }
@@ -96,9 +135,131 @@ class AnnotationView(context: Context) : View(context) {
             p.optJSONArray("objs")?.let { drawObjects(c, m, it) }
         }
         c.restore()
+    }
 
-        drawHud(c, p)
-        status?.let { drawStatus(c, m, it) }
+    // ───────────────────────── 原廠 3D 視角（打方向燈時） ─────────────────────────
+
+    /** 方向燈閃爍時訊號會一亮一滅，撐 [TURN_HOLD_MS] 免得標注跟著閃。 */
+    private fun activeTurn(p: JSONObject?): Char? {
+        val now = SystemClock.elapsedRealtime()
+        val t = p?.optJSONObject("veh")?.optString("turn")?.firstOrNull()
+        if (t == 'L' || t == 'R') { lastTurn = t; lastTurnAt = now }
+        return if (now - lastTurnAt < TURN_HOLD_MS) lastTurn else null
+    }
+
+    private fun draw3d(c: Canvas, m: PerspectiveMapper, p: JSONObject?) {
+        c.save()
+        c.clipRect(m.clipLeft, m.clipTop, m.clipRight, m.clipBottom)
+        if (calibrating) drawCalibration3d(c, m)
+        if (p != null) {
+            p.optJSONObject("turn")?.let { t ->
+                val col = if (t.optInt("hit") > 0) Color.rgb(255, 70, 60) else Color.rgb(255, 200, 60)
+                val o = t.optJSONArray("o")?.let { points(it) }
+                val i = t.optJSONArray("i")?.let { points(it) }
+                val sw = t.optJSONArray("sw")?.let { points(it) }
+                if (sw != null && sw.size >= 3) groundPolygon3d(c, m, sw, col)
+                else if (o != null && i != null && o.size >= 2 && i.size >= 2) groundPolygon3d(c, m, o + i.asReversed(), col)
+            }
+            p.optJSONObject("lca")?.let { l ->
+                val col = if (l.optBoolean("pathOk", true)) Color.rgb(90, 220, 120) else Color.rgb(255, 70, 60)
+                l.optJSONArray("path")?.let { groundPolygon3d(c, m, AnnotationMapper.corridor(points(it), AnnotationMapper.EGO_HW), col) }
+            }
+            p.optJSONObject("park")?.optJSONArray("pts")?.let {
+                groundPolygon3d(c, m, AnnotationMapper.corridor(points(it), AnnotationMapper.EGO_HW), Color.rgb(70, 170, 255))
+            }
+            p.optJSONArray("objs")?.let { drawObjects3d(c, m, it) }
+        }
+        c.restore()
+    }
+
+    /** 地面（y = 0）上的多邊形。鏡頭背後的點丟掉（鏡頭在車後上方往前看，丟的都是看不到的部分）。 */
+    private fun groundPolygon3d(c: Canvas, m: PerspectiveMapper, poly: List<FloatArray>, col: Int) {
+        val pts = poly.mapNotNull { m.project(it[0], 0f, it[1]) }
+        if (pts.size < 3) return
+        path.reset()
+        pts.forEachIndexed { i, q -> if (i == 0) path.moveTo(q[0], q[1]) else path.lineTo(q[0], q[1]) }
+        path.close()
+        fill.color = col; fill.alpha = 80
+        c.drawPath(path, fill)
+        stroke.color = col; stroke.alpha = 230; stroke.pathEffect = null
+        c.drawPath(path, stroke)
+    }
+
+    /** 物件畫成立體線框（地面外框 + 高度），上面標距離。 */
+    private fun drawObjects3d(c: Canvas, m: PerspectiveMapper, a: JSONArray) {
+        for (i in 0 until a.length()) {
+            val o = a.optJSONObject(i) ?: continue
+            val t = o.optString("t")
+            val x = o.optDouble("x").toFloat(); val z = o.optDouble("z").toFloat()
+            val hl = HALF[t] ?: floatArrayOf(0.5f, 0.5f)
+            val h = when (t) { "ped" -> 1.7f; "bus", "truck" -> 3.0f; "van" -> 2.0f; "cone" -> 0.7f; "car" -> 1.5f; else -> 1.4f }
+            val clr = clearance(x, z)
+            val col = when {
+                clr < CRIT -> Color.rgb(255, 60, 50)
+                clr < WARN -> Color.rgb(255, 150, 40)
+                t == "ped" || t == "bike" || t == "moto" || t == "bigbike" -> Color.rgb(255, 220, 60)
+                else -> Color.rgb(60, 220, 255)
+            }
+            val yaw = if (o.has("yaw")) o.optDouble("yaw").toFloat() else 0f
+            if (!box3d(c, m, x, z, hl[0], hl[1], h, yaw, col)) continue
+            val top = m.project(x, h + 0.2f, z) ?: continue
+            val label = "${NAMES[t] ?: t} ${"%.1f".format(clr)}m"
+            c.drawText(label, top[0] - text.measureText(label) / 2f, top[1], text)
+        }
+    }
+
+    /** 以 (x, z) 為中心、半寬 hw、半長 hl、高 h、方向 yaw 的立體線框。任何角點在鏡頭後面就不畫。 */
+    private fun box3d(c: Canvas, m: PerspectiveMapper, x: Float, z: Float, hw: Float, hl: Float, h: Float, yaw: Float, col: Int): Boolean {
+        val cs = kotlin.math.cos(yaw); val sn = kotlin.math.sin(yaw)
+        val corners = arrayOf(floatArrayOf(-hw, -hl), floatArrayOf(hw, -hl), floatArrayOf(hw, hl), floatArrayOf(-hw, hl))
+        val bottom = ArrayList<FloatArray>(4); val topP = ArrayList<FloatArray>(4)
+        for (q in corners) {
+            // 車身座標（右 q0、前 q1）轉 yaw（從 +z 往 +x）
+            val wx = x + q[0] * cs + q[1] * sn
+            val wz = z - q[0] * sn + q[1] * cs
+            bottom.add(m.project(wx, 0f, wz) ?: return false)
+            topP.add(m.project(wx, h, wz) ?: return false)
+        }
+        path.reset()
+        bottom.forEachIndexed { i, q -> if (i == 0) path.moveTo(q[0], q[1]) else path.lineTo(q[0], q[1]) }
+        path.close()
+        fill.color = col; fill.alpha = 55
+        c.drawPath(path, fill)
+        stroke.color = col; stroke.alpha = 235; stroke.pathEffect = null
+        for (i in 0 until 4) {
+            val j = (i + 1) % 4
+            c.drawLine(bottom[i][0], bottom[i][1], bottom[j][0], bottom[j][1], stroke)
+            c.drawLine(topP[i][0], topP[i][1], topP[j][0], topP[j][1], stroke)
+            c.drawLine(bottom[i][0], bottom[i][1], topP[i][0], topP[i][1], stroke)
+        }
+        return true
+    }
+
+    private fun drawCalibration3d(c: Canvas, m: PerspectiveMapper) {
+        stroke.pathEffect = null
+        stroke.color = Color.argb(200, 0, 220, 255)
+        c.drawRect(m.clipLeft + 2, m.clipTop + 2, m.clipRight - 2, m.clipBottom - 2, stroke)
+        // 地面 1 m 格線
+        stroke.color = Color.argb(80, 255, 255, 255); stroke.strokeWidth = 1f * dp
+        for (i in -6..6) {
+            val a = m.project(i.toFloat(), 0f, -6f); val b = m.project(i.toFloat(), 0f, 12f)
+            if (a != null && b != null) c.drawLine(a[0], a[1], b[0], b[1], stroke)
+        }
+        for (k in -6..12) {
+            val a = m.project(-6f, 0f, k.toFloat()); val b = m.project(6f, 0f, k.toFloat())
+            if (a != null && b != null) c.drawLine(a[0], a[1], b[0], b[1], stroke)
+        }
+        stroke.strokeWidth = 2.5f * dp
+        // 立體自車線框（車高 1.45 m），車頭那一面加粗標示
+        box3d(c, m, 0f, 0f, AnnotationMapper.EGO_HW, AnnotationMapper.EGO_HL, 1.45f, 0f, Color.argb(230, 255, 0, 255))
+        val fl = m.project(-AnnotationMapper.EGO_HW, 0.7f, AnnotationMapper.EGO_HL)
+        val fr = m.project(AnnotationMapper.EGO_HW, 0.7f, AnnotationMapper.EGO_HL)
+        if (fl != null && fr != null) {
+            stroke.strokeWidth = 5f * dp
+            c.drawLine(fl[0], fl[1], fr[0], fr[1], stroke)
+            stroke.strokeWidth = 2.5f * dp
+            c.drawText("車頭", (fl[0] + fr[0]) / 2f, (fl[1] + fr[1]) / 2f - 6 * dp, text)
+        }
     }
 
     // ───────────────────────── 俯視圖上的東西 ─────────────────────────
@@ -157,6 +318,8 @@ class AnnotationView(context: Context) : View(context) {
     private fun drawSlots(c: Canvas, m: AnnotationMapper, a: JSONArray) {
         for (i in 0 until a.length()) {
             val s = a.optJSONObject(i) ?: continue
+            // 只畫空車位：有車的格子在原廠影像上本來就看得到，畫紅框只會一閃一閃地添亂
+            if (s.optInt("o") == 1) continue
             val q = s.optJSONArray("p") ?: continue
             if (q.length() < 8) continue
             path.reset()
@@ -237,7 +400,7 @@ class AnnotationView(context: Context) : View(context) {
         val outer = t.optJSONArray("o")?.let { points(it) } ?: return
         val inner = t.optJSONArray("i")?.let { points(it) } ?: return
         if (outer.size < 2 || inner.size < 2) return
-        polygon(c, m, outer + inner.asReversed(), col)
+        polygon(c, m, t.optJSONArray("sw")?.let { points(it) } ?: (outer + inner.asReversed()), col)
         // 內側後輪那條另外用虛線強調（內輪差捲到機車最常出事）
         stroke.color = col; stroke.pathEffect = dash
         path.reset()
@@ -253,7 +416,7 @@ class AnnotationView(context: Context) : View(context) {
         val cx = m.sx(x, z); val cy = m.sy(x, z); val ppm = m.pixelsPerMeter
         rect.set(cx - hw * ppm, cy - hl * ppm, cx + hw * ppm, cy + hl * ppm)
         c.save()
-        c.rotate(m.screenAngleDeg(yaw) - if (params.flip) 180f else 0f, cx, cy)
+        c.rotate(m.screenAngleDeg(yaw) - if (m.p.flip) 180f else 0f, cx, cy)
         fill.color = col; fill.alpha = fillAlpha
         c.drawRoundRect(rect, 4 * dp, 4 * dp, fill)
         stroke.color = col
@@ -316,12 +479,13 @@ class AnnotationView(context: Context) : View(context) {
         }
     }
 
-    private fun drawStatus(c: Canvas, m: AnnotationMapper, s: String) {
+    /** 診斷文字：放在俯視圖那格左下；這個視角沒有俯視圖就放畫面左下。 */
+    private fun drawStatus(c: Canvas, s: String, m: AnnotationMapper?) {
         val lines = s.split('\n').take(8)
         val lh = 16 * dp
         val w = lines.maxOf { text.measureText(it) } + 16 * dp
-        val x = m.clipLeft + 8 * dp
-        val y = m.clipBottom - lines.size * lh - 16 * dp
+        val x = (m?.clipLeft ?: 0f) + 8 * dp
+        val y = (m?.clipBottom ?: (height * 0.86f)) - lines.size * lh - 16 * dp
         rect.set(x, y, x + w, y + lines.size * lh + 10 * dp)
         fill.color = Color.argb(190, 10, 15, 25)
         c.drawRoundRect(rect, 8 * dp, 8 * dp, fill)

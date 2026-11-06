@@ -192,6 +192,51 @@ class AppPrefs(context: Context) {
             .putFloat("anCx", v.cx).putFloat("anCy", v.cy).putFloat("anS", v.scale).putBoolean("anF", v.flip)
             .apply()
 
+    /** 合併版：在俯視圖上畫出偵測到的車道線（除錯用，預設關）。 */
+    var annotDrawRoad: Boolean
+        get() = sp.getBoolean("annotRoad", false)
+        set(v) = sp.edit().putBoolean("annotRoad", v).apply()
+
+    /** 合併版：原廠某個視角（BV_state 名稱）存的標注設定；沒存過給 [ViewProfile.defaultFor]。 */
+    fun viewProfile(key: String): ViewProfile {
+        val raw = sp.getString("view_$key", null)
+        if (raw != null) try { return ViewProfile.fromJson(org.json.JSONObject(raw)) } catch (_: Throwable) {}
+        // 舊版（m-v3 以前）只有左右燈兩組 3D 設定：沿用
+        val legacy = when (key) {
+            ViewProfile.TURN_L -> 'L'; ViewProfile.TURN_R -> 'R'; else -> null
+        }
+        if (legacy != null && sp.contains("a3${legacy}az")) return ViewProfile(annotParams, annot3d(legacy))
+        return ViewProfile.defaultFor(key, annotParams)
+    }
+
+    fun setViewProfile(key: String, v: ViewProfile) {
+        sp.edit().putString("view_$key", v.toJson().toString()).apply()
+    }
+
+    fun resetViewProfile(key: String) { sp.edit().remove("view_$key").apply() }
+
+    /** 原廠打方向燈時右側 3D 視角 → 螢幕的對應。[side] = 'L' 或 'R'，兩邊各存一組。 */
+    fun annot3d(side: Char): PerspectiveMapper.Params {
+        val d = if (side == 'R') PerspectiveMapper.Params.DEFAULT_RIGHT else PerspectiveMapper.Params.DEFAULT_LEFT
+        val k = "a3$side"
+        return PerspectiveMapper.Params(
+            clipL = sp.getFloat("${k}L", d.clipL), clipT = sp.getFloat("${k}T", d.clipT),
+            clipR = sp.getFloat("${k}R", d.clipR), clipB = sp.getFloat("${k}B", d.clipB),
+            azDeg = sp.getFloat("${k}az", d.azDeg), elDeg = sp.getFloat("${k}el", d.elDeg),
+            dist = sp.getFloat("${k}d", d.dist), fovDeg = sp.getFloat("${k}fov", d.fovDeg),
+            tx = sp.getFloat("${k}tx", d.tx), tz = sp.getFloat("${k}tz", d.tz)
+        )
+    }
+
+    fun setAnnot3d(side: Char, v: PerspectiveMapper.Params) {
+        val k = "a3$side"
+        sp.edit()
+            .putFloat("${k}L", v.clipL).putFloat("${k}T", v.clipT).putFloat("${k}R", v.clipR).putFloat("${k}B", v.clipB)
+            .putFloat("${k}az", v.azDeg).putFloat("${k}el", v.elDeg).putFloat("${k}d", v.dist).putFloat("${k}fov", v.fovDeg)
+            .putFloat("${k}tx", v.tx).putFloat("${k}tz", v.tz)
+            .apply()
+    }
+
     /** 3D 面板範圍（螢幕比例）。避開俯視區，否則截圖會截到自己。 */
     fun panelRect(): RectF? = when (panel) {
         PANEL_RIGHT -> RectF(0.5f, 0f, 1f, 0.86f)

@@ -175,6 +175,27 @@ public final class FrameTap {
         }
     }
 
+    /**
+     * 注入在原廠切換視角（nativesetBvState）之前：把數字換成視角名稱（BV_state 列舉），
+     * 告訴合併版引擎。B 模式（沒有引擎）不用。
+     */
+    public static void onBvState(int v) {
+        try {
+            if (engine() == null) return;
+            String name = null;
+            try {
+                Class<?> st = Class.forName("com.baony.birdview.BVDisplayManager$BV_state");
+                Method gv = st.getMethod("getValue");
+                for (Object e : st.getEnumConstants()) {
+                    if (((Integer) gv.invoke(e)) == v) { name = ((Enum<?>) e).name(); break; }
+                }
+            } catch (Throwable ignore) {}
+            engineCall("onViewState", new Class<?>[]{int.class, String.class}, v, name != null ? name : ("STATE_" + v));
+        } catch (Throwable t) {
+            Log.e(TAG, "onBvState 失敗：" + t);
+        }
+    }
+
     /** 注入在 I360CameraInterface 建構子裡：登記原廠的相機物件。 */
     public static void register(Object cam) {
         try {

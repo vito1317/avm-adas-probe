@@ -95,6 +95,17 @@ perl -0777 -i -pe '
 grep -q "Lcom/vito/FrameTap;->register" "$CAMIF" || { echo "⚠ register 沒注入到 I360CameraInterface"; exit 1; }
 echo "   register() → ${CAMIF#$DEC/}"
 
+# (d) 原廠切換視角（nativesetBvState(int)）之前 → FrameTap.onBvState(同一個 int)。
+#     合併版靠這個知道原廠現在是哪個視角（BV_LEFT、BV_REAR_3D…），套用那個視角的標注對位。
+BVDM="$(ls "$DEC"/smali*/com/baony/birdview/BVDisplayManager.smali 2>/dev/null | head -1)"
+[ -n "$BVDM" ] || { echo "⚠ 找不到 BVDisplayManager"; exit 1; }
+perl -0777 -i -pe '
+  s/(invoke-static \{([pv]\d+)\}, Lcom\/baony\/birdview\/BVDisplayManager;->nativesetBvState\(I\)I)/invoke-static {$2}, Lcom\/vito\/FrameTap;->onBvState(I)V\n\n    $1/g;
+' "$BVDM"
+NB=$(grep -c "Lcom/vito/FrameTap;->onBvState" "$BVDM" || true)
+[ "$NB" -gt 0 ] || { echo "⚠ onBvState 沒注入到"; exit 1; }
+echo "   onBvState() → ${BVDM#$DEC/}（$NB 處）"
+
 echo "== 4/7 編譯 FrameTap → dex"
 mkdir -p "$WORK/j/com/vito"
 cp "$SELF/inject-src/com/vito/FrameTap.java" "$WORK/j/com/vito/FrameTap.java"

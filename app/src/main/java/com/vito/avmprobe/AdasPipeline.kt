@@ -142,6 +142,34 @@ class AdasPipeline(
         startMap()
     }
 
+    @Volatile private var saveRawCb: ((String) -> Unit)? = null
+    @Volatile private var lastPayload: JSONObject? = null
+
+    /**
+     * 下一幀存一份原始資料到「下載/avm-adas」給開發者分析：四分割原圖（JPEG）、
+     * 校正與裝置資訊，以及當下的偵測結果（payload）。[done] 在影格執行緒上被呼叫，帶結果文字。
+     */
+    fun requestSaveRaw(done: (String) -> Unit) { saveRawCb = done }
+
+    private fun saveRaw(): String {
+        val ts = java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.US).format(java.util.Date())
+        return try {
+            val bos = ByteArrayOutputStream()
+            android.graphics.YuvImage(frame.toNv21(), android.graphics.ImageFormat.NV21, frame.width, frame.height, null)
+                .compressToJpeg(Rect(0, 0, frame.width, frame.height), 95, bos)
+            val path = MediaSaver.save(ctx, "raw_$ts.jpg", "image/jpeg", bos.toByteArray())
+            val meta = JSONObject()
+                .put("width", frame.width).put("height", frame.height).put("time", ts)
+                .put("device", "${Build.MANUFACTURER} ${Build.MODEL}").put("android", Build.VERSION.RELEASE)
+                .put("calib", JSONObject(calibText))
+                .put("payload", lastPayload ?: JSONObject.NULL)
+            MediaSaver.save(ctx, "raw_$ts.json", "application/json", meta.toString(2).toByteArray())
+            "已存：$path"
+        } catch (t: Throwable) {
+            "存檔失敗：${t.message}"
+        }
+    }
+
     /** 收掉模型、執行緒、地圖、音效。在影格執行緒上呼叫。 */
     fun close() {
         mapSrc?.stop(); mapSrc = null
@@ -165,6 +193,7 @@ class AdasPipeline(
         frame.load(img)
         val g = geo ?: return
         frames++
+        saveRawCb?.let { cb -> saveRawCb = null; cb(saveRaw()) }
 
         val det = yolo ?: initYolo() ?: return
         val vs = VehicleBus.signals.snapshot()
@@ -486,8 +515,10 @@ class AdasPipeline(
         TurnPathPlanner.plan(vs.turn, vs.steerDeg, vs.speedKmh)?.let { tp ->
             val outer = JSONArray(); for (q in tp.pts) outer.put(JSONArray().put(r2(q[0])).put(r2(q[1])))
             val inner = JSONArray(); for (q in tp.inner) inner.put(JSONArray().put(r2(q[0])).put(r2(q[1])))
+            // 掃過範圍（兩端沿車身收口）：標注直接畫這個多邊形
+            val swept = JSONArray(); for (q in tp.sweptPolygon()) swept.put(JSONArray().put(r2(q[0])).put(r2(q[1])))
             val hits = TurnPathPlanner.conflicts(tp, currentObjects(now).map { StartAssist.Obj(it.t, it.x, it.z) })
-            p.put("turn", JSONObject().put("o", outer).put("i", inner).put("d", tp.dir.toString())
+            p.put("turn", JSONObject().put("o", outer).put("i", inner).put("sw", swept).put("d", tp.dir.toString())
                 .put("r", r2(tp.radius)).put("hit", hits.size))
         }
         startState?.let { st -> if (st.lead || st.green) p.put("start", JSONObject()
@@ -498,6 +529,7 @@ class AdasPipeline(
         mapSrc?.takeJsonIfNew()?.let { p.put("map", it) }
         val t = tl
         if (t != null && now - t.at < TL_TTL_MS) p.put("tl", JSONObject().put("s", t.s).put("c", r2(t.c)).put("ax", r2(t.ax)))
+        lastPayload = p
         sink(p)
     }
 
