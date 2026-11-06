@@ -168,7 +168,7 @@ class AnnotationView(context: Context) : View(context) {
         if (calibrating) drawCalibration3d(c, m)
         if (p != null) {
             p.optJSONObject("turn")?.let { t ->
-                val col = if (t.optInt("hit") > 0) Color.rgb(255, 70, 60) else Color.rgb(255, 200, 60)
+                val col = if (t.optInt("hit") > 0) Color.rgb(255, 70, 60) else if (t.optInt("est") == 1) Color.rgb(90, 200, 230) else Color.rgb(255, 200, 60)
                 val o = t.optJSONArray("o")?.let { points(it) }
                 val i = t.optJSONArray("i")?.let { points(it) }
                 val sw = t.optJSONArray("sw")?.let { points(it) }
@@ -490,7 +490,9 @@ class AnnotationView(context: Context) : View(context) {
      * 範圍裡有車或人（hit）就變紅。
      */
     private fun drawTurnPath(c: Canvas, m: AnnotationMapper, t: JSONObject) {
-        val col = if (t.optInt("hit") > 0) Color.rgb(255, 70, 60) else Color.rgb(255, 200, 60)
+        val est = t.optInt("est") == 1
+        // 預估的（方向盤還沒轉）畫淡一點的藍綠色，轉了之後是實際角度的黃色
+        val col = if (t.optInt("hit") > 0) Color.rgb(255, 70, 60) else if (est) Color.rgb(90, 200, 230) else Color.rgb(255, 200, 60)
         val outer = t.optJSONArray("o")?.let { points(it) } ?: return
         val inner = t.optJSONArray("i")?.let { points(it) } ?: return
         if (outer.size < 2 || inner.size < 2) return
@@ -503,6 +505,10 @@ class AnnotationView(context: Context) : View(context) {
         }
         c.drawPath(path, stroke)
         stroke.pathEffect = null
+        if (est) outer.lastOrNull()?.let { q ->
+            val t = "預估"
+            c.drawText(t, m.sx(q[0], q[1]) - text.measureText(t) / 2, m.sy(q[0], q[1]) - 6 * dp, text)
+        }
     }
 
     /** 以 (x, z) 為中心、半寬 hw、半長 hl、方向 yaw 的外框。 */

@@ -204,6 +204,7 @@ object Engine360Settings {
         slider("視野（越大東西越小）", 15f, 150f, "%.0f°", { prof.p3?.fovDeg }) { v -> p3 { it.copy(fovDeg = v) } }
         slider("看向的點 左右（− 左）", -10f, 10f, "%.1f m", { prof.p3?.tx }) { v -> p3 { it.copy(tx = v) } }
         slider("看向的點 前後（+ 前）", -15f, 15f, "%.1f m", { prof.p3?.tz }) { v -> p3 { it.copy(tz = v) } }
+        slider("看向的點 高度（整個畫面上下移）", -3f, 5f, "%.1f m", { prof.p3?.ty }) { v -> p3 { it.copy(ty = v) } }
         slider("範圍 左緣", 0f, 1f, "%.3f", { prof.p3?.clipL }) { v -> p3 { it.copy(clipL = v) } }
         slider("範圍 右緣", 0f, 1f, "%.3f", { prof.p3?.clipR }) { v -> p3 { it.copy(clipR = v) } }
         slider("範圍 上緣", 0f, 1f, "%.3f", { prof.p3?.clipT }) { v -> p3 { it.copy(clipT = v) } }

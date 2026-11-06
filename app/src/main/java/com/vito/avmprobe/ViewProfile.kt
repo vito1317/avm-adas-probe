@@ -21,7 +21,8 @@ data class ViewProfile(val top: AnnotationMapper.Params?, val p3: PerspectiveMap
             put("p3", JSONObject().put("l", p.clipL.toDouble()).put("t", p.clipT.toDouble())
                 .put("r", p.clipR.toDouble()).put("b", p.clipB.toDouble())
                 .put("az", p.azDeg.toDouble()).put("el", p.elDeg.toDouble()).put("d", p.dist.toDouble())
-                .put("fov", p.fovDeg.toDouble()).put("tx", p.tx.toDouble()).put("tz", p.tz.toDouble()))
+                .put("fov", p.fovDeg.toDouble()).put("tx", p.tx.toDouble()).put("tz", p.tz.toDouble())
+                .put("ty", p.ty.toDouble()))
         }
     }
 
@@ -41,7 +42,8 @@ data class ViewProfile(val top: AnnotationMapper.Params?, val p3: PerspectiveMap
                     clipR = it.optDouble("r").toFloat(), clipB = it.optDouble("b").toFloat(),
                     azDeg = it.optDouble("az").toFloat(), elDeg = it.optDouble("el").toFloat(),
                     dist = it.optDouble("d").toFloat(), fovDeg = it.optDouble("fov").toFloat(),
-                    tx = it.optDouble("tx").toFloat(), tz = it.optDouble("tz").toFloat()
+                    tx = it.optDouble("tx").toFloat(), tz = it.optDouble("tz").toFloat(),
+                    ty = it.optDouble("ty", 0.0).toFloat()
                 )
             }
             return ViewProfile(t, p)

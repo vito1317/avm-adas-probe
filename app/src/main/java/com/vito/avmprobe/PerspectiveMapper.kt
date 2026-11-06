@@ -13,7 +13,7 @@ import kotlin.math.tan
  * 把我們畫的立體自車線框疊到原廠的 3D 車模上就對準了。
  *
  * 鏡頭模型（orbit camera）：
- * - 看向目標點 T = ([Params.tx], 0, [Params.tz])（自車中心附近的地面）
+ * - 看向目標點 T = ([Params.tx], [Params.ty], [Params.tz])（自車中心附近，ty 是離地高度）
  * - [Params.azDeg]：鏡頭繞自車的方位角。0 = 在車正後方往前看，+ = 往右繞（從右後方看）
  * - [Params.elDeg]：俯角（鏡頭在目標點上方幾度）
  * - [Params.dist]：鏡頭到目標點的距離（公尺）
@@ -25,7 +25,9 @@ class PerspectiveMapper(val p: Params, val screenW: Int, val screenH: Int) {
     data class Params(
         val clipL: Float, val clipT: Float, val clipR: Float, val clipB: Float,
         val azDeg: Float, val elDeg: Float, val dist: Float, val fovDeg: Float,
-        val tx: Float, val tz: Float
+        val tx: Float, val tz: Float,
+        /** 看向的點離地多高（m）：整個畫面上下移。 */
+        val ty: Float = 0f
     ) {
         /** 左右鏡像（右燈視角的預設值 = 左燈視角的鏡像）。 */
         fun mirrored() = copy(azDeg = -azDeg, tx = -tx)
@@ -62,11 +64,11 @@ class PerspectiveMapper(val p: Params, val screenW: Int, val screenH: Int) {
         val az = Math.toRadians(p.azDeg.toDouble()); val el = Math.toRadians(p.elDeg.toDouble())
         val horiz = p.dist * cos(el).toFloat()
         cx = p.tx + horiz * sin(az).toFloat()
-        cy = p.dist * sin(el).toFloat()
+        cy = p.ty + p.dist * sin(el).toFloat()
         cz = p.tz - horiz * cos(az).toFloat()
 
         // 前方 f = 目標 − 鏡頭
-        var ax = p.tx - cx; var ay = 0f - cy; var az2 = p.tz - cz
+        var ax = p.tx - cx; var ay = p.ty - cy; var az2 = p.tz - cz
         var n = sqrt(ax * ax + ay * ay + az2 * az2)
         fx = ax / n; fy = ay / n; fz = az2 / n
         // 右方 r = up × f（up = +y）：(1·fz − 0, 0, 0 − 1·fx) = (fz, 0, −fx)

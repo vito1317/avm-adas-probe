@@ -51,7 +51,9 @@ object TurnPathPlanner {
         val inner: List<FloatArray>,
         val dir: Char,
         val radius: Float,
-        val innerFront: List<FloatArray> = emptyList()
+        val innerFront: List<FloatArray> = emptyList(),
+        /** 預估的（方向盤還沒轉、照道路彎度或典型半徑猜的），畫淡一點 */
+        val estimated: Boolean = false
     ) {
         /**
          * 車身掃過的範圍（閉合多邊形）：外側車頭角往前 → 終點車身前緣 → 內側後輪往回 → 起點車身內側。
@@ -89,9 +91,35 @@ object TurnPathPlanner {
             .coerceIn(-geo.maxWheelDeg, geo.maxWheelDeg)
         val k = tan(wheel * Math.PI / 180.0) / geo.wheelbase    // 後軸中心的曲率
         if (abs(k) < 1e-6) return null
-        val r = 1.0 / abs(k)
-        val sgn = sign(k)                                       // +1 = 向右
+        return arc(sign(k), 1.0 / abs(k), geo, estimated = false)
+    }
 
+    /** 預估用的路口轉彎半徑（後軸中心）：台灣靠右行駛，右轉是小彎、左轉要繞過對向車道是大彎。 */
+    const val EST_RIGHT_R = 6.5
+    const val EST_LEFT_R = 10.0
+    /** 前方道路彎度要至少這麼彎（半徑 80 m 內）才照著道路畫，不然當成路口用預估半徑。 */
+    const val ROAD_K_MIN = 1.0 / 80.0
+    /** 照著道路彎度畫時，半徑不小於這個（彎道上不會比路口還急）。 */
+    const val ROAD_R_MIN = 6.0
+    /** 預估轉彎只在這個速度以下（跟變道輔助的分界一樣）；以上打燈當成變道。 */
+    const val EST_MAX_KMH = 25f
+
+    /**
+     * 打了方向燈、方向盤還沒轉到 [MIN_STEER_DEG] 時的**預估**轉彎路徑（像變道預測一樣，一打燈就有）：
+     * - 前方道路本身往打燈那一側彎（[roadK]，正 = 往右彎，1/m）→ 照道路的彎度畫；
+     * - 否則當成路口轉彎，用典型半徑（右 [EST_RIGHT_R]、左 [EST_LEFT_R]）。
+     * 速度高於 [MAX_SPEED_KMH] 不畫（那是變道）。方向盤一轉過門檻就改用 [plan] 的實際角度。
+     */
+    fun estimate(turn: Char?, speedKmh: Float?, roadK: Double?, geo: VehicleGeometry = VehicleGeometry()): TurnPath? {
+        if (turn != 'L' && turn != 'R') return null
+        if (speedKmh == null || speedKmh > EST_MAX_KMH) return null   // 不知道車速或太快 → 當成變道
+        val sgn = if (turn == 'R') 1.0 else -1.0
+        val r = if (roadK != null && abs(roadK) >= ROAD_K_MIN && sign(roadK) == sgn) maxOf(ROAD_R_MIN, 1.0 / abs(roadK))
+        else if (turn == 'R') EST_RIGHT_R else EST_LEFT_R
+        return arc(sgn, r, geo, estimated = true)
+    }
+
+    private fun arc(sgn: Double, r: Double, geo: VehicleGeometry, estimated: Boolean): TurnPath {
         // 幾何：後軸中心起點 (0, zra)、朝 +z，轉彎中心在它的正側邊 r 處。
         // 走過弧角 t 之後（θ = sgn·t 是車身轉過的角度）：
         //   後軸 x = sgn·r·(1 − cos t)、z = zra + r·sin t，切線方向 = (sin θ, cos θ)
@@ -116,7 +144,7 @@ object TurnPathPlanner {
             innerPts.add(body(bx, bz, yaw, sgn * hw, 0.0))       // 內側後輪（就在後軸上）
             innerFront.add(body(bx, bz, yaw, sgn * hw, frontZ))  // 內側車頭角（收口用）
         }
-        return TurnPath(outer, innerPts, if (sgn > 0) 'R' else 'L', r.toFloat(), innerFront)
+        return TurnPath(outer, innerPts, if (sgn > 0) 'R' else 'L', r.toFloat(), innerFront, estimated)
     }
 
     /**

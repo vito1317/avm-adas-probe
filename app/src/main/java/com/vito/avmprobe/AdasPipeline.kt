@@ -685,7 +685,9 @@ class AdasPipeline(
                 .put("w", r2(o.w)).put("l", r2(o.l)).put("c", r2(o.conf)))
             p.put("obs", oa)
         }
+        // 轉彎：方向盤轉過門檻照實際角度；還沒轉、慢速打燈 → 照前方道路彎度（或路口典型半徑）預估
         val turnPlan = TurnPathPlanner.plan(vs.turn, vs.steerDeg, vs.speedKmh)
+            ?: TurnPathPlanner.estimate(vs.turn, vs.speedKmh, roadCurvatureAhead(now))
         if (turnPlan == null) turnHit = false
         // 變道預測：打方向燈、方向盤還沒轉到要轉彎 → 從目前車道畫到那一側車道。
         // 變道輔助有算出路徑（有車道線、速度夠）就用它的；沒有（慢速被當成可能轉彎、或沒偵測到車道）
@@ -713,14 +715,15 @@ class AdasPipeline(
             noLaneChange = false
             laneChangeBlocked = false
         }
-        TurnPathPlanner.plan(vs.turn, vs.steerDeg, vs.speedKmh)?.let { tp ->
+        turnPlan?.let { tp ->
             val outer = JSONArray(); for (q in tp.pts) outer.put(JSONArray().put(r2(q[0])).put(r2(q[1])))
             val inner = JSONArray(); for (q in tp.inner) inner.put(JSONArray().put(r2(q[0])).put(r2(q[1])))
             // 掃過範圍（兩端沿車身收口）：標注直接畫這個多邊形
             val swept = JSONArray(); for (q in tp.sweptPolygon()) swept.put(JSONArray().put(r2(q[0])).put(r2(q[1])))
             val hits = TurnPathPlanner.conflicts(tp, currentObjects(now).map { StartAssist.Obj(it.t, it.x, it.z) })
-            turnHit = hits.isNotEmpty()
+            turnHit = hits.isNotEmpty() && !tp.estimated   // 預估路徑只變色、不叫（是猜的，容易誤報）
             p.put("turn", JSONObject().put("o", outer).put("i", inner).put("sw", swept).put("d", tp.dir.toString())
+                .put("est", if (tp.estimated) 1 else 0)
                 .put("r", r2(tp.radius)).put("hit", hits.size))
         }
         startState?.let { st -> if (st.lead || st.green) p.put("start", JSONObject()
@@ -736,6 +739,25 @@ class AdasPipeline(
     }
 
     private fun spd(vs: VehicleState): Boolean { val s = vs.speedKmh; return s == null || s < 15f }
+
+    /**
+     * 前方道路的彎度（1/m，正 = 往右彎）：自車前方、跟車身大致平行的標線的曲率，依長度加權平均。
+     * RoadLine.k 的正負跟端點順序有關（k > 0 = 往左彎是指端點由後往前），先換成「由後往前」。
+     */
+    private fun roadCurvatureAhead(now: Long): Double? {
+        val rd = road ?: return null
+        if (now - roadAt > BEV_TTL_MS) return null
+        var sum = 0.0; var wsum = 0.0
+        for (l in rd.lines) {
+            val dx = l.x2 - l.x1; val dz = l.z2 - l.z1
+            val len = hypot(dx, dz)
+            if (len < 3f || abs(dz) < 2f * abs(dx)) continue
+            if (maxOf(l.z1, l.z2) < 0f || abs((l.x1 + l.x2) / 2f) > 6f) continue
+            val kFwd = if (dz >= 0f) l.k else -l.k      // 由後往前時 k > 0 = 往左彎
+            sum += -kFwd * len; wsum += len               // 換成正 = 往右彎
+        }
+        return if (wsum > 0) sum / wsum else null
+    }
 
     /** 使用者點選要停的格子（[AnnotationView] 點俯視圖）。 */
     val slotSelection = SlotSelection()

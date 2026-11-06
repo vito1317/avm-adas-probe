@@ -171,3 +171,33 @@ class TurnSweptPolygonTest {
         org.junit.Assert.assertTrue(poly.last()[0] > 0f && tp.inner[0][0] > 0f && poly[0][0] < 0f)
     }
 }
+
+class TurnEstimateTest {
+    @org.junit.Test
+    fun estimateAppearsWithSignalBeforeSteering() {
+        val e = TurnPathPlanner.estimate('R', 12f, null)!!
+        org.junit.Assert.assertTrue(e.estimated)
+        org.junit.Assert.assertEquals(TurnPathPlanner.EST_RIGHT_R, e.radius.toDouble(), 1e-3)
+        org.junit.Assert.assertTrue("右轉要往右", e.pts.last()[0] > 1f)
+        val l = TurnPathPlanner.estimate('L', 12f, null)!!
+        org.junit.Assert.assertEquals(TurnPathPlanner.EST_LEFT_R, l.radius.toDouble(), 1e-3)
+        org.junit.Assert.assertTrue("左轉要往左", l.pts.last()[0] < -1f)
+    }
+
+    @org.junit.Test
+    fun followsRoadCurvatureTowardSignal() {
+        // 道路往右彎半徑 30 m，打右燈 → 照道路
+        val e = TurnPathPlanner.estimate('R', 15f, 1.0 / 30.0)!!
+        org.junit.Assert.assertEquals(30.0, e.radius.toDouble(), 0.1)
+        // 道路往左彎，打右燈 → 不照道路（是路口右轉），用典型半徑
+        val f = TurnPathPlanner.estimate('R', 15f, -1.0 / 30.0)!!
+        org.junit.Assert.assertEquals(TurnPathPlanner.EST_RIGHT_R, f.radius.toDouble(), 1e-3)
+    }
+
+    @org.junit.Test
+    fun fastOrUnknownSpeedIsLaneChangeNotTurn() {
+        org.junit.Assert.assertNull(TurnPathPlanner.estimate('R', 40f, null))
+        org.junit.Assert.assertNull(TurnPathPlanner.estimate('R', null, null))
+        org.junit.Assert.assertNull(TurnPathPlanner.estimate(null, 10f, null))
+    }
+}
