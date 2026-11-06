@@ -33,6 +33,14 @@ data class ParkingSlot(val p: FloatArray, val kind: Char, val occupied: Boolean,
  */
 class ParkingSlotDetector {
 
+    /** 除錯用：設了就把配對與格子驗證每一步的淘汰原因丟出來（實車漏抓時逐步追）。平常是 null，沒有成本。 */
+    var trace: ((String) -> Unit)? = null
+
+    private fun tag(a: Int, b: Int): String {
+        val la = lines[a]; val lb = lines[b]
+        return "(%.2f,%.2f)+(%.2f,%.2f)".format(la.cx, la.cz, lb.cx, lb.cz)
+    }
+
     companion object {
         private const val PAINT_MIN = 50
         private const val NEUTRAL_MAX = 60
@@ -59,6 +67,12 @@ class ParkingSlotDetector {
         private const val DEPTH_PAR = 6.0
         private const val LANE_LEN = 7.0
         private const val CROSS_REACH = 1.2   // 橫線自身線段可以離交點多遠（m）
+        /** 橫線往「被自車擋住的那條長邊」延伸不到時，容許差這麼多（自車旁邊的地面被車身擋住）。 */
+        private const val CROSS_REACH_EGO = 1.8
+        /** 跟自車平行、貼著自車側邊（外框外 0.5 m 內）的線 → 視為跟自車共用、被車身擋住的分隔線。 */
+        private const val EGO_ADJ_OUT = 0.5
+        private const val EGO_ADJ_IN = 0.15
+        private val COS_EGO_PAR = cos(8.0 * PI / 180.0)
         private const val GLYPH_M = 0.60      // 遮罩元件兩個方向都小於此值 → 字形（車位號碼、箭頭、污漬）
         private const val RUN_GAP = 1.0
         private const val END_GAP = 0.8
@@ -97,6 +111,8 @@ class ParkingSlotDetector {
     // ---------------------------------------------------------------- 內部資料
     private class Line(val cx: Double, val cz: Double, val ux: Double, val uz: Double, var pieces: DoubleArray, val n: Int) {
         var wT: DoubleArray? = null  // 線寬取樣（每條線算一次）：參數與半高寬
+        /** 因為被自車擋住而補上的那段（線參數 t0, t1）；它的兩端不是真的線尾。 */
+        var occ: DoubleArray? = null
         var wW = DoubleArray(0)
         var wN = 0
     }
@@ -234,6 +250,7 @@ class ParkingSlotDetector {
         if (nVis >= 1000 && nMask >= TEXTURE_MAX * nVis) return emptyList()
         buildLines()
         for (l in lines) extend(l)
+        markEgoAdjacent(exclude)
         if (prof != null) { val t = System.nanoTime(); prof[1] += t - t0; t0 = t }
         val cells = ArrayList<Cell>()
         for (a in lines.indices) for (b in a + 1 until lines.size) pair(a, b, cells)
@@ -1025,11 +1042,66 @@ class ParkingSlotDetector {
         return (wc >= WIDE_MIN && wc >= WIDE_RATIO * ws) || (ws >= WIDE_MIN && ws >= WIDE_RATIO * wc)
     }
 
+    /** 被自車擋住的分隔線（index）。 */
+    private val egoAdj = HashSet<Int>()
+    /** 自車外框（排除區裡含原點的那個）；沒有 = null。 */
+    private var egoBox: FloatArray? = null
+
+    /**
+     * 自己停在格子裡時，跟隔壁格共用的那條分隔線緊貼著自車側邊，大半被自己的車身擋住
+     * （側鏡頭往下拍，車身鼓出來遮住車邊的地面），只看得到車頭或車尾旁邊一小段 → 格子湊不起來
+     * （實車：露天停車場，左邊一格空位就是這樣漏掉的）。
+     * 跟自車平行、貼著自車外框的線：延伸到整個車身長度，並記下來讓橫邊往它延伸時放寬。
+     */
+    private fun markEgoAdjacent(exclude: List<FloatArray>) {
+        egoAdj.clear()
+        egoBox = null
+        val ego = exclude.firstOrNull { it[0] <= 0f && 0f <= it[2] && it[1] <= 0f && 0f <= it[3] } ?: return
+        egoBox = ego
+        for ((i, l) in lines.withIndex()) {
+            if (abs(l.uz) < COS_EGO_PAR) continue
+            // 線在 z 方向的範圍，跟自車有沒有前後重疊
+            var tMin = Double.MAX_VALUE; var tMax = -Double.MAX_VALUE
+            var k = 0
+            while (k < l.pieces.size) { tMin = min(tMin, l.pieces[k]); tMax = max(tMax, l.pieces[k + 1]); k += 2 }
+            val zA = l.cz + tMin * l.uz; val zB = l.cz + tMax * l.uz
+            if (max(zA, zB) < ego[1] || min(zA, zB) > ego[3]) continue
+            // 橫向位置（取線在自車中段 z = 0 的 x）
+            val x0 = l.cx + (0.0 - l.cz) / l.uz * l.ux
+            val left = x0 < 0
+            val edge = if (left) ego[0].toDouble() else ego[2].toDouble()
+            val out = if (left) edge - x0 else x0 - edge          // 在外框外多遠（負 = 伸進外框）
+            if (out < -EGO_ADJ_IN || out > EGO_ADJ_OUT) continue
+            val t0 = (ego[1] - l.cz) / l.uz; val t1 = (ego[3] - l.cz) / l.uz
+            // 只有真的被擋住（車身範圍內看得到的不到一半）才補；整條看得到的線不動
+            val lo = min(t0, t1); val hi = max(t0, t1)
+            var seen = 0.0
+            k = 0
+            while (k < l.pieces.size) { seen += max(0.0, min(hi, l.pieces[k + 1]) - max(lo, l.pieces[k])); k += 2 }
+            if (seen >= 0.5 * (hi - lo)) continue
+            // 延伸到整個車身長度
+            val add = doubleArrayOf(min(t0, t1).toDouble(), max(t0, t1).toDouble())
+            val all = l.pieces + add
+            sortPairs(all)
+            val mg = DoubleArray(all.size); var m = 0
+            for (q in 0 until all.size / 2) {
+                val a = all[2 * q]; val b = all[2 * q + 1]
+                if (m > 0 && a - mg[2 * m - 1] <= GAP_M) mg[2 * m - 1] = max(mg[2 * m - 1], b)
+                else { mg[2 * m] = a; mg[2 * m + 1] = b; m++ }
+            }
+            l.pieces = mg.copyOf(2 * m)
+            l.occ = add
+            egoAdj.add(i)
+            trace?.invoke("ego 共用線 (%.2f,%.2f) 在自車%s %.2f m 外，延伸到整個車身".format(l.cx, l.cz, if (left) "左" else "右", out))
+        }
+    }
+
     // ---------------------------------------------------------------- 3. 長邊對 → 橫邊 → 格子
     private fun pair(a: Int, b: Int, cells: ArrayList<Cell>) {
         val la = lines[a]; val lb = lines[b]
         val dot = la.ux * lb.ux + la.uz * lb.uz
         if (abs(la.ux * lb.uz - la.uz * lb.ux) > SIN_PAR) return
+        val tr = trace
         val sg = if (dot >= 0) 1.0 else -1.0
         var ux = la.ux + sg * lb.ux; var uz = la.uz + sg * lb.uz
         val nn = hypot(ux, uz)
@@ -1041,11 +1113,13 @@ class ParkingSlotDetector {
         for (k in 0 until pa.size / 2) maxA = max(maxA, pa[2 * k + 1])
         for (k in 0 until pb.size / 2) maxB = max(maxB, pb[2 * k + 1])
         val lo = max(minA, minB); val hi = min(maxA, maxB)
-        if (hi - lo < PAIR_OVL) return
+        if (hi - lo < PAIR_OVL) { tr?.invoke("pair ${tag(a, b)} 重疊不足 ${hi - lo}"); return }
         val tm = 0.5 * (lo + hi)
         val xa = f.onX(la, tm); val za = f.onZ(la, tm); val xb = f.onX(lb, tm); val zb = f.onZ(lb, tm)
         val wdt = abs((xb - xa) * (-uz) + (zb - za) * ux)
         if (wdt < PAIR_WMIN || wdt > PAIR_WMAX) return
+        tr?.invoke("pair ${tag(a, b)} 寬 %.2f 重疊 %.2f".format(wdt, hi - lo))
+        val nCells0 = cells.size
         var crs = ArrayList<Crossing>()
         for ((ci, cl) in lines.withIndex()) {
             if (ci == a || ci == b) continue
@@ -1060,10 +1134,17 @@ class ParkingSlotDetector {
             var pi = 3
             while (pi < cl.pieces.size) { if (cl.pieces[pi] > tc1) tc1 = cl.pieces[pi]; pi += 2 }
             var reach = 0.0
-            for (pt in arrayOf(pA, pB)) {
+            for ((pk, pt) in arrayOf(pA, pB).withIndex()) {
                 val tc = (pt[0] - cl.cx) * cl.ux + (pt[1] - cl.cz) * cl.uz
-                if (tc0 - tc > reach) reach = tc0 - tc
-                if (tc - tc1 > reach) reach = tc - tc1
+                var r = 0.0
+                if (tc0 - tc > r) r = tc0 - tc
+                if (tc - tc1 > r) r = tc - tc1
+                // 往被自車擋住的那條長邊延伸不到：放寬（那段地面被車身擋住）。
+                // 但緊貼自車頭尾（0.3 m 內）的橫線不放寬：那多半是排除區邊緣弄出來的假線
+                val eb = egoBox
+                val nearEgoEnd = eb != null && (abs(cl.cz - eb[1]) < 0.3 || abs(cl.cz - eb[3]) < 0.3)
+                val lim = if ((if (pk == 0) a else b) in egoAdj && !nearEgoEnd) CROSS_REACH_EGO else CROSS_REACH
+                if (r - lim > reach - CROSS_REACH) reach = r - lim + CROSS_REACH
             }
             if (reach > CROSS_REACH) continue
             val tA = (pA[0] - f.ox) * ux + (pA[1] - f.oz) * uz
@@ -1082,6 +1163,7 @@ class ParkingSlotDetector {
             if (dup < 0) ded.add(c) else if (c.ev > ded[dup].ev) ded[dup] = c
         }
         crs = ded
+        tr?.invoke("pair ${tag(a, b)} 橫邊 ${crs.size} 條：" + crs.joinToString { "t=%.2f%s".format(it.t, if (it.perp) "⊥" else "∠") })
         // 開口端：兩條線在同一側真的結束（後面看得到地面但沒有線）
         val nline = crs.size
         val endsA = ends(la, f, pa); val endsB = ends(lb, f, pb)
@@ -1116,6 +1198,7 @@ class ParkingSlotDetector {
             if (abs(c0.vx * c1.vz - c0.vz * c1.vx) > SIN_12) continue
             cells.add(Cell(a, b, f, wdt, c0, c1, 1, 0.5 * (lA + lB), false, ""))
         }
+        tr?.invoke("pair ${tag(a, b)} 兩端都有橫邊的格子 ${cells.size - nCells0} 個")
         // 單側格：入口有 T/L 標記（或兩條分隔線在入口同時結束），另一端出畫面或沒畫
         for ((k, c) in crs.withIndex()) {
             if (c.open) {
@@ -1171,10 +1254,16 @@ class ParkingSlotDetector {
     private fun ends(l: Line, f: Frame, pcs: DoubleArray): DoubleArray {
         val out = ArrayList<Double>()
         val n = pcs.size / 2
+        // 被自車擋住而補上的那段，換到這個 Frame 的參數（端點落在這附近的不算真的線尾）
+        val occF = l.occ?.let { o ->
+            val a = f.pieces(Line(l.cx, l.cz, l.ux, l.uz, doubleArrayOf(o[0], o[1]), 0))
+            doubleArrayOf(a[0], a[1])
+        }
+        fun synthetic(t: Double) = occF != null && (abs(t - occF[0]) < 0.3 || abs(t - occF[1]) < 0.3)
         for (q in 0 until n) {
             val p0 = pcs[2 * q]; val p1 = pcs[2 * q + 1]
-            if ((q == 0 || p0 - pcs[2 * q - 1] >= END_GAP) && realEnd(l, f, p0, -1)) { out.add(p0); out.add(-1.0) }
-            if ((q == n - 1 || pcs[2 * q + 2] - p1 >= END_GAP) && realEnd(l, f, p1, 1)) { out.add(p1); out.add(1.0) }
+            if ((q == 0 || p0 - pcs[2 * q - 1] >= END_GAP) && !synthetic(p0) && realEnd(l, f, p0, -1)) { out.add(p0); out.add(-1.0) }
+            if ((q == n - 1 || pcs[2 * q + 2] - p1 >= END_GAP) && !synthetic(p1) && realEnd(l, f, p1, 1)) { out.add(p1); out.add(1.0) }
         }
         return out.toDoubleArray()
     }
@@ -1234,7 +1323,8 @@ class ParkingSlotDetector {
         } else if (ang) {
             if (2.0 <= w && w <= 3.4 && 4.0 <= len && len <= 7.0) kinds.append('a')
         }
-        if (kinds.isEmpty()) return null
+        val tr = trace
+        if (kinds.isEmpty()) { tr?.invoke("eval ${tag(c.a, c.b)} 種類不合：寬 %.2f 長 %.2f perp=$perp open=$nOpen one=${c.one}".format(w, len)); return null }
         val ak: DoubleArray; val bk: DoubleArray; val am: DoubleArray; val bm: DoubleArray
         if (c1 == null) {
             ak = doubleArrayOf(c0.pAx, c0.pAz); bk = doubleArrayOf(c0.pBx, c0.pBz)
@@ -1243,9 +1333,13 @@ class ParkingSlotDetector {
             ak = doubleArrayOf(c0.pAx, c0.pAz); bk = doubleArrayOf(c0.pBx, c0.pBz)
             am = doubleArrayOf(c1.pAx, c1.pAz); bm = doubleArrayOf(c1.pBx, c1.pBz)
         }
-        // 長邊支持度
-        val rA = ratioOn(f, la, min(tA0, tA1) + 0.2, max(tA0, tA1) - 0.2)
-        val rB = ratioOn(f, lb, min(tB0, tB1) + 0.2, max(tB0, tB1) - 0.2)
+        // 長邊支持度。跟自車共用、被車身擋住的分隔線（[markEgoAdjacent]）看得到的本來就只有一小段，
+        // 支持度沒有參考價值 → 不足時當作剛好及格
+        val adjA = c.a in egoAdj; val adjB = c.b in egoAdj
+        val rA0 = ratioOn(f, la, min(tA0, tA1) + 0.2, max(tA0, tA1) - 0.2)
+        val rB0 = ratioOn(f, lb, min(tB0, tB1) + 0.2, max(tB0, tB1) - 0.2)
+        val rA = if (adjA && (rA0.isNaN() || rA0 < 0.6)) 0.6 else rA0
+        val rB = if (adjB && (rB0.isNaN() || rB0 < 0.6)) 0.6 else rB0
         // 四角：長邊靠角 0.12–0.6 m 與橫邊靠角
         var cornersOk = 0
         var cornersN = 0
@@ -1264,22 +1358,25 @@ class ParkingSlotDetector {
         }
         var row = false
         if (c.one && c0.open) {
-            if (rA.isNaN() || rB.isNaN() || rA < 0.6 || rB < 0.6 || w > OPEN_WMAX) return null
+            if (rA.isNaN() || rB.isNaN() || rA < 0.6 || rB < 0.6 || w > OPEN_WMAX) { tr?.invoke("eval ${tag(c.a, c.b)} 單側開口 rA=%.2f rB=%.2f w=%.2f".format(rA, rB, w)); return null }
             row = true
         } else if (c.one) {
-            val hidden = c0.cA.isNaN() || c0.cB.isNaN()
-            if (cornersOk < 1 || (cornersOk < 2 && cornersN == 2 && !hidden)) return null
+            val hidden = c0.cA.isNaN() || c0.cB.isNaN() || adjA || adjB
+            if (cornersOk < 1 || (cornersOk < 2 && cornersN == 2 && !hidden)) { tr?.invoke("eval ${tag(c.a, c.b)} 單側角不足 $cornersOk/$cornersN"); return null }
         } else if (nOpen == 0) {
             val okA = rA >= 0.35; val okB = rB >= 0.35
             val sepOk = (okA && okB) || (okA && rB.isNaN()) || (okB && rA.isNaN())
-            if (!sepOk && cornersOk < 3) return null
+            if (!sepOk && cornersOk < 3) { tr?.invoke("eval ${tag(c.a, c.b)} 長邊支持不足 rA=%.2f rB=%.2f 角 $cornersOk/$cornersN".format(rA, rB)); return null }
         } else if (nOpen == 1) {
-            if (rA.isNaN() || rB.isNaN() || rA < 0.5 || rB < 0.5 || cornersOk < 1) return null
+            // 角：被自車擋住的那側角看不到，另一側有一個角就夠
+            if (rA.isNaN() || rB.isNaN() || rA < 0.5 || rB < 0.5 || (cornersOk < 1 && !(adjA || adjB))) {
+                tr?.invoke("eval ${tag(c.a, c.b)} 一端開口：rA=%.2f rB=%.2f 角 $cornersOk/$cornersN 長 %.2f".format(rA, rB, len)); return null
+            }
         } else {
-            if (rA.isNaN() || rB.isNaN() || rA < 0.6 || rB < 0.6 || w > OPEN_WMAX) return null
+            if (rA.isNaN() || rB.isNaN() || rA < 0.6 || rB < 0.6 || w > OPEN_WMAX) { tr?.invoke("eval ${tag(c.a, c.b)} 兩端開口 rA=%.2f rB=%.2f".format(rA, rB)); return null }
         }
         // 格內不得有平行線 / 橫線
-        if (interior(f, c.a, c.b, tA0, tA1, tB0, tB1, c0, c1)) return null
+        if (interior(f, c.a, c.b, tA0, tA1, tB0, tB1, c0, c1)) { tr?.invoke("eval ${tag(c.a, c.b)} 格內有線"); return null }
         val rsep = if (!rA.isNaN() && !rB.isNaN()) (rA + rB) / 2.0 else if (!rA.isNaN()) rA else if (!rB.isNaN()) rB else 0.3
         val cfrac = if (cornersN > 0) cornersOk.toDouble() / cornersN else 0.5
         var endsEv = 0.0
@@ -1288,9 +1385,10 @@ class ParkingSlotDetector {
             endsEv += if (cr == null) 0.3 else if (cr.open) 0.6 else cr.ev
         }
         val score = 0.35 * min(1.0, rsep / 0.8) + 0.15 * endsEv + 0.25 * cfrac + 0.1 * (if (c1 != null) 1.0 else 0.0)
-        if (score < 0.40) return null
-        if (clutter(ak, bk, bm, am) > CLUTTER_MAX) return null
-        if (ring(ak, bk, am) > RING_MAX) return null
+        if (score < 0.40) { tr?.invoke("eval ${tag(c.a, c.b)} 分數 %.2f < 0.40（rA=%.2f rB=%.2f 角 $cornersOk/$cornersN）".format(score, rA, rB)); return null }
+        if (clutter(ak, bk, bm, am) > CLUTTER_MAX) { tr?.invoke("eval ${tag(c.a, c.b)} 雜線太多"); return null }
+        if (ring(ak, bk, am) > RING_MAX) { tr?.invoke("eval ${tag(c.a, c.b)} 外圍紋理太多"); return null }
+        tr?.invoke("eval ${tag(c.a, c.b)} 通過 分數 %.2f 種類 $kinds".format(score))
         return Cand(c, kinds.toString(), ak, bk, am, bm, score, row)
     }
 
