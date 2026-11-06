@@ -104,7 +104,18 @@ class AnnotationView(context: Context) : View(context) {
      */
     override fun onTouchEvent(e: android.view.MotionEvent): Boolean {
         if (e.actionMasked != android.view.MotionEvent.ACTION_DOWN) return false
-        val top = currentProfile().top ?: return false
+        val prof = currentProfile()
+        // 點 3D 畫面上的格子也能選（反投影到地面）
+        prof.p3?.takeIf { !suspend3d }?.let { p3 ->
+            val m3 = PerspectiveMapper(p3, width, height)
+            if (e.x >= m3.clipLeft && e.x <= m3.clipRight && e.y >= m3.clipTop && e.y <= m3.clipBottom) {
+                val g = m3.unprojectToGround(e.x, e.y) ?: return false
+                val hit = onTapGround?.invoke(g[0], g[1]) ?: false
+                if (hit) postInvalidate()
+                return hit
+            }
+        }
+        val top = prof.top ?: return false
         val m = AnnotationMapper(top, width, height)
         if (!m.inside(e.x, e.y)) return false
         val sg = if (top.flip) -1f else 1f
@@ -181,6 +192,7 @@ class AnnotationView(context: Context) : View(context) {
         c.clipRect(m.clipLeft, m.clipTop, m.clipRight, m.clipBottom)
         if (calibrating) drawCalibration3d(c, m)
         if (p != null) {
+            p.optJSONArray("slots")?.let { drawSlots3d(c, m, it) }
             p.optJSONObject("turn")?.let { t ->
                 val col = if (t.optInt("hit") > 0) Color.rgb(255, 70, 60) else if (t.optInt("est") == 1) Color.rgb(90, 200, 230) else Color.rgb(255, 200, 60)
                 val o = t.optJSONArray("o")?.let { points(it) }
@@ -204,6 +216,51 @@ class AnnotationView(context: Context) : View(context) {
             p.optJSONArray("objs")?.let { drawObjects3d(c, m, it) }
         }
         c.restore()
+    }
+
+    /**
+     * 停車格畫在 3D 畫面的地面上（跟俯視圖一樣只畫空格）：綠色框；選好的那格藍色粗框，
+     * 格子中央上方立一個「P 停這格」標記，從斜後方看也知道是哪一格。
+     */
+    private fun drawSlots3d(c: Canvas, m: PerspectiveMapper, a: JSONArray) {
+        for (i in 0 until a.length()) {
+            val s = a.optJSONObject(i) ?: continue
+            if (s.optInt("o") == 1) continue
+            val q = s.optJSONArray("p") ?: continue
+            if (q.length() < 8) continue
+            val corners = (0 until 4).map { k -> floatArrayOf(q.optDouble(k * 2).toFloat(), q.optDouble(k * 2 + 1).toFloat()) }
+            // 邊切細一點再投影：格子很近時直線投影後還是直線，但一角跑到鏡頭後面時，剩下的部分還畫得出來
+            val dense = ArrayList<FloatArray>()
+            for (k in 0 until 4) {
+                val a0 = corners[k]; val a1 = corners[(k + 1) % 4]
+                for (t in 0 until 6) { val f = t / 6f; dense.add(floatArrayOf(a0[0] + (a1[0] - a0[0]) * f, a0[1] + (a1[1] - a0[1]) * f)) }
+            }
+            val sel = s.optInt("sel") == 1
+            val col = if (sel) Color.rgb(60, 150, 255) else Color.rgb(80, 230, 120)
+            val pts = dense.mapNotNull { m.project(it[0], 0f, it[1]) }
+            if (pts.size < 3) continue
+            path.reset()
+            pts.forEachIndexed { k, pt -> if (k == 0) path.moveTo(pt[0], pt[1]) else path.lineTo(pt[0], pt[1]) }
+            path.close()
+            fill.color = col; fill.alpha = if (sel) 80 else 45
+            c.drawPath(path, fill)
+            stroke.color = col; stroke.alpha = 235; stroke.pathEffect = null
+            val old = stroke.strokeWidth
+            stroke.strokeWidth = if (sel) 5f * dp else old
+            c.drawPath(path, stroke)
+            stroke.strokeWidth = old
+            if (sel) {
+                val cx = corners.sumOf { it[0].toDouble() }.toFloat() / 4f
+                val cz = corners.sumOf { it[1].toDouble() }.toFloat() / 4f
+                val base = m.project(cx, 0f, cz) ?: continue
+                val top = m.project(cx, 1.2f, cz) ?: continue
+                stroke.strokeWidth = 3f * dp
+                c.drawLine(base[0], base[1], top[0], top[1], stroke)
+                stroke.strokeWidth = old
+                val t = "P 停這格"
+                c.drawText(t, top[0] - text.measureText(t) / 2f, top[1] - 4f * dp, text)
+            }
+        }
     }
 
     /** 地面（y = 0）上的多邊形。鏡頭背後的點丟掉（鏡頭在車後上方往前看，丟的都是看不到的部分）。 */

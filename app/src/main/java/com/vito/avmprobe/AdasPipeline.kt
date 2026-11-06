@@ -480,7 +480,8 @@ class AdasPipeline(
         val tDets = ArrayList<Det>()
         for (d in dets) {
             if (d.type == ObjTypes.LIGHT) { considerTrafficLightVirtual(v, argb, d, now); continue }
-            val w = toWorldVirtual(v, d.rect.centerX().toDouble(), d.rect.bottom.toDouble(), d.type) ?: continue
+            val w = toWorldVirtual(v, d.rect.centerX().toDouble(), d.rect.bottom.toDouble(), d.type,
+                widthRange(v, d.rect.left.toDouble(), d.rect.right.toDouble(), d.rect.bottom.toDouble(), d.type)) ?: continue
             objs.add(WObj(d.type, w[0], w[1], d.score, w[2]))
             if (w[3] > 0f) tDets.add(Det(d.type, w[0], w[1], d.score, cam = "front", atMs = atMs))
         }
@@ -489,11 +490,17 @@ class AdasPipeline(
     }
 
     /** 虛擬鏡頭裡偵測框底部中點 → 世界座標（跟 [toWorld] 同一套處理：太遠用方位角、推到物件中心、離自車距離）。 */
-    private fun toWorldVirtual(v: VirtualView, u: Double, vv: Double, t: String): FloatArray? {
+    private fun toWorldVirtual(v: VirtualView, u: Double, vv: Double, t: String, widthDist: Double? = null): FloatArray? {
         val c = v.cam
         val gp = v.groundAt(u, vv)
+        val gd = gp?.let { hypot(it[0] - c.px, it[1] - c.pz) }
         val nx: Double; val nz: Double; val real: Float
-        if (gp != null && hypot(gp[0] - c.px, gp[1] - c.pz) < 40.0) {
+        if (widthDist != null && (gd == null || gd >= 40.0 || widthDist > gd)) {
+            // 用車寬估的比較遠 → 用車寬的（前鏡頭裝得低、俯角校正差一點，遠處接地點就會被算得太近）
+            val r = v.rayAt(u, vv)
+            val az = atan2(r[0], r[2])
+            nx = c.px + Math.sin(az) * widthDist; nz = c.pz + Math.cos(az) * widthDist; real = 1f
+        } else if (gp != null && gd != null && gd < 40.0) {
             nx = gp[0]; nz = gp[1]; real = 1f
         } else {
             val r = v.rayAt(u, vv)
@@ -501,6 +508,23 @@ class AdasPipeline(
             nx = c.px + Math.sin(az) * 15.0; nz = c.pz + Math.cos(az) * 15.0; real = 0f
         }
         return finishWorld(c, nx, nz, real, t)
+    }
+
+    /**
+     * 用車寬估距離：車尾大約多寬是固定的（轎車 1.8 m），偵測框左右緣兩條射線夾的水平角 → 距離。
+     * 只看方位角，不受鏡頭俯角、高度校正誤差影響（接地點法在遠處差一兩度就差好幾公尺）。
+     * 框碰到畫面邊緣（車只拍到一部分）或不是汽車類 → null。斜著看到車側時框比較寬、估得比較近，
+     * 呼叫端只在「車寬估的比接地點遠」時採用，所以不會因為這樣變得更近。
+     */
+    private fun widthRange(v: VirtualView, left: Double, right: Double, bottom: Double, t: String): Double? {
+        val wReal = when (t) { "car" -> 1.8; "van" -> 1.9; "bus", "truck" -> 2.5; else -> return null }
+        val m = v.size * 0.02
+        if (left < m || right > v.size - m || right - left < 4) return null
+        val a = v.rayAt(left, bottom); val b = v.rayAt(right, bottom)
+        var ang = abs(atan2(a[0], a[2]) - atan2(b[0], b[2]))
+        if (ang > Math.PI) ang = 2 * Math.PI - ang
+        if (ang < 1e-3) return null
+        return (wReal / 2.0 / kotlin.math.tan(ang / 2.0)).coerceAtMost(60.0)
     }
 
     private fun runTrafficLightVirtual(det: Yolo, g: AvmGeometry) {
