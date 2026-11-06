@@ -6,6 +6,7 @@ import kotlin.math.exp
 import kotlin.math.ln
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
 /**
@@ -90,6 +91,27 @@ object AutoCalibrator {
         }
     }
 
+    /** 局部平均（半徑 [r]），NaN 保持 NaN。 */
+    fun boxBlur(v: FloatArray, w: Int, h: Int, r: Int): FloatArray {
+        if (r <= 0) return v
+        val ig = Integral(v, w, h)
+        return FloatArray(v.size) { i -> if (v[i].isNaN()) Float.NaN else ig.mean(i % w - r, i / w - r, i % w + r + 1, i / w + r + 1, 0.3f) }
+    }
+
+    /**
+     * 比對用的特徵：先模糊、再扣掉大範圍平均 → 只留下約 1 公尺大小的結構（停車格線、草地邊界、路緣）。
+     * 實車驗證：原廠畫面經過它自己的融合／模糊／色彩處理，細紋理（柏油、草的顆粒）跟我們的完全不同，
+     * 用細紋理比，正確位置的相關只有 0.14、比錯的位置還低；用這個頻帶是 0.80，全域搜尋也找得到。
+     * 半徑跟著解析度變（[w] 是影像寬）：模糊 w/80、去低頻 w/16。
+     */
+    fun bandFeature(v: FloatArray, w: Int, h: Int, refW: Int = w): FloatArray =
+        highpass(boxBlur(v, w, h, max(1, refW / 80)), w, h, max(3, refW / 16))
+
+    /** 俯視圖比對的頻帶，用**公尺**定：模糊約 [BAND_BLUR_M]、去掉大於約 [BAND_HP_M] 的結構；換成這個比例下的像素半徑。 */
+    private const val BAND_BLUR_M = 0.12f
+    private const val BAND_HP_M = 0.6f
+    private fun bandRadii(ppm: Float) = max(1, (BAND_BLUR_M * ppm).roundToInt()) to max(3, (BAND_HP_M * ppm).roundToInt())
+
     /** 扣掉局部平均（半徑 [r]），NaN 保持 NaN。 */
     fun highpass(v: FloatArray, w: Int, h: Int, r: Int = HP_R): FloatArray {
         val ig = Integral(v, w, h)
@@ -154,6 +176,10 @@ object AutoCalibrator {
     /** 我們的地面畫成「每公尺 [ppm] 像素」的模板（中心 = 自車），去低頻；自車與看不到的 = NaN。 */
     private class Template(val w: Int, val h: Int, val v: FloatArray, val idx: IntArray)
 
+    /**
+     * [refW] 是比對影像（原廠畫面縮圖）的寬：模板的模糊／去低頻半徑要跟它一樣（同一個像素尺度），
+     * 兩邊才是同一個頻帶。
+     */
     private fun template(bev: Bev, ppm: Float, flip: Boolean): Template? {
         val tw = ceil(2 * BEV_X * ppm).toInt(); val th = ceil(2 * BEV_Z * ppm).toInt()
         if (tw < 8 || th < 8) return null
@@ -164,7 +190,8 @@ object AutoCalibrator {
             val z = -sg * (j + 0.5f - th / 2f) / ppm
             raw[j * tw + i] = if (abs(x) < EGO_HW && abs(z) < EGO_HL) Float.NaN else bev.area(x, z, 1f / ppm)
         }
-        val hp = highpass(raw, tw, th)
+        val (rb, rh) = bandRadii(ppm)
+        val hp = highpass(boxBlur(raw, tw, th, rb), tw, th, rh)
         // 取樣：最多 ~1500 個有效點，免得大比例時太慢
         val valid = hp.indices.filter { !hp[it].isNaN() }
         if (valid.size < 60) return null
@@ -194,9 +221,12 @@ object AutoCalibrator {
         data class Best(val ppm: Float, val cx: Int, val cy: Int, val flip: Boolean, val s: Float)
         fun search(outW: Int, ppms: List<Float>, flips: List<Boolean>, cxs: IntProgression?, cys: IntProgression?): Pair<List<Best>, Pair<Int, Int>> {
             val (lum, sh) = shrink(scr.argb, scr.w, scr.h, outW)
-            val hp = highpass(lum, outW, sh)
+            // 原廠畫面的特徵依比例（頻帶半徑）快取：同一個公尺頻帶在不同比例下是不同的像素半徑
+            val feats = HashMap<Pair<Int, Int>, FloatArray>()
             val all = ArrayList<Best>()
             for (flip in flips) for (ppm in ppms) {
+                val rr = bandRadii(ppm)
+                val hp = feats.getOrPut(rr) { highpass(boxBlur(lum, outW, sh, rr.first), outW, sh, rr.second) }
                 val t = template(bev, ppm, flip) ?: continue
                 val buf = FloatArray(t.idx.size); val tv = FloatArray(t.idx.size)
                 val xs = cxs ?: (0 until outW step 3); val ys = cys ?: (0 until sh step 3)
@@ -208,21 +238,24 @@ object AutoCalibrator {
             return all to (outW to sh)
         }
         // 粗搜：每公尺佔畫面高度 3%～40%；留前幾個「彼此不同」的候選（位置差 4 px 以上、或比例差一成、或翻轉不同）
-        val (_, coarseH) = shrink(scr.argb, scr.w, scr.h, 160)
+        // 粗搜解析度：原廠畫面寬的 1/8（1920 → 240）。再粗的話整個螢幕裡車只剩二十幾個像素，
+        // 右邊 3D 畫面的某些地方會被當成俯視圖（實車截圖就是這樣錯的）
+        val cW = (scr.w / 8).coerceIn(160, 320); val fW = cW * 2
+        val (_, coarseH) = shrink(scr.argb, scr.w, scr.h, cW)
         val ppmMin = 0.03f * coarseH; val ppmMax = 0.40f * coarseH
         val ppms = (0 until 16).map { ppmMin * exp(ln(ppmMax / ppmMin) * it / 15f) }
-        val (all, _) = search(160, ppms, listOf(false, true), null, null)
+        val (all, _) = search(cW, ppms, listOf(false, true), null, null)
         val picks = ArrayList<Best>()
         for (c in all.sortedByDescending { it.s }) {
             if (picks.none { it.flip == c.flip && abs(it.cx - c.cx) < 4 && abs(it.cy - c.cy) < 4 && abs(ln(it.ppm / c.ppm)) < 0.1f }) picks.add(c)
-            if (picks.size >= 6) break
+            if (picks.size >= 10) break
         }
         if (picks.isEmpty()) return null
         // 細修：寬 320，在每個候選附近
         var bestFine: Best? = null; var size = 0 to 0
         for (coarse in picks) {
             val fppms = (-6..6).map { coarse.ppm * 2f * (1f + 0.025f * it) }
-            val (f, sz) = search(320, fppms, listOf(coarse.flip), (coarse.cx * 2 - 6)..(coarse.cx * 2 + 6), (coarse.cy * 2 - 6)..(coarse.cy * 2 + 6))
+            val (f, sz) = search(fW, fppms, listOf(coarse.flip), (coarse.cx * 2 - 6)..(coarse.cx * 2 + 6), (coarse.cy * 2 - 6)..(coarse.cy * 2 + 6))
             val top = f.maxByOrNull { it.s } ?: continue
             if (bestFine == null || top.s > bestFine.s) { bestFine = top; size = sz }
         }
@@ -249,8 +282,10 @@ object AutoCalibrator {
     fun topPane(scr: Screen, top: AnnotationMapper.Params, bev: Bev, strips: Int = 32): FloatArray {
         val outW = 320
         val (lum, oh) = shrink(scr.argb, scr.w, scr.h, outW)
-        val hp = highpass(lum, outW, oh)
         val m = AnnotationMapper(top, scr.screenW, scr.screenH)
+        val ppmThumb = m.pixelsPerMeter * outW / scr.sw
+        val (rb, rh) = bandRadii(ppmThumb)
+        val hp = highpass(boxBlur(lum, outW, oh, rb), outW, oh, rh)
         val sg = if (top.flip) -1f else 1f
         val kx = scr.sw.toFloat() / outW; val ky = scr.sh.toFloat() / oh
         val foot = kx / m.pixelsPerMeter
@@ -260,7 +295,7 @@ object AutoCalibrator {
             val z = -(sy - m.sy(0f, 0f)) / (sg * m.pixelsPerMeter)
             if (abs(x) < EGO_HW && abs(z) < EGO_HL) Float.NaN else bev.area(x, z, foot)
         }
-        val php = highpass(pred, outW, oh)
+        val php = highpass(boxBlur(pred, outW, oh, rb), outW, oh, rh)
         val sw = outW / strips
         val sc = FloatArray(strips) { k ->
             val a = FloatArray(sw * oh); val b = FloatArray(sw * oh)
@@ -289,7 +324,11 @@ object AutoCalibrator {
      * 地面大小變），畫成「預測的原廠畫面」，跟原廠畫面做同樣的去低頻再算 NCC。
      * 先粗掃方位角／俯角／距離／視角／看向點，再對前幾名做 Nelder–Mead。
      */
-    fun calibrate3d(scr: Screen, pane: FloatArray, bev: Bev, minScore: Float = 0.25f): P3Result? {
+    /**
+     * 實車：原廠 3D 是貼在碗狀曲面上、車附近被車模蓋住，能比的平地很少，真實截圖上分數只有 0.2～0.3、
+     * 也挑不出對的。門檻設 0.45：合成畫面（平地）能過，實車對不準的不會被套用。
+     */
+    fun calibrate3d(scr: Screen, pane: FloatArray, bev: Bev, minScore: Float = 0.45f): P3Result? {
         // 先在低解析度（高 36）上找：峰比較寬、容易掃到；再到高 72 細修
         val coarse = scorer3d(scr, pane, bev, 36, edges = true) ?: return null
         val fine = scorer3d(scr, pane, bev, 72) ?: return null
@@ -307,7 +346,9 @@ object AutoCalibrator {
         val crop = IntArray(cw * ch) { scr.argb[(py0 + it / cw) * scr.w + px0 + it % cw] }
         val outW = max(16, (cw * height.toFloat() / ch).toInt().coerceAtMost(height * 3))
         val (lum, oh) = shrink(crop, cw, ch, outW)
-        val shp0 = highpass(lum, outW, oh)
+        // 頻帶：先模糊 1 px、去掉大於約 1/10 格高的結構（實車驗證：細紋理在原廠畫面上對不起來）
+        val hpR = max(3, height / 10)
+        val shp0 = highpass(boxBlur(lum, outW, oh, 1), outW, oh, hpR)
         if (shp0.count { !it.isNaN() } < 150) return null
         val shp = if (edges) edgeEnergy(shp0, outW, oh) else shp0
         // 每個縮圖像素中心 → 螢幕像素
@@ -316,7 +357,7 @@ object AutoCalibrator {
         val pred = FloatArray(outW * oh)
 
         fun score(p: PerspectiveMapper.Params): Float {
-            if (p.elDeg < 3f || p.elDeg > 89f || p.dist < 1f || p.dist > 40f || p.fovDeg < 15f || p.fovDeg > 140f) return -2f
+            if (p.elDeg < 3f || p.elDeg > 89f || p.dist < 1f || p.dist > 40f || p.fovDeg < 15f || p.fovDeg > 115f) return -2f   // 原廠最廣的鏡頭畫面也才 99°；再廣是退化解
             val m = PerspectiveMapper(p, scr.screenW, scr.screenH)
             var used = 0
             for (y in 0 until oh) for (x in 0 until outW) {
@@ -332,7 +373,7 @@ object AutoCalibrator {
                 }
             }
             if (used < outW * oh / 6) return -1f
-            val php = highpass(pred, outW, oh)
+            val php = highpass(boxBlur(pred, outW, oh, 1), outW, oh, hpR)
             return ncc(shp, if (edges) edgeEnergy(php, outW, oh) else php, outW * oh, outW * oh / 8)
         }
         return ::score
@@ -379,7 +420,7 @@ object AutoCalibrator {
      * 拖動主要改方位角（繞車轉）、上下拖改俯角、縮放改距離 → 先繞一圈掃方位角，
      * 再掃俯角與距離，最後細修。用模糊邊緣粗掃（峰寬），紋理細修。
      */
-    fun retrack3d(scr: Screen, start: PerspectiveMapper.Params, bev: Bev, minScore: Float = 0.25f): P3Result? {
+    fun retrack3d(scr: Screen, start: PerspectiveMapper.Params, bev: Bev, minScore: Float = 0.45f): P3Result? {
         val pane = floatArrayOf(start.clipL, start.clipT, start.clipR, start.clipB)
         val coarse = scorer3d(scr, pane, bev, 36, edges = true) ?: return null
         val fine = scorer3d(scr, pane, bev, 72) ?: return null

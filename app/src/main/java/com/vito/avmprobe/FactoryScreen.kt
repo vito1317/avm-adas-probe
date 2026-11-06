@@ -84,19 +84,28 @@ object FactoryScreen {
             return AutoCalibrator.Screen(px, bmp.width, bmp.height, x0, y0, w, h, sw, sh)
         }
 
-        // 3. 系統截圖（整個螢幕）
+        // 3. 系統截圖（整個螢幕）。有找到原廠繪圖面（只是複製不到內容）就裁成那一塊：
+        //    工具列、狀態列不要拿去比（實車：右下角工具列圖示被當成俯視圖）
         fun systemShot() {
-            val restore = hide.map { it to it.visibility }
-            for (h in hide) h.visibility = View.INVISIBLE
-            // 等一幀讓隱藏生效再截
+            val restore = hide.map { Triple(it, it.visibility, it.alpha) }
+            for (h in hide) { h.alpha = 0f; h.visibility = View.INVISIBLE }
+            // 等隱藏確實生效（視窗淡出動畫、畫面合成延遲）再截
             main.postDelayed({
                 val shot = try { screenshot(sw, sh, maxW) } catch (t: Throwable) { lastError = "系統截圖失敗：$t"; null }
-                for ((h, vis) in restore) h.visibility = vis
-                val scr = fromBitmap(shot, 0, 0, sw, sh)
+                for ((h, vis, a) in restore) { h.visibility = vis; h.alpha = a }
+                val rect = v?.let { rv -> IntArray(2).also { rv.getLocationOnScreen(it) }.let { intArrayOf(it[0], it[1], rv.width, rv.height) } }
+                val scr = if (shot != null && rect != null && rect[2] > 0 && rect[3] > 0) {
+                    // 截圖是縮過的：換算後裁出繪圖面
+                    val k = shot.width.toFloat() / sw
+                    val cx0 = (rect[0] * k).toInt().coerceIn(0, shot.width - 1); val cy0 = (rect[1] * k).toInt().coerceIn(0, shot.height - 1)
+                    val cw = (rect[2] * k).toInt().coerceIn(1, shot.width - cx0); val ch = (rect[3] * k).toInt().coerceIn(1, shot.height - cy0)
+                    val sub = Bitmap.createBitmap(if (shot.config == Bitmap.Config.ARGB_8888) shot else shot.copy(Bitmap.Config.ARGB_8888, false), cx0, cy0, cw, ch)
+                    fromBitmap(sub, rect[0], rect[1], rect[2], rect[3])
+                } else fromBitmap(shot, 0, 0, sw, sh)
                 if (scr == null && lastError.isEmpty()) lastError = "系統截圖回傳空的"
                 if (scr == null) lastError += "｜" + describe(act)
                 done(scr)
-            }, 120)
+            }, 300)
         }
 
         if (v == null) { lastError = "畫面樹裡沒有繪圖面，改用系統截圖"; systemShot(); return }

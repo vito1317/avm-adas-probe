@@ -144,18 +144,21 @@ object Engine360 {
                 else -> floatArrayOf(0f, 0f, 0f, 0f)   // 整個都是俯視圖
             }
         }
-        val p3 = if (pane3[2] - pane3[0] > 0.15f) AutoCalibrator.calibrate3d(scr, pane3, bev) else null
+        // 3D 不自動對位：用實車截圖驗證過，原廠 3D 貼在碗狀曲面上、車附近被車模蓋住，
+        // 影像比對挑不出對的角度（分數 0.2～0.3、兩張同視角選出不同結果）。保留原本的 3D 設定（手動或預設）。
+        val p3: AutoCalibrator.P3Result? = null
+        val keep3d = prefs.viewProfile(key).p3
         dumpCalibration(ctx, "auto_$key", scr, bev, JSONObject()
             .put("top", top?.let { ViewProfile(topParams, null).toJson().put("score", it.score.toDouble()) } ?: JSONObject.NULL)
             .put("p3", p3?.let { ViewProfile(null, it.params).toJson().put("score", it.score.toDouble()) } ?: JSONObject.NULL)
             .put("pane3", org.json.JSONArray(pane3.map { it.toDouble() })))
-        if (topParams == null && p3 == null) return "自動對位：$key 找不到俯視圖或 3D（停車、周圍有地面紋理時再試）"
-        prefs.setViewProfile(key, ViewProfile(topParams, p3?.params))
+        if (topParams == null) return "自動對位：$key 找不到俯視圖（停車、周圍地上有標線時再試）"
+        prefs.setViewProfile(key, ViewProfile(topParams, keep3d))
         prefs.setViewCalMode(key, "auto")
         topParams?.let { prefs.annotParams = it }
         view?.get()?.invalidateProfiles()
         val dt = (SystemClock.elapsedRealtime() - t0) / 1000f
-        return "自動對位完成：$key（俯視 ${top?.score?.let { "%.2f".format(it) } ?: "—"}、3D ${p3?.score?.let { "%.2f".format(it) } ?: "—"}，${"%.1f".format(dt)} 秒）"
+        return "自動對位完成：$key（俯視 ${top?.score?.let { "%.2f".format(it) } ?: "—"}，${"%.1f".format(dt)} 秒；3D 請手動對位）"
     }
 
     // ───────── 使用者拖動／縮放原廠 3D：停手後從上一組參數快速重新對位 ─────────
@@ -178,11 +181,13 @@ object Engine360 {
         } catch (_: Throwable) {}
     }
 
+    /**
+     * 拖動後：原廠 3D 的角度讀不到、影像比對在實車上也追不準 → 3D 標注藏到換視角為止
+     * （原廠換視角會回到預設角度，那時對位又是對的），免得畫一個對不上的東西誤導人。
+     */
     private val retrackCheck = object : Runnable {
         override fun run() {
-            val quiet = SystemClock.elapsedRealtime() - gestureAt
-            if (quiet < GESTURE_QUIET_MS) { main.postDelayed(this, GESTURE_QUIET_MS - quiet); return }
-            retrack()
+            log("3D 角度被拖動過，3D 標注先隱藏，換視角後恢復")
         }
     }
 
