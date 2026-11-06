@@ -63,6 +63,13 @@ object Engine360Settings {
         check("車道偵測（偏離車道警示、變道輔助要用）", { prefs.groundMode == AppPrefs.GROUND_VIRTUAL }) {
             prefs.groundMode = if (it) AppPrefs.GROUND_VIRTUAL else AppPrefs.GROUND_OFF
         }
+        col.addView(Button(act).apply {
+            isAllCaps = false
+            val opts = listOf(30, 40, 50, 55, 60, 70)
+            fun label() { text = "車道偏移／壓線提醒：${prefs.ldwMinKmh} km/h 以上（按一下切換）" }
+            label()
+            setOnClickListener { prefs.ldwMinKmh = opts[(opts.indexOf(prefs.ldwMinKmh) + 1).mod(opts.size)]; label() }
+        })
         check("在俯視圖上畫出偵測到的車道線（除錯用）", { prefs.annotDrawRoad }) {
             prefs.annotDrawRoad = it; av.drawRoad = it
         }

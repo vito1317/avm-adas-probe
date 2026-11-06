@@ -345,6 +345,7 @@ class AdasPipeline(
             currentObjects(now).map { StartAssist.Obj(it.t, it.x, it.z) },
             if (tlFresh) t!!.s else null, if (tlFresh) t!!.c else 0f
         )
+        ldw.minKmh = prefs.ldwMinKmh.toFloat()
         ldwState = ldw.update(
             now, vs.speedKmh,
             if (rd != null && now - roadAt < BEV_TTL_MS) rd.lines else emptyList(), vs.turn
@@ -365,7 +366,7 @@ class AdasPipeline(
         val lcaFresh = l != null && now - tracksAt < OBJ_TTL_MS
         sounder.update(now, AlertSounder.State(
             start = st != null && (st.lead || st.green),
-            ldw = (ld != null && ld.any) || noLaneChange,
+            ldw = (ld != null && (ld.any || ld.straddle != null)) || noLaneChange,
             lcaDanger = (lcaFresh && (l!!.L >= 2 || l.R >= 2)) || laneChangeBlocked,
             turnHit = turnHit,
             collision = AlertSounder.moving(vs.speedKmh, vs.gear) && currentObjects(now).any { it.clr < 0.5f }
@@ -760,7 +761,10 @@ class AdasPipeline(
         }
         startState?.let { st -> if (st.lead || st.green) p.put("start", JSONObject()
             .put("lead", st.lead).put("green", st.green).put("gap", r2(st.gap))) }
-        ldwState?.let { ld -> if (ld.any) p.put("ldw", JSONObject().put("l", ld.left).put("r", ld.right)) }
+        ldwState?.let { ld ->
+            if (ld.any || ld.straddle != null) p.put("ldw", JSONObject().put("l", ld.left).put("r", ld.right)
+                .apply { ld.straddle?.let { s -> put("st", s.toString()).put("sts", ld.straddleSolid) } })
+        }
         if (!vs.isEmpty) p.put("veh", VehicleSignals.toJson(vs))
         if (now - tracksAt < OBJ_TTL_MS) lcaState?.let { p.put("lca", lca.toJson(it)) }
         mapSrc?.takeJsonIfNew()?.let { p.put("map", it) }

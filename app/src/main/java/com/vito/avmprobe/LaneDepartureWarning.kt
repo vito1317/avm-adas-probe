@@ -40,15 +40,29 @@ class LaneDepartureWarning {
         const val SIGNAL_GRACE_MS = 1200L  // 方向燈熄掉後還寬限這麼久
         const val RATE_TAU_MS = 400f       // 橫向速度的平滑時間常數
         const val STALE_MS = 900L          // 超過這麼久沒看到線就重新開始算速度
+        /** 壓線行駛：線在車輪外緣內側超過這麼多（m），也就是線已經在車底下 */
+        const val STRADDLE_IN = 0.10f
+        /** 壓線持續這麼久才提醒（變換車道跨過去的那一兩秒不算） */
+        const val STRADDLE_MS = 2000L
     }
+
+    /** 作用的最低車速（km/h），設定可調；預設 [MIN_KMH]。 */
+    @Volatile var minKmh: Float = MIN_KMH
 
     /** [left]/[right] 是否正在警示；[distL]/[distR] 車輪外緣離線的距離（m，看不到線是 NaN）。 */
     data class State(
         val left: Boolean, val right: Boolean,
-        val distL: Float, val distR: Float
+        val distL: Float, val distR: Float,
+        /** 壓線行駛（線在車底下持續 [STRADDLE_MS]、沒打那一側的燈）：'L'／'R'，沒有是 null */
+        val straddle: Char? = null,
+        /** 壓的是實線（禁止跨越／禁止變換車道，違規） */
+        val straddleSolid: Boolean = false
     ) {
         val any: Boolean get() = left || right
     }
+
+    private var stradSide: Char? = null
+    private var stradSince = 0L
 
     private class Side {
         var dist = Float.NaN       // 車輪外緣到線的距離
@@ -81,8 +95,9 @@ class LaneDepartureWarning {
         val sigL = grace && (lastTurn == 'L' || lastTurn == 'H')
         val sigR = grace && (lastTurn == 'R' || lastTurn == 'H')
 
-        if (speedKmh == null || speedKmh < MIN_KMH) {
+        if (speedKmh == null || speedKmh < minKmh) {
             reset()
+            stradSide = null
             return State(false, false, Float.NaN, Float.NaN)
         }
 
@@ -111,7 +126,20 @@ class LaneDepartureWarning {
 
         val warnL = step(l, dl, nowMs, solidL, sigL)
         val warnR = step(r, dr, nowMs, solidR, sigR)
-        return State(warnL, warnR, dl, dr)
+
+        // 壓線行駛：線已經在車底下（車輪外緣內側），打了那一側的燈（正在變換車道）不算
+        val onL = !dl.isNaN() && dl < -STRADDLE_IN && !sigL
+        val onR = !dr.isNaN() && dr < -STRADDLE_IN && !sigR
+        val side = when {
+            onL && onR -> if (dl <= dr) 'L' else 'R'
+            onL -> 'L'
+            onR -> 'R'
+            else -> null
+        }
+        if (side == null) stradSide = null
+        else if (side != stradSide) { stradSide = side; stradSince = nowMs }
+        val straddle = if (side != null && nowMs - stradSince >= STRADDLE_MS) side else null
+        return State(warnL, warnR, dl, dr, straddle, straddle == 'L' && solidL || straddle == 'R' && solidR)
     }
 
     /** 更新一側的距離與靠近速度，回傳是否要警示。 */

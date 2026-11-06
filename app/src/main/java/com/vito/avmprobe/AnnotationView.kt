@@ -571,6 +571,11 @@ class AnnotationView(context: Context) : View(context) {
         p.optJSONObject("ldw")?.let { l ->
             if (l.optBoolean("l")) msgs.add("◀ 偏離車道" to Color.rgb(230, 160, 20))
             if (l.optBoolean("r")) msgs.add("偏離車道 ▶" to Color.rgb(230, 160, 20))
+            l.optString("st").takeIf { it.isNotEmpty() }?.let { side ->
+                val solid = l.optBoolean("sts")
+                val t = (if (solid) "壓實線行駛（違規）" else "壓線行駛")
+                msgs.add((if (side == "L") "◀ $t" else "$t ▶") to (if (solid) Color.rgb(210, 30, 30) else Color.rgb(230, 140, 20)))
+            }
         }
         p.optJSONObject("lca")?.let { l ->
             if (l.optInt("L") >= 2) msgs.add("◀ 左後來車" to Color.rgb(220, 40, 40))

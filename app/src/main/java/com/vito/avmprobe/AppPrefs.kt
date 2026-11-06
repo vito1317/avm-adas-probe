@@ -223,6 +223,11 @@ class AppPrefs(context: Context) {
         get() = sp.getInt("dashcamQuota", 8)
         set(v) = sp.edit().putInt("dashcamQuota", v).apply()
 
+    /** 車道偏移／壓線提醒的最低車速（km/h）。 */
+    var ldwMinKmh: Int
+        get() = sp.getInt("ldwMinKmh", 55)
+        set(v) = sp.edit().putInt("ldwMinKmh", v).apply()
+
     /** 提示音（起步、偏離車道、變道來車、轉彎路徑有人車、移動中太近）。 */
     var alertSound: Boolean
         get() = sp.getBoolean("alertSound", true)

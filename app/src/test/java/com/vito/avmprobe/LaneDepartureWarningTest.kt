@@ -182,3 +182,54 @@ class LaneDepartureWarningTest {
         }
     }
 }
+
+class LaneStraddleTest {
+    private fun line(x: Float, dashed: Boolean = true) = RoadLine('w', dashed, x, 3f, x, 12f, 0.9f)
+
+    @org.junit.Test
+    fun sustainedStraddleWarnsAfterTwoSeconds() {
+        val w = LaneDepartureWarning()
+        // 線在自車左邊 0.6 m（車輪外緣 0.925 → 線在車底下 0.33 m）
+        var s = w.update(0, 70f, listOf(line(-0.6f)), null)
+        org.junit.Assert.assertNull(s.straddle)
+        s = w.update(1500, 70f, listOf(line(-0.6f)), null)
+        org.junit.Assert.assertNull("還沒滿 2 秒", s.straddle)
+        s = w.update(2100, 70f, listOf(line(-0.6f)), null)
+        org.junit.Assert.assertEquals('L', s.straddle)
+        org.junit.Assert.assertEquals(false, s.straddleSolid)
+    }
+
+    @org.junit.Test
+    fun solidLineStraddleIsViolation() {
+        val w = LaneDepartureWarning()
+        w.update(0, 70f, listOf(line(0.5f, dashed = false)), null)
+        val s = w.update(2500, 70f, listOf(line(0.5f, dashed = false)), null)
+        org.junit.Assert.assertEquals('R', s.straddle)
+        org.junit.Assert.assertEquals(true, s.straddleSolid)
+    }
+
+    @org.junit.Test
+    fun signalingThatSideIsLaneChangeNotStraddle() {
+        val w = LaneDepartureWarning()
+        w.update(0, 70f, listOf(line(-0.6f)), 'L')
+        val s = w.update(2500, 70f, listOf(line(-0.6f)), 'L')
+        org.junit.Assert.assertNull(s.straddle)
+    }
+
+    @org.junit.Test
+    fun minSpeedIsAdjustable() {
+        val w = LaneDepartureWarning()
+        w.update(0, 35f, listOf(line(-0.6f)), null)
+        org.junit.Assert.assertNull(w.update(2500, 35f, listOf(line(-0.6f)), null).straddle)   // 預設 55 以下不作用
+        w.minKmh = 30f
+        w.update(3000, 35f, listOf(line(-0.6f)), null)
+        org.junit.Assert.assertEquals('L', w.update(5500, 35f, listOf(line(-0.6f)), null).straddle)
+    }
+
+    @org.junit.Test
+    fun normalDrivingInLaneIsQuiet() {
+        val w = LaneDepartureWarning()
+        w.update(0, 70f, listOf(line(-1.7f), line(1.8f)), null)
+        org.junit.Assert.assertNull(w.update(3000, 70f, listOf(line(-1.7f), line(1.8f)), null).straddle)
+    }
+}
