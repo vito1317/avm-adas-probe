@@ -205,6 +205,14 @@ class AppPrefs(context: Context) {
             .putFloat("anCx", v.cx).putFloat("anCy", v.cy).putFloat("anS", v.scale).putBoolean("anF", v.flip)
             .apply()
 
+    /**
+     * 3D 畫面上物件立體框的高度倍率。原廠的 3D 是把鏡頭影像貼在碗狀曲面上，旁邊的車會被「壓扁」在
+     * 地面／碗壁上，照真實車高畫會比畫面上的車高很多 → 預設 0.25。0 = 只畫地面外框。
+     */
+    var obj3dHeight: Float
+        get() = sp.getFloat("obj3dH", 0.25f)
+        set(v) = sp.edit().putFloat("obj3dH", v).apply()
+
     /** 行車記錄器（合併版：發動就循環錄影）。 */
     var dashcamOn: Boolean
         get() = sp.getBoolean("dashcamOn", true)

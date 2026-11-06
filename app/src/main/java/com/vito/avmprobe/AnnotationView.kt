@@ -64,6 +64,10 @@ class AnnotationView(context: Context) : View(context) {
     @Volatile var drawRoad = false
         set(v) { field = v; postInvalidate() }
 
+    /** 3D 立體框高度倍率（[AppPrefs.obj3dHeight]）。 */
+    @Volatile var heightScale = 0.25f
+        set(v) { field = v; postInvalidate() }
+
     private var lastTurn: Char? = null
     private var lastTurnAt = 0L
 
@@ -220,8 +224,9 @@ class AnnotationView(context: Context) : View(context) {
                 else -> Color.rgb(60, 220, 255)
             }
             val yaw = if (o.has("yaw")) o.optDouble("yaw").toFloat() else 0f
-            if (!box3d(c, m, x, z, hl[0], hl[1], h, yaw, col)) continue
-            val top = m.project(x, h + 0.2f, z) ?: continue
+            val hh = maxOf(0.02f, h * heightScale)
+            if (!box3d(c, m, x, z, hl[0], hl[1], hh, yaw, col)) continue
+            val top = m.project(x, hh + 0.2f, z) ?: continue
             val label = "${NAMES[t] ?: t} ${"%.1f".format(clr)}m"
             c.drawText(label, top[0] - text.measureText(label) / 2f, top[1], text)
         }
