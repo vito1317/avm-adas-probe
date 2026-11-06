@@ -147,13 +147,59 @@ object Engine360 {
     @JvmStatic
     fun onViewState(value: Int, name: String) {
         try {
-            if (lastViewKey == name) return
-            lastViewKey = name
-            log("原廠視角：$name（$value）")
-            view?.get()?.viewKey = name
-            main.post { maybeAutoCalibrate(name) }
+            lastBvName = name
+            // 讀得到原廠目前場景時，以場景為準（側邊畫面、打燈畫面有些不走 setBvState）
+            if (sceneReadable) return
+            setViewKey(name)
         } catch (_: Throwable) {}
     }
+
+    @Volatile private var lastBvName: String = ""
+
+    private fun setViewKey(key: String) {
+        if (lastViewKey == key) return
+        lastViewKey = key
+        log("原廠視角：$key" + if (lastBvName.isNotEmpty() && !key.contains(lastBvName)) "（$lastBvName）" else "")
+        view?.get()?.viewKey = key
+        main.post { maybeAutoCalibrate(key) }
+    }
+
+    // ── 直接問原廠原生繪圖現在畫哪個場景／版面（比 setBvState 可靠：打燈的側邊畫面、
+    //    自動切回都不一定走 setBvState）。讀不到就退回 setBvState。
+    private var sceneM: java.lang.reflect.Method? = null
+    private var layoutM: java.lang.reflect.Method? = null
+    @Volatile private var sceneReadable = false
+    private var sceneTried = false
+
+    private fun readSceneKey(): String? {
+        if (!sceneTried) {
+            sceneTried = true
+            try {
+                val k = Class.forName("com.baony.birdview.BVDisplayManager")
+                sceneM = k.getMethod("nativegetCurrentScene")
+                layoutM = try { k.getMethod("nativeGetLayout") } catch (_: Throwable) { null }
+            } catch (t: Throwable) { log("讀不到原廠場景，改用 setBvState：$t") }
+        }
+        val sm = sceneM ?: return null
+        return try {
+            val sc = sm.invoke(null) as Int
+            val ly = layoutM?.let { it.invoke(null) as Int }
+            sceneReadable = true
+            "SCENE_$sc" + (ly?.let { "_L$it" } ?: "")
+        } catch (t: Throwable) {
+            sceneM = null; sceneReadable = false
+            log("讀原廠場景失敗，改用 setBvState：$t")
+            null
+        }
+    }
+
+    private val scenePoll = object : Runnable {
+        override fun run() {
+            if (view?.get()?.isAttachedToWindow == true) readSceneKey()?.let { setViewKey(it) }
+            main.postDelayed(this, 400)
+        }
+    }
+    private var scenePolling = false
 
     /**
      * 不靠原廠畫面也要跑的部分（車機訊號、影格接收、行車記錄器）。
@@ -188,6 +234,7 @@ object Engine360 {
             activity = WeakReference(act)
             addViews(act, prefs)
             if (!ticking) { ticking = true; main.post(statusTick) }
+            if (!scenePolling) { scenePolling = true; main.post(scenePoll) }
             log("合併版已掛上 ${act.javaClass.simpleName}（ADAS ${if (prefs.annotEnabled) "開" else "關"}）")
         } catch (t: Throwable) {
             Log.e(TAG, "attach 失敗（不影響原廠）", t)
