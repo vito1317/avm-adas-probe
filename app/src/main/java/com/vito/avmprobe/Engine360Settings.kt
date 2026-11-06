@@ -105,6 +105,16 @@ object Engine360Settings {
             setOnClickListener { Dashcam.lock(); text = "已鎖定（關檔時移到 locked 資料夾）" }
         })
 
+        val exportInfo = TextView(act).apply { textSize = 11f; typeface = Typeface.MONOSPACE }
+        col.addView(Button(act).apply {
+            text = "匯出原廠 3D 車模檔（自動找，給開發者分析 3D 角度）"; isAllCaps = false
+            setOnClickListener {
+                isEnabled = false; text = "搜尋中…"
+                Engine360.exportCarModels(act) { msg -> isEnabled = true; text = "匯出原廠 3D 車模檔（再按一次重新搜尋）"; exportInfo.text = msg }
+            }
+        })
+        col.addView(exportInfo)
+
         col.addView(Button(act).apply {
             text = "存一張原始影格（停車格認錯、偵測怪怪的時候按，給開發者分析）"; isAllCaps = false
             setOnClickListener { Engine360.saveRaw(act) }

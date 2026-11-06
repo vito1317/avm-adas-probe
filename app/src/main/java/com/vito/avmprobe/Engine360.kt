@@ -446,6 +446,15 @@ object Engine360 {
         }
     }
 
+    /** 設定裡「匯出原廠車模檔」：背景找 .vmd 與原廠設定檔、匯出到「下載/avm-adas」。[done] 在主執行緒回報結果。 */
+    fun exportCarModels(act: Activity, done: (String) -> Unit) {
+        cal.post {
+            val msg = try { CarModelExporter.export(act) } catch (t: Throwable) { "匯出失敗：$t" }
+            log(msg.lineSequence().first())
+            main.post { done(msg) }
+        }
+    }
+
     /** 設定裡「測試提示音」：依序播三種提示音（起步／轉綠、偏離車道、危險），確認有聲音、音量夠。 */
     fun testSounds(act: Activity) {
         val tg = try { android.media.ToneGenerator(android.media.AudioManager.STREAM_MUSIC, 90) } catch (_: Throwable) {
