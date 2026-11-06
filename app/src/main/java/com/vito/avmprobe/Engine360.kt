@@ -180,13 +180,23 @@ object Engine360 {
     /** 拖動後的角度（只在目前這個視角有效，換視角就丟掉；不存檔，原廠下次會回到預設角度）。 */
     private val overrides = java.util.concurrent.ConcurrentHashMap<String, ViewProfile>()
     @Volatile private var gestureAt = 0L
+    @Volatile private var viewChangedAt = 0L
+    private var gPath = 0f; private var gLastA = 0; private var gLastB = 0; private var gKind = 0; private var gN = 0
     private const val GESTURE_QUIET_MS = 1200L
 
     /** FrameTap 在原廠 nativeDragControl／nativeDoubleDragControl／nativeScaleControl 之前呼叫。 */
     @JvmStatic
     fun onGesture(kind: Int, a: Int, b: Int) {
         try {
-            gestureAt = SystemClock.elapsedRealtime()
+            val now = SystemClock.elapsedRealtime()
+            // 一次手勢（間隔 < 0.6 秒算同一次）：累計移動量。長按切視角時手指按著不動也會送訊號，那不算拖動
+            if (now - gestureAt > 600 || kind != gKind) { gPath = 0f; gLastA = a; gLastB = b; gKind = kind; gN = 0 }
+            gPath += kotlin.math.abs(a - gLastA) + kotlin.math.abs(b - gLastB)
+            gLastA = a; gLastB = b
+            gestureAt = now
+            if (gN++ < 3) log("手勢 kind=$kind a=$a b=$b 累計=$gPath")
+            if (now - viewChangedAt < 2500) return          // 剛切視角（長按進來的）
+            if (kind != 3 && gPath < 30f) return            // 沒真的拖動
             main.post {
                 view?.get()?.suspend3d = true
                 main.removeCallbacks(retrackCheck)
@@ -275,6 +285,7 @@ object Engine360 {
         if (lastViewKey == key) return
         // 換了視角：原廠會回到那個視角的預設角度 → 拖動後的角度只在原本那個視角有效
         lastViewKey?.let { overrides.remove(it) }
+        viewChangedAt = SystemClock.elapsedRealtime()
         view?.get()?.let { it.suspend3d = false; it.invalidateProfiles() }
         lastViewKey = key
         log("原廠視角：$key" + if (lastBvName.isNotEmpty() && !key.contains(lastBvName)) "（$lastBvName）" else "")
