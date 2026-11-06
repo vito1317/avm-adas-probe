@@ -29,6 +29,32 @@ class AnnotationMapper(val p: Params, val screenW: Int, val screenH: Int) {
     companion object {
         const val EGO_HW = 0.925f
         const val EGO_HL = 2.42f
+        /** 後軸中心到車身中心的距離（車長 4.84、後懸 1.12 → 後軸在 z = -1.30）。 */
+        const val AXLE_TO_CENTER = 1.30f
+
+        /**
+         * 走廊外框：沿中心線（世界座標 [x, z]）往左右各推 [halfWidth] 公尺。
+         * 回傳一個閉合多邊形的頂點：左緣由頭到尾、再接右緣由尾到頭。少於 2 點回傳空。
+         * 法向量用前後兩點的切線（端點用單邊），轉彎處不會折斷。
+         */
+        fun corridor(center: List<FloatArray>, halfWidth: Float): List<FloatArray> {
+            val pts = center.filter { it.size >= 2 }
+            if (pts.size < 2) return emptyList()
+            val left = ArrayList<FloatArray>(pts.size)
+            val right = ArrayList<FloatArray>(pts.size)
+            for (i in pts.indices) {
+                val a = pts[maxOf(i - 1, 0)]; val b = pts[minOf(i + 1, pts.size - 1)]
+                var tx = b[0] - a[0]; var tz = b[1] - a[1]
+                val len = kotlin.math.hypot(tx, tz)
+                if (len < 1e-6f) { tx = 0f; tz = 1f } else { tx /= len; tz /= len }
+                // 切線 (tx, tz) 的左側法向量：x 右、z 前 → 左 = (-tz, tx)
+                val nx = -tz; val nz = tx
+                val p = pts[i]
+                left.add(floatArrayOf(p[0] + nx * halfWidth, p[1] + nz * halfWidth))
+                right.add(floatArrayOf(p[0] - nx * halfWidth, p[1] - nz * halfWidth))
+            }
+            return left + right.asReversed()
+        }
     }
 
     private val ppm = p.scale * screenH

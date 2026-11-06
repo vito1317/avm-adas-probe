@@ -85,13 +85,13 @@ class AnnotationView(context: Context) : View(context) {
         if (p != null) {
             p.optJSONObject("road")?.optJSONArray("lines")?.let { drawRoad(c, m, it) }
             p.optJSONArray("slots")?.let { drawSlots(c, m, it) }
-            p.optJSONObject("park")?.optJSONArray("pts")?.let { polyline(c, m, it, Color.rgb(80, 200, 255), dashed = true) }
-            p.optJSONObject("turn")?.let { t ->
-                val col = if (t.optInt("hit") > 0) Color.rgb(255, 80, 60) else Color.rgb(255, 200, 60)
-                t.optJSONArray("o")?.let { polyline(c, m, it, col, dashed = false) }
-                t.optJSONArray("i")?.let { polyline(c, m, it, col, dashed = true) }
+            p.optJSONObject("park")?.let { drawParkPath(c, m, it) }
+            p.optJSONObject("turn")?.let { drawTurnPath(c, m, it) }
+            p.optJSONObject("lca")?.let { l ->
+                // 變道走廊：路徑上沒威脅＝綠，有來車＝紅
+                val col = if (l.optBoolean("pathOk", true)) Color.rgb(90, 220, 120) else Color.rgb(255, 70, 60)
+                l.optJSONArray("path")?.let { corridor(c, m, points(it), AnnotationMapper.EGO_HW, col) }
             }
-            p.optJSONObject("lca")?.optJSONArray("path")?.let { polyline(c, m, it, Color.rgb(120, 220, 120), dashed = true) }
             p.optJSONArray("obs")?.let { drawObstacles(c, m, it) }
             p.optJSONArray("objs")?.let { drawObjects(c, m, it) }
         }
@@ -182,16 +182,68 @@ class AnnotationView(context: Context) : View(context) {
         }
     }
 
-    private fun polyline(c: Canvas, m: AnnotationMapper, pts: JSONArray, col: Int, dashed: Boolean) {
-        if (pts.length() < 2) return
-        path.reset()
-        for (i in 0 until pts.length()) {
-            val q = pts.optJSONArray(i) ?: continue
-            val x = q.optDouble(0).toFloat(); val z = q.optDouble(1).toFloat()
-            if (i == 0) path.moveTo(m.sx(x, z), m.sy(x, z)) else path.lineTo(m.sx(x, z), m.sy(x, z))
+    // ───────────────────────── 預測走廊（車寬） ─────────────────────────
+
+    private fun points(a: JSONArray): List<FloatArray> {
+        val out = ArrayList<FloatArray>(a.length())
+        for (i in 0 until a.length()) {
+            val q = a.optJSONArray(i) ?: continue
+            out.add(floatArrayOf(q.optDouble(0).toFloat(), q.optDouble(1).toFloat()))
         }
-        stroke.color = col
-        stroke.pathEffect = if (dashed) dash else null
+        return out
+    }
+
+    /** 沿中心線、寬 2×[halfWidth] 的半透明走廊，兩側緣描邊。 */
+    private fun corridor(c: Canvas, m: AnnotationMapper, center: List<FloatArray>, halfWidth: Float, col: Int) {
+        polygon(c, m, AnnotationMapper.corridor(center, halfWidth), col)
+    }
+
+    private fun polygon(c: Canvas, m: AnnotationMapper, poly: List<FloatArray>, col: Int) {
+        if (poly.size < 3) return
+        path.reset()
+        poly.forEachIndexed { i, q ->
+            if (i == 0) path.moveTo(m.sx(q[0], q[1]), m.sy(q[0], q[1])) else path.lineTo(m.sx(q[0], q[1]), m.sy(q[0], q[1]))
+        }
+        path.close()
+        fill.color = col; fill.alpha = 70
+        c.drawPath(path, fill)
+        stroke.color = col; stroke.alpha = 230
+        stroke.pathEffect = null
+        c.drawPath(path, stroke)
+    }
+
+    /**
+     * 倒車入庫：路徑點是**後軸中心**，走廊以它為中心、車寬；終點畫出停好時的車身外框，
+     * 一眼看出會停在格子的哪裡。
+     */
+    private fun drawParkPath(c: Canvas, m: AnnotationMapper, park: JSONObject) {
+        val col = Color.rgb(70, 170, 255)
+        park.optJSONArray("pts")?.let { corridor(c, m, points(it), AnnotationMapper.EGO_HW, col) }
+        val g = park.optJSONArray("goal") ?: return
+        if (g.length() < 3) return
+        val th = g.optDouble(2).toFloat()
+        // 後軸 → 車身中心：沿車頭方向（θ 從 +z 往 +x 量）前移
+        val cx = g.optDouble(0).toFloat() + AnnotationMapper.AXLE_TO_CENTER * kotlin.math.sin(th)
+        val cz = g.optDouble(1).toFloat() + AnnotationMapper.AXLE_TO_CENTER * kotlin.math.cos(th)
+        box(c, m, cx, cz, AnnotationMapper.EGO_HW, AnnotationMapper.EGO_HL, th, col, fillAlpha = 90)
+    }
+
+    /**
+     * 轉彎：外側車頭角的路徑與內側後輪的路徑之間，就是車身掃過的範圍（含內輪差）。
+     * 範圍裡有車或人（hit）就變紅。
+     */
+    private fun drawTurnPath(c: Canvas, m: AnnotationMapper, t: JSONObject) {
+        val col = if (t.optInt("hit") > 0) Color.rgb(255, 70, 60) else Color.rgb(255, 200, 60)
+        val outer = t.optJSONArray("o")?.let { points(it) } ?: return
+        val inner = t.optJSONArray("i")?.let { points(it) } ?: return
+        if (outer.size < 2 || inner.size < 2) return
+        polygon(c, m, outer + inner.asReversed(), col)
+        // 內側後輪那條另外用虛線強調（內輪差捲到機車最常出事）
+        stroke.color = col; stroke.pathEffect = dash
+        path.reset()
+        inner.forEachIndexed { i, q ->
+            if (i == 0) path.moveTo(m.sx(q[0], q[1]), m.sy(q[0], q[1])) else path.lineTo(m.sx(q[0], q[1]), m.sy(q[0], q[1]))
+        }
         c.drawPath(path, stroke)
         stroke.pathEffect = null
     }
