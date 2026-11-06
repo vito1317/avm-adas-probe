@@ -56,6 +56,11 @@ object Engine360 {
     fun log(msg: String) { try { FrameShareHub.log(msg) } catch (_: Throwable) {} }
 
     @Volatile private var lastViewKey: String? = null
+    private var buttonRef: WeakReference<View>? = null
+
+    /** 截全螢幕時要先藏起來的我們自己的東西：標注圖層、ADAS 鈕、設定視窗。 */
+    private fun ownViews(): List<View> =
+        listOfNotNull(view?.get(), buttonRef?.get(), Engine360Settings.dialogDecor?.get())
     private var activity: WeakReference<Activity>? = null
     private val calThread by lazy { android.os.HandlerThread("autocal").apply { start() } }
     private val cal by lazy { android.os.Handler(calThread.looper) }
@@ -75,8 +80,13 @@ object Engine360 {
         p.requestBev { bev ->
             main.post {
                 if (bev == null) { calibrating = false; done?.invoke("拿不到俯視圖"); return@post }
-                FactoryScreen.capture(act) { scr ->
-                    if (scr == null) { calibrating = false; done?.invoke("擷取不到原廠畫面"); return@capture }
+                FactoryScreen.capture(act, hide = ownViews()) { scr ->
+                    if (scr == null) {
+                        calibrating = false
+                        val why = "擷取不到原廠畫面：" + FactoryScreen.lastError
+                        log(why); done?.invoke(why); return@capture
+                    }
+                    log("擷取原廠畫面 ${scr.sw}x${scr.sh} @(${scr.sx0},${scr.sy0})" + if (FactoryScreen.lastError.isNotEmpty()) "（${FactoryScreen.lastError}）" else "")
                     cal.post {
                         val msg = try { runCalibration(act, key, scr, bev) } catch (t: Throwable) { "自動對位失敗：$t" }
                         calibrating = false
@@ -235,6 +245,7 @@ object Engine360 {
             }
             setOnClickListener { Engine360Settings.show(act, prefs, av) }
         }
+        buttonRef = WeakReference(btn)
         decor.addView(btn, FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
         ).apply {
@@ -281,8 +292,8 @@ object Engine360 {
             main.post {
                 try { Toast.makeText(act, msg, Toast.LENGTH_LONG).show() } catch (_: Throwable) {}
                 // 同時存原廠畫面（自動對位對不準時，拿這兩張在電腦上重現）
-                FactoryScreen.capture(act, maxW = 1920) { scr ->
-                    if (scr == null) return@capture
+                FactoryScreen.capture(act, maxW = 1920, hide = ownViews()) { scr ->
+                    if (scr == null) { log("存原廠畫面失敗：" + FactoryScreen.lastError); return@capture }
                     cal.post {
                         try {
                             val bmp = android.graphics.Bitmap.createBitmap(scr.argb, scr.w, scr.h, android.graphics.Bitmap.Config.ARGB_8888)

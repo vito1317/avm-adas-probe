@@ -20,6 +20,9 @@ import android.widget.TextView
  */
 object Engine360Settings {
 
+    /** 開著的設定視窗（系統截圖前要先藏起來）。 */
+    @Volatile var dialogDecor: java.lang.ref.WeakReference<android.view.View>? = null
+
     fun show(act: Activity, prefs: AppPrefs, av: AnnotationView) {
         val dp = act.resources.displayMetrics.density
         val col = LinearLayout(act).apply {
@@ -234,6 +237,7 @@ object Engine360Settings {
             .show()
             .window?.let { w ->
                 win = w
+                dialogDecor = java.lang.ref.WeakReference(w.decorView)
                 // 對位時要看得到後面的原廠畫面：對話框不要變暗背景
                 // 而且靠右放，左邊的原廠俯視圖要露出來對位
                 w.clearFlags(android.view.WindowManager.LayoutParams.FLAG_DIM_BEHIND)
