@@ -34,12 +34,14 @@ class PerspectiveMapper(val p: Params, val screenW: Int, val screenH: Int) {
 
         companion object {
             /**
-             * 打左燈時的初值（依實車照片估）：原廠鏡頭在**右後上方**、往**左前方**看，
-             * 車模在 3D 格子的右半邊，3D 格子約佔螢幕右側 57%。實際一定要在車上對位。
+             * 打左燈的原廠 3D 視角：用實車截圖（2026-11-06，1920×720）的地面對應點反推
+             * （停車格線、格號、柏油邊界，重投影誤差約 5 px），立體自車外框疊上去跟原廠車模吻合。
+             * 原廠鏡頭在車的**左後方**、俯角 14°，往前看左側。3D 格子在螢幕 x 34.8%～100%、
+             * 下緣到工具列上方（86.8%）。
              */
             val DEFAULT_LEFT = Params(
-                clipL = 0.43f, clipT = 0f, clipR = 1f, clipB = 0.86f,
-                azDeg = 30f, elDeg = 18f, dist = 10f, fovDeg = 50f, tx = -2.5f, tz = 4f
+                clipL = 0.348f, clipT = 0f, clipR = 1f, clipB = 0.868f,
+                azDeg = -34.6f, elDeg = 13.9f, dist = 9.06f, fovDeg = 37.7f, tx = 0.83f, tz = 1.94f
             )
             val DEFAULT_RIGHT = DEFAULT_LEFT.mirrored()
         }

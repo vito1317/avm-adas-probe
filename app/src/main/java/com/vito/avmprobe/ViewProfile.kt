@@ -53,8 +53,9 @@ data class ViewProfile(val top: AnnotationMapper.Params?, val p3: PerspectiveMap
          * 還沒對位過的視角給的初值。俯視圖沿用全域對位；名稱看得出是左／右側 3D 的，
          * 給打方向燈那組 3D 初值（照片估的，[PerspectiveMapper.Params.DEFAULT_LEFT]）。
          */
-        fun defaultFor(key: String, globalTop: AnnotationMapper.Params): ViewProfile {
-            val k = key.uppercase()
+        fun defaultFor(key: String, globalTop: AnnotationMapper.Params, bvName: String = ""): ViewProfile {
+            // 視角名稱是場景編號（SCENE_x_Ly）時看不出左右 → 用原廠同時回報的 BV 名稱（BV_LEFT／BV_RIGHT）
+            val k = key.uppercase() + " " + bvName.uppercase()
             val p3 = when {
                 "LEFT" in k -> PerspectiveMapper.Params.DEFAULT_LEFT
                 "RIGHT" in k -> PerspectiveMapper.Params.DEFAULT_RIGHT

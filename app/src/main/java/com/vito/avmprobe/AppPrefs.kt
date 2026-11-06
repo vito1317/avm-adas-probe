@@ -234,19 +234,46 @@ class AppPrefs(context: Context) {
         set(v) = sp.edit().putBoolean("annotRoad", v).apply()
 
     /** 合併版：原廠某個視角（BV_state 名稱）存的標注設定；沒存過給 [ViewProfile.defaultFor]。 */
-    fun viewProfile(key: String): ViewProfile {
+    fun viewProfile(key: String, bvName: String = ""): ViewProfile {
         val raw = sp.getString("view_$key", null)
-        if (raw != null) try { return ViewProfile.fromJson(org.json.JSONObject(raw)) } catch (_: Throwable) {}
+        if (raw != null) try {
+            val prof = ViewProfile.fromJson(org.json.JSONObject(raw))
+            // 存的沒有 3D（只對位過俯視、或被清掉）→ 用實車校準的左右燈預設；使用者手動關掉 3D 的不補
+            if (prof.p3 == null && viewCalMode(key) != "manual")
+                return prof.copy(p3 = ViewProfile.defaultFor(key, annotParams, bvName).p3)
+            return prof
+        } catch (_: Throwable) {}
         // 舊版（m-v3 以前）只有左右燈兩組 3D 設定：沿用
         val legacy = when (key) {
             ViewProfile.TURN_L -> 'L'; ViewProfile.TURN_R -> 'R'; else -> null
         }
         if (legacy != null && sp.contains("a3${legacy}az")) return ViewProfile(annotParams, annot3d(legacy))
-        return ViewProfile.defaultFor(key, annotParams)
+        return ViewProfile.defaultFor(key, annotParams, bvName)
     }
 
     fun setViewProfile(key: String, v: ViewProfile) {
         sp.edit().putString("view_$key", v.toJson().toString()).apply()
+    }
+
+    /**
+     * 一次性：以前的版本 3D 自動對位在實車上會套錯參數 → 把自動對位存的 3D 拿掉（俯視保留），
+     * 手動調過的不動。之後沒存 3D 的視角就用實車校準好的預設值。
+     */
+    fun migrateBad3dOnce() {
+        if (sp.getBoolean("mig3dV2", false)) return
+        val e = sp.edit()
+        for ((k, v) in sp.all) {
+            if (!k.startsWith("view_") || v !is String) continue
+            val key = k.removePrefix("view_")
+            if (viewCalMode(key) == "manual") continue
+            try {
+                val prof = ViewProfile.fromJson(org.json.JSONObject(v))
+                e.putString(k, ViewProfile(prof.top, null).toJson().toString())
+            } catch (_: Throwable) { e.remove(k) }
+        }
+        // 舊的全域俯視對位也換成實車校準的預設
+        e.remove("anL").remove("anT").remove("anR").remove("anB").remove("anCx").remove("anCy").remove("anS").remove("anF")
+        e.putBoolean("mig3dV2", true).apply()
     }
 
     fun resetViewProfile(key: String) { sp.edit().remove("view_$key").remove("viewCal_$key").apply() }

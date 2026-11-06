@@ -18,10 +18,13 @@ class AnnotationMapper(val p: Params, val screenW: Int, val screenH: Int) {
         val cx: Float, val cy: Float, val scale: Float, val flip: Boolean
     ) {
         companion object {
-            /** 依實車照片估的初值：左邊約 3 成是俯視圖、車模約佔那格高度的 6 成。實際要在車上微調。 */
+            /**
+             * 原廠俯視圖（BVSV 版面）：用實車截圖自動對位找出來的（3 張都一致），
+             * 俯視格在螢幕 x 0～34.8%、下緣到工具列上方（86.8%）。
+             */
             val DEFAULT = Params(
-                clipL = 0f, clipT = 0f, clipR = 0.31f, clipB = 0.88f,
-                cx = 0.155f, cy = 0.45f, scale = 0.105f, flip = false
+                clipL = 0f, clipT = 0f, clipR = 0.348f, clipB = 0.868f,
+                cx = 0.177f, cy = 0.434f, scale = 0.097f, flip = false
             )
         }
     }

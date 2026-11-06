@@ -147,7 +147,7 @@ object Engine360 {
         // 3D 不自動對位：用實車截圖驗證過，原廠 3D 貼在碗狀曲面上、車附近被車模蓋住，
         // 影像比對挑不出對的角度（分數 0.2～0.3、兩張同視角選出不同結果）。保留原本的 3D 設定（手動或預設）。
         val p3: AutoCalibrator.P3Result? = null
-        val keep3d = prefs.viewProfile(key).p3
+        val keep3d = prefs.viewProfile(key, lastBvName).p3
         dumpCalibration(ctx, "auto_$key", scr, bev, JSONObject()
             .put("top", top?.let { ViewProfile(topParams, null).toJson().put("score", it.score.toDouble()) } ?: JSONObject.NULL)
             .put("p3", p3?.let { ViewProfile(null, it.params).toJson().put("score", it.score.toDouble()) } ?: JSONObject.NULL)
@@ -248,7 +248,7 @@ object Engine360 {
     @JvmStatic
     fun onViewState(value: Int, name: String) {
         try {
-            lastBvName = name
+            if (lastBvName != name) { lastBvName = name; main.post { view?.get()?.invalidateProfiles() } }
             // 讀得到原廠目前場景時，以場景為準（側邊畫面、打燈畫面有些不走 setBvState）
             if (sceneReadable) return
             setViewKey(name)
@@ -314,6 +314,7 @@ object Engine360 {
         try {
             val app = ctx.applicationContext ?: ctx
             val prefs = AppPrefs(app)
+            prefs.migrateBad3dOnce()
             // 合併版：偏離車道、變道、路邊紅黃線都要車道偵測，沒選過就預設開（標準版 App 預設是關）
             if (!prefs.groundModeSet) prefs.groundMode = AppPrefs.GROUND_VIRTUAL
             if (!signalsAttached) {
@@ -393,7 +394,7 @@ object Engine360 {
 
         val av = AnnotationView(act).apply {
             tag = VIEW_TAG
-            profileFor = { k -> overrides[k] ?: prefs.viewProfile(k) }
+            profileFor = { k -> overrides[k] ?: prefs.viewProfile(k, lastBvName) }
             onTapGround = { x, z -> pipeline?.tapSlot(x, z) ?: false }
             viewKey = lastViewKey
             drawRoad = prefs.annotDrawRoad
