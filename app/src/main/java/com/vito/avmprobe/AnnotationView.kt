@@ -126,11 +126,7 @@ class AnnotationView(context: Context) : View(context) {
             p.optJSONArray("slots")?.let { drawSlots(c, m, it) }
             p.optJSONObject("park")?.let { drawParkPath(c, m, it) }
             p.optJSONObject("turn")?.let { drawTurnPath(c, m, it) }
-            p.optJSONObject("lca")?.let { l ->
-                // 變道走廊：路徑上沒威脅＝綠，有來車＝紅
-                val col = if (l.optBoolean("pathOk", true)) Color.rgb(90, 220, 120) else Color.rgb(255, 70, 60)
-                l.optJSONArray("path")?.let { corridor(c, m, points(it), AnnotationMapper.EGO_HW, col) }
-            }
+            p.optJSONObject("lc")?.let { drawLaneChange(c, m, it) }
             p.optJSONArray("obs")?.let { drawObstacles(c, m, it) }
             p.optJSONArray("objs")?.let { drawObjects(c, m, it) }
         }
@@ -160,9 +156,10 @@ class AnnotationView(context: Context) : View(context) {
                 if (sw != null && sw.size >= 3) groundPolygon3d(c, m, sw, col)
                 else if (o != null && i != null && o.size >= 2 && i.size >= 2) groundPolygon3d(c, m, o + i.asReversed(), col)
             }
-            p.optJSONObject("lca")?.let { l ->
-                val col = if (l.optBoolean("pathOk", true)) Color.rgb(90, 220, 120) else Color.rgb(255, 70, 60)
-                l.optJSONArray("path")?.let { groundPolygon3d(c, m, AnnotationMapper.corridor(points(it), AnnotationMapper.EGO_HW), col) }
+            p.optJSONObject("lc")?.let { lc ->
+                val col = laneChangeColor(lc)
+                groundPolygon3d(c, m, laneBand(lc), col, alpha = 35)
+                lc.optJSONArray("pts")?.let { groundPolygon3d(c, m, AnnotationMapper.corridor(points(it), AnnotationMapper.EGO_HW), col) }
             }
             p.optJSONObject("park")?.optJSONArray("pts")?.let {
                 groundPolygon3d(c, m, AnnotationMapper.corridor(points(it), AnnotationMapper.EGO_HW), Color.rgb(70, 170, 255))
@@ -173,16 +170,15 @@ class AnnotationView(context: Context) : View(context) {
     }
 
     /** 地面（y = 0）上的多邊形。鏡頭背後的點丟掉（鏡頭在車後上方往前看，丟的都是看不到的部分）。 */
-    private fun groundPolygon3d(c: Canvas, m: PerspectiveMapper, poly: List<FloatArray>, col: Int) {
+    private fun groundPolygon3d(c: Canvas, m: PerspectiveMapper, poly: List<FloatArray>, col: Int, alpha: Int = 80) {
         val pts = poly.mapNotNull { m.project(it[0], 0f, it[1]) }
         if (pts.size < 3) return
         path.reset()
         pts.forEachIndexed { i, q -> if (i == 0) path.moveTo(q[0], q[1]) else path.lineTo(q[0], q[1]) }
         path.close()
-        fill.color = col; fill.alpha = 80
+        fill.color = col; fill.alpha = alpha
         c.drawPath(path, fill)
-        stroke.color = col; stroke.alpha = 230; stroke.pathEffect = null
-        c.drawPath(path, stroke)
+        if (alpha >= 60) { stroke.color = col; stroke.alpha = 230; stroke.pathEffect = null; c.drawPath(path, stroke) }
     }
 
     /** 物件畫成立體線框（地面外框 + 高度），上面標距離。 */
@@ -343,6 +339,31 @@ class AnnotationView(context: Context) : View(context) {
             box(c, m, x, z, o.optDouble("w").toFloat() / 2f, o.optDouble("l").toFloat() / 2f, 0f,
                 Color.rgb(255, 120, 200), fillAlpha = 40)
         }
+    }
+
+    // ───────────────────────── 變道（打方向燈） ─────────────────────────
+
+    private fun laneChangeColor(lc: JSONObject): Int =
+        if (lc.optBoolean("ok", true)) Color.rgb(90, 220, 120) else Color.rgb(255, 70, 60)
+
+    /** 目標車道（打燈那一側的整條車道）：自車後方 4 m 到前方 25 m。 */
+    private fun laneBand(lc: JSONObject): List<FloatArray> {
+        val dir = lc.optInt("dir", 1).toFloat()
+        val w = lc.optDouble("w", 3.5).toFloat()
+        val a = dir * w / 2f; val b = dir * w * 1.5f
+        return listOf(floatArrayOf(a, -4f), floatArrayOf(a, 25f), floatArrayOf(b, 25f), floatArrayOf(b, -4f))
+    }
+
+    /** 變道：目標車道半透明標出來，再畫一條從目前車道切過去的車寬走廊。那一側有來車就變紅。 */
+    private fun drawLaneChange(c: Canvas, m: AnnotationMapper, lc: JSONObject) {
+        val col = laneChangeColor(lc)
+        val band = laneBand(lc)
+        path.reset()
+        band.forEachIndexed { i, q -> if (i == 0) path.moveTo(m.sx(q[0], q[1]), m.sy(q[0], q[1])) else path.lineTo(m.sx(q[0], q[1]), m.sy(q[0], q[1])) }
+        path.close()
+        fill.color = col; fill.alpha = 35
+        c.drawPath(path, fill)
+        lc.optJSONArray("pts")?.let { corridor(c, m, points(it), AnnotationMapper.EGO_HW, col) }
     }
 
     // ───────────────────────── 預測走廊（車寬） ─────────────────────────

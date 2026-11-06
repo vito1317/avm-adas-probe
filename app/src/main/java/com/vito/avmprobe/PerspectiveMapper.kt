@@ -84,6 +84,22 @@ class PerspectiveMapper(val p: Params, val screenW: Int, val screenH: Int) {
     val clipRight get() = p.clipR * screenW
     val clipBottom get() = p.clipB * screenH
 
+    /**
+     * 反投影：螢幕像素 → 地面（y = 0）上的點 (x, z)。射線沒往下（看到地平線以上）回 null。
+     * 自動對位用：拿原廠畫面的像素去對我們俯視圖上同一個地面點。
+     */
+    fun unprojectToGround(sx: Float, sy: Float): FloatArray? {
+        val xc = (sx - ox) / focal
+        val yc = -(sy - oy) / focal
+        // 世界方向 = f + xc·r + yc·u
+        val dx = fx + xc * rx + yc * ux
+        val dy = fy + xc * ry + yc * uy
+        val dz = fz + xc * rz + yc * uz
+        if (dy > -1e-4f) return null
+        val t = -cy / dy
+        return floatArrayOf(cx + t * dx, cz + t * dz)
+    }
+
     /** 投影；在鏡頭後面（或太貼近鏡頭）回 null。結果 [0] = x、[1] = y（螢幕像素）。 */
     fun project(x: Float, y: Float, z: Float): FloatArray? {
         val dx = x - cx; val dy = y - cy; val dz = z - cz

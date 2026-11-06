@@ -61,3 +61,17 @@ class PerspectiveMapperTest {
         assertTrue(narrow[0] - 1000f > wide[0] - 1000f)
     }
 }
+
+class PerspectiveUnprojectTest {
+    @org.junit.Test
+    fun unprojectInvertsProject() {
+        val p = PerspectiveMapper.Params(0.4f, 0f, 1f, 0.9f, 35f, 22f, 9f, 55f, -1.5f, 3f)
+        val m = PerspectiveMapper(p, 1920, 720)
+        for ((x, z) in listOf(0f to 2f, -3f to 5f, 2.5f to -1f, 1f to 8f)) {
+            val s = m.project(x, 0f, z) ?: continue
+            val g = m.unprojectToGround(s[0], s[1])!!
+            org.junit.Assert.assertEquals(x, g[0], 1e-3f)
+            org.junit.Assert.assertEquals(z, g[1], 1e-3f)
+        }
+    }
+}

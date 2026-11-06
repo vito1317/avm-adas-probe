@@ -17,6 +17,7 @@ import android.widget.FrameLayout
 import android.widget.TextView
 import android.widget.Toast
 import java.lang.ref.WeakReference
+import org.json.JSONObject
 
 /**
  * 合併版的入口：這整包（偵測管線＋標注圖層）被編進**原廠 360 的 APK**，跑在原廠的 process 裡。
@@ -55,6 +56,79 @@ object Engine360 {
     fun log(msg: String) { try { FrameShareHub.log(msg) } catch (_: Throwable) {} }
 
     @Volatile private var lastViewKey: String? = null
+    private var activity: WeakReference<Activity>? = null
+    private val calThread by lazy { android.os.HandlerThread("autocal").apply { start() } }
+    private val cal by lazy { android.os.Handler(calThread.looper) }
+    @Volatile private var calibrating = false
+
+    /**
+     * 自動對位目前（或指定）的視角：擷取原廠畫面＋同一刻我們的俯視圖 → [AutoCalibrator]。
+     * 先找俯視圖（比例、位置、方向）與它那一格的範圍，剩下的格子當 3D／鏡頭畫面找虛擬鏡頭。
+     * 背景執行緒算（車機上要幾秒到十幾秒），完成後存成這個視角的設定。[done] 在主執行緒回報結果文字。
+     */
+    fun autoCalibrate(key: String, done: ((String) -> Unit)? = null) {
+        val act = activity?.get(); val p = pipeline
+        if (act == null || p == null) { done?.invoke("還沒收到影格，等畫面出來再試"); return }
+        if (calibrating) { done?.invoke("正在自動對位中…"); return }
+        calibrating = true
+        log("自動對位開始：$key")
+        p.requestBev { bev ->
+            main.post {
+                if (bev == null) { calibrating = false; done?.invoke("拿不到俯視圖"); return@post }
+                FactoryScreen.capture(act) { scr ->
+                    if (scr == null) { calibrating = false; done?.invoke("擷取不到原廠畫面"); return@capture }
+                    cal.post {
+                        val msg = try { runCalibration(act, key, scr, bev) } catch (t: Throwable) { "自動對位失敗：$t" }
+                        calibrating = false
+                        log(msg)
+                        main.post { done?.invoke(msg) }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun runCalibration(ctx: Context, key: String, scr: AutoCalibrator.Screen, bev: AutoCalibrator.Bev): String {
+        val prefs = AppPrefs(ctx)
+        val t0 = SystemClock.elapsedRealtime()
+        val top = AutoCalibrator.calibrateTop(scr, bev)
+        var topParams: AnnotationMapper.Params? = null
+        // 3D 格：有俯視圖 → 原廠畫面去掉俯視格剩下的那一側；沒有 → 整個原廠畫面
+        val surf = floatArrayOf(scr.sx0.toFloat() / scr.screenW, scr.sy0.toFloat() / scr.screenH,
+            (scr.sx0 + scr.sw).toFloat() / scr.screenW, (scr.sy0 + scr.sh).toFloat() / scr.screenH)
+        var pane3 = surf
+        if (top != null) {
+            val tp = AutoCalibrator.topPane(scr, top.params, bev)
+            topParams = top.params.copy(clipL = tp[0], clipT = tp[1], clipR = tp[2], clipB = tp[3])
+            val leftW = tp[0] - surf[0]; val rightW = surf[2] - tp[2]
+            pane3 = when {
+                rightW >= leftW && rightW > 0.15f -> floatArrayOf(tp[2], surf[1], surf[2], surf[3])
+                leftW > 0.15f -> floatArrayOf(surf[0], surf[1], tp[0], surf[3])
+                else -> floatArrayOf(0f, 0f, 0f, 0f)   // 整個都是俯視圖
+            }
+        }
+        val p3 = if (pane3[2] - pane3[0] > 0.15f) AutoCalibrator.calibrate3d(scr, pane3, bev) else null
+        if (topParams == null && p3 == null) return "自動對位：$key 找不到俯視圖或 3D（停車、周圍有地面紋理時再試）"
+        prefs.setViewProfile(key, ViewProfile(topParams, p3?.params))
+        prefs.setViewCalMode(key, "auto")
+        topParams?.let { prefs.annotParams = it }
+        view?.get()?.invalidateProfiles()
+        val dt = (SystemClock.elapsedRealtime() - t0) / 1000f
+        return "自動對位完成：$key（俯視 ${top?.score?.let { "%.2f".format(it) } ?: "—"}、3D ${p3?.score?.let { "%.2f".format(it) } ?: "—"}，${"%.1f".format(dt)} 秒）"
+    }
+
+    /** 原廠切到還沒對位過的視角 → 等轉場動畫跑完，停著或很慢時自動對位一次。 */
+    private fun maybeAutoCalibrate(key: String) {
+        val ctx = activity?.get() ?: return
+        val prefs = AppPrefs(ctx)
+        if (!prefs.annotEnabled || prefs.viewCalMode(key).isNotEmpty()) return
+        main.postDelayed({
+            if (lastViewKey != key) return@postDelayed
+            val spd = VehicleBus.signals.snapshot().speedKmh
+            if (spd != null && spd > 3f) { log("自動對位：$key 等停車再做"); return@postDelayed }
+            autoCalibrate(key) { msg -> try { Toast.makeText(ctx, msg, Toast.LENGTH_SHORT).show() } catch (_: Throwable) {} }
+        }, 2500)
+    }
 
     /**
      * 原廠切換視角時（注入在 nativesetBvState 前）：[name] 是 BV_state 列舉名稱（BV_LEFT、BV_REAR_3D…）。
@@ -67,6 +141,7 @@ object Engine360 {
             lastViewKey = name
             log("原廠視角：$name（$value）")
             view?.get()?.viewKey = name
+            main.post { maybeAutoCalibrate(name) }
         } catch (_: Throwable) {}
     }
 
@@ -83,6 +158,7 @@ object Engine360 {
                 try { VehicleBus.signals.attach(HeadUnitSignalAdapter(app, bindEnabled = prefs.headUnitBind)) }
                 catch (t: Throwable) { log("車機訊號接不上：$t") }
             }
+            activity = WeakReference(act)
             addViews(act, prefs)
             FrameShareHub.listener = { img -> onFrame(app, prefs, img) }
             if (!ticking) { ticking = true; main.post(statusTick) }
@@ -179,13 +255,50 @@ object Engine360 {
         }
     }
 
+    /** 設定裡「測試提示音」：依序播三種提示音（起步／轉綠、偏離車道、危險），確認有聲音、音量夠。 */
+    fun testSounds(act: Activity) {
+        val tg = try { android.media.ToneGenerator(android.media.AudioManager.STREAM_MUSIC, 90) } catch (_: Throwable) {
+            Toast.makeText(act, "這台車機開不了提示音", Toast.LENGTH_LONG).show(); return
+        }
+        val seq = listOf(
+            "起步／轉綠" to { tg.startTone(android.media.ToneGenerator.TONE_PROP_BEEP2, 300) },
+            "偏離車道" to { tg.startTone(android.media.ToneGenerator.TONE_CDMA_PIP, 400) },
+            "危險（來車、太近）" to { tg.startTone(android.media.ToneGenerator.TONE_CDMA_EMERGENCY_RINGBACK, 700) }
+        )
+        seq.forEachIndexed { i, (name, play) ->
+            main.postDelayed({ try { play(); Toast.makeText(act, "提示音：$name", Toast.LENGTH_SHORT).show() } catch (_: Throwable) {} }, i * 1500L)
+        }
+        main.postDelayed({ tg.release() }, seq.size * 1500L + 1000L)
+    }
+
     /** 設定裡「存原始影格」：下一幀存檔，完成後跳提示。沒在跑偵測時直接說明。 */
     fun saveRaw(act: Activity) {
         val p = pipeline
         if (p == null) {
             Toast.makeText(act, "還沒收到影格，存不了（看診斷文字）", Toast.LENGTH_LONG).show(); return
         }
-        p.requestSaveRaw { msg -> main.post { try { Toast.makeText(act, msg, Toast.LENGTH_LONG).show() } catch (_: Throwable) {} } }
+        p.requestSaveRaw { msg ->
+            main.post {
+                try { Toast.makeText(act, msg, Toast.LENGTH_LONG).show() } catch (_: Throwable) {}
+                // 同時存原廠畫面（自動對位對不準時，拿這兩張在電腦上重現）
+                FactoryScreen.capture(act, maxW = 1920) { scr ->
+                    if (scr == null) return@capture
+                    cal.post {
+                        try {
+                            val bmp = android.graphics.Bitmap.createBitmap(scr.argb, scr.w, scr.h, android.graphics.Bitmap.Config.ARGB_8888)
+                            val bos = java.io.ByteArrayOutputStream()
+                            bmp.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, bos)
+                            val ts = java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.US).format(java.util.Date())
+                            MediaSaver.save(act, "screen_$ts.png", "image/png", bos.toByteArray())
+                            val meta = org.json.JSONObject().put("view", lastViewKey ?: JSONObject.NULL)
+                                .put("sx0", scr.sx0).put("sy0", scr.sy0).put("sw", scr.sw).put("sh", scr.sh)
+                                .put("screenW", scr.screenW).put("screenH", scr.screenH)
+                            MediaSaver.save(act, "screen_$ts.json", "application/json", meta.toString(2).toByteArray())
+                        } catch (_: Throwable) {}
+                    }
+                }
+            }
+        }
     }
 
     /** 沒影格時把診斷文字顯示在俯視圖上，有影格就收掉。 */

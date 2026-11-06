@@ -231,7 +231,11 @@ class AppPrefs(context: Context) {
         sp.edit().putString("view_$key", v.toJson().toString()).apply()
     }
 
-    fun resetViewProfile(key: String) { sp.edit().remove("view_$key").apply() }
+    fun resetViewProfile(key: String) { sp.edit().remove("view_$key").remove("viewCal_$key").apply() }
+
+    /** 這個視角怎麼對位的："" 還沒、"auto" 自動對位、"manual" 使用者手動調過（自動不會蓋掉）。 */
+    fun viewCalMode(key: String): String = sp.getString("viewCal_$key", "")!!
+    fun setViewCalMode(key: String, mode: String) { sp.edit().putString("viewCal_$key", mode).apply() }
 
     /** 原廠打方向燈時右側 3D 視角 → 螢幕的對應。[side] = 'L' 或 'R'，兩邊各存一組。 */
     fun annot3d(side: Char): PerspectiveMapper.Params {

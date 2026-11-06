@@ -53,6 +53,10 @@ object Engine360Settings {
             prefs.annotEnabled = it; prefs.annotBoots = 0; prefs.annotCrashes = 0
         }
         check("提示音（用媒體音量）", { prefs.alertSound }) { prefs.alertSound = it }
+        col.addView(Button(act).apply {
+            text = "測試提示音（依序播三種，聽不到就把媒體音量調大）"; isAllCaps = false
+            setOnClickListener { Engine360.testSounds(act) }
+        })
         check("車道偵測（偏離車道警示、變道輔助要用）", { prefs.groundMode == AppPrefs.GROUND_VIRTUAL }) {
             prefs.groundMode = if (it) AppPrefs.GROUND_VIRTUAL else AppPrefs.GROUND_OFF
         }
@@ -90,6 +94,7 @@ object Engine360Settings {
         fun save(np: ViewProfile) {
             prof = np
             prefs.setViewProfile(key, np)
+            prefs.setViewCalMode(key, "manual")   // 手動調過：自動對位不會再蓋掉
             np.top?.let { prefs.annotParams = it }   // 最新的俯視圖對位也當作新視角的預設
             av.invalidateProfiles()
         }
@@ -100,6 +105,24 @@ object Engine360Settings {
             text = "這組設定只套用在原廠的「$key」視角。要調別的視角（倒車、打方向燈、手動切換的模式），" +
                 "先按完成、在原廠切到那個視角，再打開這裡。打方向燈時原廠會自動切側邊 3D，可以打著燈調。"
         })
+        col.addView(TextView(act).apply {
+            textSize = 12f
+            text = when (prefs.viewCalMode(key)) {
+                "auto" -> "這個視角已自動對位。"
+                "manual" -> "這個視角已手動調過（自動對位不會蓋掉）。"
+                else -> "這個視角還沒對位：原廠切到這個視角、車停著時會自動對位。"
+            }
+        })
+        var refreshLater: () -> Unit = {}
+        val autoBtn = Button(act).apply { text = "自動對位這個視角（車停著、周圍有地面紋理時按）"; isAllCaps = false }
+        autoBtn.setOnClickListener {
+            autoBtn.isEnabled = false; autoBtn.text = "自動對位中…（幾秒到十幾秒）"
+            Engine360.autoCalibrate(key) { msg ->
+                autoBtn.isEnabled = true; autoBtn.text = msg
+                prof = av.currentProfile(); refreshLater()
+            }
+        }
+        col.addView(autoBtn)
         check("對位模式（畫出紫色自車外框／立體線框與格線）", { av.calibrating }) { av.calibrating = it }
         var onRight = true
         col.addView(Button(act).apply {
@@ -137,6 +160,7 @@ object Engine360Settings {
             col.addView(tv); col.addView(sb)
         }
         fun refreshAll() { for (r in refreshers) r() }
+        refreshLater = ::refreshAll
 
         // 俯視圖
         section("俯視圖標注（紫框疊到原廠俯視圖的車模上）")

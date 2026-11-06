@@ -148,6 +148,21 @@ class AdasPipeline(
     }
 
     @Volatile private var saveRawCb: ((String) -> Unit)? = null
+    @Volatile private var bevCb: ((AutoCalibrator.Bev?) -> Unit)? = null
+    private var snapLut: IntArray? = null
+    private var snapLutKey = 0L
+
+    /** 下一幀算一張俯視圖給自動對位（不管「俯視辨識」有沒有開）。[done] 在影格執行緒上被呼叫。 */
+    fun requestBev(done: (AutoCalibrator.Bev?) -> Unit) { bevCb = done }
+
+    private fun bevSnapshot(g: AvmGeometry): AutoCalibrator.Bev? = try {
+        // 自己的查表快取：不能動 runBev 的 lut／lutKey（它靠「查表剛建」來配置輸出緩衝）
+        val key = (frame.width.toLong() shl 32) or frame.height.toLong()
+        val table = snapLut?.takeIf { snapLutKey == key } ?: g.buildBevLut(frame.width, frame.height).also { snapLut = it; snapLutKey = key }
+        val out = IntArray(g.bev.width * g.bev.height)
+        frame.sampleLut(table, out)
+        AutoCalibrator.Bev(out, g.bev.width, g.bev.height, g.bev.mpp.toFloat(), g.bev.originX.toFloat(), g.bev.originY.toFloat())
+    } catch (_: Throwable) { null }
     @Volatile private var lastPayload: JSONObject? = null
 
     /**
@@ -199,6 +214,7 @@ class AdasPipeline(
         val g = geo ?: return
         frames++
         saveRawCb?.let { cb -> saveRawCb = null; cb(saveRaw()) }
+        bevCb?.let { cb -> bevCb = null; cb(bevSnapshot(g)) }
 
         val det = yolo ?: initYolo() ?: return
         val vs = VehicleBus.signals.snapshot()
@@ -323,7 +339,7 @@ class AdasPipeline(
     }
 
     /** 用媒體音量（車機的通知音量常常是關的）。 */
-    private fun playTone(k: AlertSounder.Kind) {
+    fun playTone(k: AlertSounder.Kind) {
         try {
             val tg = tone ?: android.media.ToneGenerator(android.media.AudioManager.STREAM_MUSIC, 90).also { tone = it }
             when (k) {
@@ -665,7 +681,23 @@ class AdasPipeline(
                 .put("w", r2(o.w)).put("l", r2(o.l)).put("c", r2(o.conf)))
             p.put("obs", oa)
         }
-        if (TurnPathPlanner.plan(vs.turn, vs.steerDeg, vs.speedKmh) == null) turnHit = false
+        val turnPlan = TurnPathPlanner.plan(vs.turn, vs.steerDeg, vs.speedKmh)
+        if (turnPlan == null) turnHit = false
+        // 變道預測：打方向燈、方向盤還沒轉到要轉彎 → 從目前車道畫到那一側車道。
+        // 變道輔助有算出路徑（有車道線、速度夠）就用它的；沒有（慢速被當成可能轉彎、或沒偵測到車道）
+        // 就用車道寬畫一條，長度 = 車速 × 3 s（10～30 m），畫面上才看得出是切過去的。
+        if (turnPlan == null && (vs.turn == 'L' || vs.turn == 'R')) {
+            val dir = if (vs.turn == 'L') -1 else 1
+            val st = lcaState
+            val w = st?.laneW ?: LaneChangeAssist.LANE_W
+            val len = ((vs.speedKmh ?: 30f) / 3.6f * 3f).coerceIn(10f, 30f)
+            val path = st?.path?.takeIf { now - tracksAt < OBJ_TTL_MS && it.size >= 2 }
+                ?: lca.lanePath(dir * w.toDouble(), 0.0, len.toDouble())
+            val danger = st != null && now - tracksAt < OBJ_TTL_MS && (if (dir < 0) st.L >= 2 else st.R >= 2)
+            val pts = JSONArray(); for (q in path) pts.put(JSONArray().put(r2(q[0])).put(r2(q[1])))
+            p.put("lc", JSONObject().put("pts", pts).put("dir", dir).put("w", r2(w))
+                .put("ok", !danger && (st?.pathOk ?: true)))
+        }
         TurnPathPlanner.plan(vs.turn, vs.steerDeg, vs.speedKmh)?.let { tp ->
             val outer = JSONArray(); for (q in tp.pts) outer.put(JSONArray().put(r2(q[0])).put(r2(q[1])))
             val inner = JSONArray(); for (q in tp.inner) inner.put(JSONArray().put(r2(q[0])).put(r2(q[1])))
