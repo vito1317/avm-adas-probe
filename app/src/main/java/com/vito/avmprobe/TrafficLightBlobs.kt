@@ -45,14 +45,20 @@ class TrafficLightBlobs {
     }
 
     /** 找這一幀的候選燈點（不含時間穩定）。 */
+    // 暫存陣列重複使用（以前每幀配置好幾 MB，原廠 process 記憶體吃緊）
+    private var cls = CharArray(0)
+    private var seen = BooleanArray(0)
+    private var stack = IntArray(0)
+
     fun candidates(argb: IntArray, size: Int): List<Light> {
         val lim = (size * TOP_FRAC).toInt()
-        val cls = CharArray(size * lim)
+        val n = size * lim
+        if (cls.size < n) { cls = CharArray(n); seen = BooleanArray(n); stack = IntArray(n) }
+        val cls = cls; val seen = seen; val stack = stack
         for (y in 0 until lim) for (x in 0 until size) cls[y * size + x] = hueClass(argb[y * size + x])
-        val seen = BooleanArray(size * lim)
+        java.util.Arrays.fill(seen, 0, n, false)
         val out = ArrayList<Light>()
-        val stack = IntArray(size * lim)
-        for (i in cls.indices) {
+        for (i in 0 until n) {
             if (seen[i] || cls[i] == '.') continue
             val k = cls[i]
             var sp = 0; stack[sp++] = i; seen[i] = true

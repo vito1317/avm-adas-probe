@@ -580,7 +580,8 @@ class AdasPipeline(
         for (d in dets) if (d.type == ObjTypes.LIGHT) considerTrafficLightVirtual(v, argb, d, now)
         // 模型這次沒抓到 → 高解析畫面找燈點（遠處燈頭只有幾個像素，模型看不到）
         val cur = tl
-        if (cur == null || now - cur.at > 400) {
+        if ((cur == null || now - cur.at > 400) && now - tlBlobAt >= 500) {
+            tlBlobAt = now
             val hv = virtualView(g, "tl:hi", TL_HI_SIZE) ?: return
             val hargb = renderVirtual(hv, "tl:hi")
             val l = tlBlobs.update(hargb, hv.size) ?: return
@@ -591,6 +592,7 @@ class AdasPipeline(
     }
 
     private val tlBlobs = TrafficLightBlobs()
+    private var tlBlobAt = 0L
 
     private fun considerTrafficLightVirtual(v: VirtualView, argb: IntArray, d: Detection, now: Long) {
         val r = d.rect

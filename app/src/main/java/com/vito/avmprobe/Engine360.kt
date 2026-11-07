@@ -54,8 +54,8 @@ object Engine360 {
     private const val MIN_UPTIME_MS = 8000L
     /** 原廠一直沒回報初始化完成時，最多等這麼久就照常啟動（讀不到狀態的版本）。 */
     private const val MAX_WAIT_MS = 45_000L
-    /** 準備好之後再等這麼久才給相機 Surface。 */
-    private const val SURFACE_AFTER_READY_MS = 2500L
+    /** 準備好之後再等這麼久才給相機 Surface（偵測是分批啟動的第 8 秒）。 */
+    private const val SURFACE_AFTER_READY_MS = 8500L
 
     @Volatile private var ready = false
     @Volatile private var readyAt = 0L
@@ -92,6 +92,29 @@ object Engine360 {
             }
         }
         main.postDelayed(tick, 1000)
+    }
+
+    /** 延後 [delayMs] 在主執行緒做一件啟動工作；出錯只記錄，不影響其他。 */
+    private fun stage(delayMs: Long, name: String, block: () -> Unit) {
+        main.postDelayed({
+            try { block(); log("啟動：$name") }
+            catch (t: Throwable) { Log.e(TAG, "啟動 $name 失敗", t); activity?.get()?.let { recordError(it, "啟動 $name", t) } }
+        }, delayMs)
+    }
+
+    private val errorsSaved = HashSet<String>()
+
+    /** 攔到的錯誤存一份到「下載/avm-adas」（同一種只存一次），不用接 USB 也查得到。 */
+    fun recordError(ctx: Context, where: String, t: Throwable) {
+        try {
+            val sig = where + ":" + t.javaClass.name + ":" + (t.stackTrace.firstOrNull()?.toString() ?: "")
+            synchronized(errorsSaved) { if (!errorsSaved.add(sig) || errorsSaved.size > 20) return }
+            val sw = java.io.StringWriter(); t.printStackTrace(java.io.PrintWriter(sw))
+            val rt = Runtime.getRuntime()
+            val txt = "位置：$where\n時間：${java.util.Date()}\n記憶體：已用 ${(rt.totalMemory() - rt.freeMemory()) / 1048576} MB／上限 ${rt.maxMemory() / 1048576} MB\n\n$sw"
+            val ts = java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.US).format(java.util.Date())
+            MediaSaver.save(ctx.applicationContext, "adas_error_$ts.txt", "text/plain", txt.toByteArray())
+        } catch (_: Throwable) {}
     }
 
     /** FrameTap 用：可以接相機了沒（原廠準備好再過 [SURFACE_AFTER_READY_MS]）。 */
@@ -405,7 +428,6 @@ object Engine360 {
                     prefs.annotParams = AnnotationMapper.Params.DEFAULT; log("全域俯視對位不合理，已重設為預設值")
                 }
             }
-            FactoryVehicle.start(app)
             Thread({ FactoryViews.load(app); log(FactoryViews.status); main.post { view?.get()?.invalidateProfiles() } }, "factory-views").start()
             // 合併版：偏離車道、變道、路邊紅黃線都要車道偵測，沒選過就預設開（標準版 App 預設是關）
             if (!prefs.groundModeSet) prefs.groundMode = AppPrefs.GROUND_VIRTUAL
@@ -414,10 +436,13 @@ object Engine360 {
                 try { VehicleBus.signals.attach(HeadUnitSignalAdapter(app, bindEnabled = prefs.headUnitBind)) }
                 catch (t: Throwable) { log("車機訊號接不上：$t") }
             }
-            if (FrameShareHub.listener == null) FrameShareHub.listener = { img -> onFrame(app, prefs, img) }
-            if (prefs.annotEnabled) Dashcam.start(app, prefs)
+            // 其他分批啟動，一次一樣（原廠這時也在用 GPU 畫 3D；模型 GPU 編譯、編碼器、相機畫面同時開，
+            // 記憶體／GPU 撐不住會整個程式消失，連記錄都留不下——實車：ADAS 一啟動就閃退）
+            stage(3_000, "讀原廠車速") { FactoryVehicle.start(app) }
+            stage(8_000, "偵測（相機畫面＋模型）") { if (FrameShareHub.listener == null) FrameShareHub.listener = { img -> onFrame(app, prefs, img) } }
+            stage(25_000, "行車記錄器") { if (prefs.annotEnabled) Dashcam.start(app, prefs) }
         } catch (t: Throwable) {
-            Log.e(TAG, "startBackground 失敗（不影響原廠）", t)
+            Log.e(TAG, "startBackground 失敗（不影響原廠）", t); recordError(ctx, "startBackground", t)
         }
     }
 
@@ -541,7 +566,7 @@ object Engine360 {
             }
             p.onFrame(img)
         } catch (t: Throwable) {
-            Log.e(TAG, "frame 失敗：${t.message}", t)
+            Log.e(TAG, "frame 失敗：${t.message}", t); recordError(ctx, "偵測", t)
         }
     }
 
