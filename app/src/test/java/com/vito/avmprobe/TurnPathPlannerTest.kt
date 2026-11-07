@@ -256,3 +256,34 @@ class SlotAutoPickTest {
         org.junit.Assert.assertTrue(sel.isSelected(slots[1]))
     }
 }
+
+class LaneChangeOdometryTest {
+    @org.junit.Test
+    fun targetMovesAsCarShiftsAndFinishes() {
+        val o = LaneChangeOdometry()
+        // 先在直路上開一陣子，方向盤讀值 5°（零點偏 5°）
+        for (i in 0 until 400) o.learnZero(80f, 5f, 0.1)
+        var t = 0L
+        val first = o.update(t, 'R', 80f, 5f, 3.5f)!!
+        org.junit.Assert.assertEquals(3.5, first.first, 0.05)
+        // 往右打一點、再回正：橫移一段後目標變近
+        var last = first
+        for (i in 0 until 15) { t += 100; last = o.update(t, 'R', 80f, 5f + 20f, 3.5f) ?: break }
+        org.junit.Assert.assertTrue("目標要變近：${last.first}", last.first < 3.3)
+        org.junit.Assert.assertTrue("車頭往右轉了 → 車道方向往左（phi < 0）", last.second < 0)
+        // 繼續開到新車道
+        var r: Pair<Double, Double>? = last
+        for (i in 0 until 200) { t += 100; r = o.update(t, 'R', 80f, 5f + 10f, 3.5f); if (r == null) break }
+        org.junit.Assert.assertNull(r)
+        org.junit.Assert.assertTrue(o.done)
+    }
+
+    @org.junit.Test
+    fun zeroOffsetDoesNotDriftWhenStraight() {
+        val o = LaneChangeOdometry()
+        for (i in 0 until 400) o.learnZero(90f, 14f, 0.1)
+        var t = 0L; var r: Pair<Double, Double>? = null
+        for (i in 0 until 50) { r = o.update(t, 'L', 90f, 14f, 3.5f); t += 100 }
+        org.junit.Assert.assertEquals("方向盤擺正（零點已扣掉）5 秒後目標不該漂", -3.5, r!!.first, 0.1)
+    }
+}

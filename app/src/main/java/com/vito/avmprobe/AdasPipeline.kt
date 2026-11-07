@@ -838,15 +838,23 @@ class AdasPipeline(
         // 就用車道寬畫一條，長度 = 車速 × 3 s（10～30 m），畫面上才看得出是切過去的。
         // 前方是直路（沒有轉彎路徑）→ 一律畫變道輔助線（使用者要求：不分車速）
         val slowTurn = false
+        val laneWNow = lcaState?.laneW ?: LaneChangeAssist.LANE_W
         val lcTarget = if (turnPlan == null && !slowTurn) lcTrack.update(now, vs.turn,
-            road?.takeIf { now - roadAt < BEV_TTL_MS }?.lines, lcaState?.laneW ?: LaneChangeAssist.LANE_W) else { lcTrack.reset(); null }
-        if (turnPlan == null && !slowTurn && lcTarget != 0f && (vs.turn == 'L' || vs.turn == 'R')) {
+            road?.takeIf { now - roadAt < BEV_TTL_MS }?.lines, laneWNow) else { lcTrack.reset(); null }
+        // 車道線鎖不到時的備援：車速＋方向盤推算橫移（每幀都要算，打燈前用來估方向盤零點）
+        val odoDt = if (odoAt == 0L) 0.0 else (now - odoAt).coerceIn(0, 300) / 1000.0
+        odoAt = now
+        if (vs.turn != 'L' && vs.turn != 'R') lcOdo.learnZero(vs.speedKmh, vs.steerDeg, odoDt)
+        val odo = lcOdo.update(now, vs.turn, vs.speedKmh, vs.steerDeg, laneWNow)
+        val odoDone = lcTarget == null && lcOdo.done
+        if (turnPlan == null && !slowTurn && lcTarget != 0f && !odoDone && (vs.turn == 'L' || vs.turn == 'R')) {
             val dir = if (vs.turn == 'L') -1 else 1
             val st = lcaState
             val w = st?.laneW ?: LaneChangeAssist.LANE_W
             val len = ((vs.speedKmh ?: 30f) / 3.6f * 3f).coerceIn(10f, 30f)
             // 鎖定到要跨過的車道線 → 終點跟著目標車道中央走（變道過程中線會跟著移、到了就收掉）
             val path = lcTarget?.let { lca.lanePath(it.toDouble(), 0.0, len.toDouble()) }
+                ?: odo?.let { (tx, phi) -> lca.lanePath(tx, phi, len.toDouble()) }
                 ?: st?.path?.takeIf { now - tracksAt < OBJ_TTL_MS && it.size >= 2 }
                 ?: lca.lanePath(dir * w.toDouble(), 0.0, len.toDouble())
             // 打燈那一側有車（相鄰車道／盲點，不只是快速接近的危險等級）→ 暫緩變道
@@ -914,6 +922,8 @@ class AdasPipeline(
     }
 
     private val lcTrack = LaneChangeTracker()
+    private val lcOdo = LaneChangeOdometry()
+    private var odoAt = 0L
     private val roadside = RoadsideSpaceFinder()
     private var spdPrev = Float.NaN; private var spdPrevAt = 0L; private var decel = 0f   // 自車減速度（m/s²，EMA）
 
