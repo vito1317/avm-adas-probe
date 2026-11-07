@@ -639,8 +639,26 @@ class AdasPipeline(
         for (r in camResults.values) if (now - r.at < OBJ_TTL_MS) all.addAll(r.objs)
         all.sortByDescending { it.c }
         val kept = ArrayList<WObj>()
-        for (o in all) if (kept.none { it.t == o.t && hypot(it.x - o.x, it.z - o.z) < 1.5f }) kept.add(o)
+        for (o in all) if (kept.none { sameObject(it, o) }) kept.add(o)
         return kept
+    }
+
+    /**
+     * 兩顆鏡頭（或兩種偵測）看到的是不是同一個東西：同一群（四輪車不分轎車／廂型／大車，兩輪車一群），
+     * 而且位置夠近。距離是單眼估的，**沿著視線方向**誤差大、越遠越大；橫向（方位角）準得多 →
+     * 分開看：橫向差要小，縱深差可以大（隨距離放寬）。實車：同一台轎車被畫成兩個重疊的框。
+     */
+    private fun sameObject(a: WObj, b: WObj): Boolean {
+        val g = ObjTypes.group(a.t)
+        if (g != ObjTypes.group(b.t)) return false
+        val (lat, rad) = when (g) { "veh" -> 1.3f to 2.6f; "two" -> 0.8f to 1.5f; else -> 0.6f to 1.0f }
+        val mx = (a.x + b.x) / 2f; val mz = (a.z + b.z) / 2f
+        val r = hypot(mx, mz).coerceAtLeast(1e-3f)
+        val ux = mx / r; val uz = mz / r                  // 視線方向（從自車往外）
+        val dx = a.x - b.x; val dz = a.z - b.z
+        val dRad = abs(dx * ux + dz * uz)
+        val dLat = abs(-dx * uz + dz * ux)
+        return dLat < lat && dRad < rad + 0.15f * r
     }
 
     private fun runBev(g: AvmGeometry, now: Long) {
