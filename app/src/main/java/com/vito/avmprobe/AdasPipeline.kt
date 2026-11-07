@@ -770,8 +770,8 @@ class AdasPipeline(
         // 變道預測：打方向燈、方向盤還沒轉到要轉彎 → 從目前車道畫到那一側車道。
         // 變道輔助有算出路徑（有車道線、速度夠）就用它的；沒有（慢速被當成可能轉彎、或沒偵測到車道）
         // 就用車道寬畫一條，長度 = 車速 × 3 s（10～30 m），畫面上才看得出是切過去的。
-        // 慢速（可能是路口轉彎）而前方是直路：轉彎線不畫，也不當成變道
-        val slowTurn = vs.speedKmh?.let { it <= TurnPathPlanner.EST_MAX_KMH } ?: false
+        // 前方是直路（沒有轉彎路徑）→ 一律畫變道輔助線（使用者要求：不分車速）
+        val slowTurn = false
         val lcTarget = if (turnPlan == null && !slowTurn) lcTrack.update(now, vs.turn,
             road?.takeIf { now - roadAt < BEV_TTL_MS }?.lines, lcaState?.laneW ?: LaneChangeAssist.LANE_W) else { lcTrack.reset(); null }
         if (turnPlan == null && !slowTurn && lcTarget != 0f && (vs.turn == 'L' || vs.turn == 'R')) {
