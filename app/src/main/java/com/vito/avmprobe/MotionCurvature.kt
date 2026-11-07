@@ -26,6 +26,8 @@ object MotionCurvature {
         private var yaw = 0.0                  // 繞「上」軸的角速度（rad/s，+ = 逆時針 = 往左），EMA
         var yawAt = 0L; private set
         private var lastBearing = Double.NaN; private var lastBearingAt = 0L
+        var visualRate = 0.0; private set      // 畫面量的轉向角速度：rad/s，+ = 往右
+        var visualAt = 0L; private set
         var bearingRate = 0.0; private set     // GPS：rad/s，+ = 往右
         var bearingAt = 0L; private set
 
@@ -43,6 +45,8 @@ object MotionCurvature {
             yawAt = now
         }
 
+        fun onVisual(now: Long, rateRight: Double) { visualRate = rateRight; visualAt = now }
+
         /** GPS 行進方向（度，0 = 北、順時針）；車速太慢方向會亂跳，呼叫端只在 > 10 km/h 時給。 */
         fun onBearing(now: Long, deg: Double) {
             if (!lastBearing.isNaN() && now > lastBearingAt) {
@@ -59,6 +63,7 @@ object MotionCurvature {
             val v = (speedKmh ?: return null) / 3.6
             if (v < 2.5) return null
             if (now - yawAt < 500) return -yaw / v          // 逆時針（往左）為正 → 換成往右為正
+            if (now - visualAt < 800) return visualRate / v
             if (now - bearingAt < 2500) return bearingRate / v
             return null
         }
@@ -101,5 +106,11 @@ object MotionCurvature {
     }
 
     fun curvature(speedKmh: Float?): Double? = synchronized(core) { core.curvature(SystemClock.elapsedRealtime(), speedKmh) }
+
+    /** 前方畫面量到的轉向角速度（[VisualYaw]）。沒有陀螺儀時用它，比 GPS 即時、不會亂跳。 */
+    fun onVisual(rateRight: Double) {
+        synchronized(core) { core.onVisual(SystemClock.elapsedRealtime(), rateRight) }
+        if (source.startsWith("GPS")) source = "前方畫面（沒有陀螺儀）"
+    }
 
 }

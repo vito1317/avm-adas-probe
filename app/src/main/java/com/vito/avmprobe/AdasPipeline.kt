@@ -505,6 +505,11 @@ class AdasPipeline(
         }
         camResults[slot] = CamResult(now, objs, emptyList())
         // 前車燈號：用窄角（看得比較大）那一格；正前方（框中心在畫面中間 30%）最近的那台車
+        // 車子轉向角速度（遠處景物的橫向平移）→ 道路彎度
+        if (slot == "front:w") try {
+            visualYaw.update(now, argb, v.size, (v.size / 2.0) / kotlin.math.tan(Math.toRadians(FRONT_WIDE_FOV / 2.0)))
+            if (visualYaw.rateAt == now) MotionCurvature.onVisual(visualYaw.rate)
+        } catch (t: Throwable) { Log.w(TAG, "visual yaw", t) }
         // 旁邊車道的車打方向燈要切進來：寬角那一格
         if (slot == "front:w") try {
             val boxes = dets.mapNotNull { d ->
@@ -526,6 +531,7 @@ class AdasPipeline(
 
     private val leadLights = LeadLightDetector()
     private val cutInWatch = CutInWatcher()
+    private val visualYaw = VisualYaw()
     @Volatile private var cutIn: Triple<Char, Float, Float>? = null
     @Volatile private var cutInAt = 0L
     @Volatile private var leadLight: LeadLightDetector.State? = null
