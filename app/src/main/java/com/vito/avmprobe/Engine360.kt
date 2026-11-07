@@ -49,17 +49,58 @@ object Engine360 {
     @JvmStatic
     fun enabled(ctx: Context): Boolean = try { AppPrefs(ctx).annotEnabled } catch (_: Throwable) { false }
 
-    /** 360 程式啟動後這麼久內，引擎不碰原廠（原廠自己的相機、原生繪圖還在初始化）。 */
-    private const val START_DELAY_MS = 6000L
-    /** 這麼久內原廠建相機 session 時不塞我們的 Surface（之後由 FrameTap 等相機穩定再用 addOutputSurface 接）。 */
-    private const val SURFACE_DELAY_MS = 10_000L
+    // ───────── 等原廠準備好 ─────────
+    /** 至少等 360 程式啟動這麼久。 */
+    private const val MIN_UPTIME_MS = 8000L
+    /** 原廠一直沒回報初始化完成時，最多等這麼久就照常啟動（讀不到狀態的版本）。 */
+    private const val MAX_WAIT_MS = 45_000L
+    /** 準備好之後再等這麼久才給相機 Surface。 */
+    private const val SURFACE_AFTER_READY_MS = 2500L
+
+    @Volatile private var ready = false
+    @Volatile private var readyAt = 0L
+    @Volatile private var bgStarted = false
+    private val readyQueue = ArrayList<() -> Unit>()
+    private var readyPolling = false
 
     private fun processStart(): Long =
         if (android.os.Build.VERSION.SDK_INT >= 24) android.os.Process.getStartElapsedRealtime() else 0L
 
+    /** 原廠顯示模組初始化完成了沒（CameraModelManager.mInstance → getDisplayProcessor().getInitialized()）。 */
+    private fun factoryInitialized(): Boolean = try {
+        val cmm = Class.forName("com.baony.sdk.media.CameraModelManager")
+        val inst = cmm.getDeclaredField("mInstance").apply { isAccessible = true }.get(null)
+        val dp = inst?.let { cmm.getMethod("getDisplayProcessor").invoke(it) }
+        (dp?.javaClass?.getMethod("getInitialized")?.invoke(dp) as? Boolean) == true
+    } catch (_: Throwable) { false }
+
+    /** 原廠準備好之後在主執行緒執行 [block]（已經好了就馬上執行）。 */
+    private fun whenReady(block: () -> Unit) {
+        if (ready) { main.post { try { block() } catch (t: Throwable) { Log.e(TAG, "啟動失敗（不影響原廠）", t) } }; return }
+        synchronized(readyQueue) { readyQueue.add(block) }
+        if (readyPolling) return
+        readyPolling = true
+        val tick = object : Runnable {
+            override fun run() {
+                val up = SystemClock.elapsedRealtime() - processStart()
+                val ok = up >= MIN_UPTIME_MS && (factoryInitialized() || up >= MAX_WAIT_MS)
+                if (!ok) { main.postDelayed(this, 1000); return }
+                ready = true; readyAt = SystemClock.elapsedRealtime()
+                log("原廠已準備好（啟動 ${up / 1000} 秒），開始 ADAS")
+                val q = synchronized(readyQueue) { readyQueue.toList().also { readyQueue.clear() } }
+                for (b in q) try { b() } catch (t: Throwable) { Log.e(TAG, "啟動失敗（不影響原廠）", t) }
+            }
+        }
+        main.postDelayed(tick, 1000)
+    }
+
+    /** FrameTap 用：可以接相機了沒（原廠準備好再過 [SURFACE_AFTER_READY_MS]）。 */
+    @JvmStatic
+    fun isReady(): Boolean = ready && SystemClock.elapsedRealtime() - readyAt >= SURFACE_AFTER_READY_MS
+
     @JvmStatic
     fun surface(w: Int, h: Int): Surface? = try {
-        if (SystemClock.elapsedRealtime() - processStart() < SURFACE_DELAY_MS) null else FrameShareHub.surface(w, h)
+        if (!isReady()) null else FrameShareHub.surface(w, h)
     } catch (_: Throwable) { null }
 
     @JvmStatic
@@ -199,6 +240,7 @@ object Engine360 {
     @JvmStatic
     fun onGesture(kind: Int, a: Int, b: Int) {
         try {
+            if (!ready) return
             val now = SystemClock.elapsedRealtime()
             // 一次手勢（間隔 < 0.6 秒算同一次）：累計移動量。長按切視角時手指按著不動也會送訊號，那不算拖動
             if (now - gestureAt > 600 || kind != gKind) { gPath = 0f; gLastA = a; gLastB = b; gKind = kind; gN = 0 }
@@ -285,6 +327,7 @@ object Engine360 {
     @JvmStatic
     fun onViewState(value: Int, name: String) {
         try {
+            if (!ready) { lastBvName = name; return }
             if (lastBvName != name) { lastBvName = name; main.post { view?.get()?.invalidateProfiles() } }
             // 讀得到原廠目前場景時，以場景為準（側邊畫面、打燈畫面有些不走 setBvState）
             if (sceneReadable) return
@@ -349,6 +392,9 @@ object Engine360 {
      */
     @JvmStatic
     fun startBackground(ctx: Context) {
+        if (!ready) { whenReady { startBackground(ctx) }; return }
+        if (bgStarted) return
+        bgStarted = true
         try {
             val app = ctx.applicationContext ?: ctx
             val prefs = AppPrefs(app)
@@ -382,17 +428,17 @@ object Engine360 {
             val prefs = AppPrefs(app)
             crashGuard(act, prefs)
             activity = WeakReference(act)
-            addViews(act, prefs)
-            // 引擎其他部分延後：原廠剛 onCreate 時相機、原生繪圖都還在初始化，這時去叫它的原生函式（讀場景）、
-            // 讀它的物件、開我們的偵測，會跟它的開機流程撞在一起（實車：一開 360 就閃退）
-            val wait = (START_DELAY_MS - (SystemClock.elapsedRealtime() - processStart())).coerceIn(0L, START_DELAY_MS)
-            main.postDelayed({
-                try {
-                    startBackground(app)
-                    if (!ticking) { ticking = true; main.post(statusTick) }
-                    if (!scenePolling) { scenePolling = true; main.post(scenePoll) }
-                } catch (t: Throwable) { Log.e(TAG, "延後啟動失敗（不影響原廠）", t) }
-            }, wait)
+            // 原廠回報顯示模組初始化完成之前完全不碰它（標注圖層、按鈕也先不掛）：
+            // 原廠剛 onCreate 時相機、原生繪圖都還在初始化，這時去叫它的原生函式（讀場景）、加 View、
+            // 開偵測，會跟它的開機流程撞在一起（實車：一開 360 就閃退；固定延後幾秒也不夠）
+            whenReady {
+                val a = activity?.get() ?: return@whenReady
+                if (a.isFinishing) return@whenReady
+                addViews(a, prefs)
+                startBackground(app)
+                if (!ticking) { ticking = true; main.post(statusTick) }
+                if (!scenePolling) { scenePolling = true; main.post(scenePoll) }
+            }
             log("合併版已掛上 ${act.javaClass.simpleName}（ADAS ${if (prefs.annotEnabled) "開" else "關"}）")
         } catch (t: Throwable) {
             Log.e(TAG, "attach 失敗（不影響原廠）", t)

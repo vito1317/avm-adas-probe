@@ -215,9 +215,8 @@ public final class FrameTap {
                         } catch (Throwable ignore) {}
                     }
                     int st = capturing ? stable + 1 : 0;
-                    // 360 程式啟動 11 秒內不接（引擎那邊這段時間不給 Surface，避免跟原廠開機流程撞在一起）
-                    boolean warm = android.os.Build.VERSION.SDK_INT < 24 ||
-                        android.os.SystemClock.elapsedRealtime() - android.os.Process.getStartElapsedRealtime() >= 11000;
+                    // 引擎說原廠準備好了才接（之前引擎不給 Surface，接了也是空的、之後不會重試）
+                    boolean warm = engineReady();
                     if (st >= STABLE_TICKS && warm) { sWaiting = false; attachAll(); return; }
                     if (tick >= MAX_TICKS && warm) {
                         // 等不到在擷取：照樣加進清單（相機沒在跑時 addOutputSurface 只是記下來，不會停／開相機）
@@ -233,6 +232,15 @@ public final class FrameTap {
                 }
             }
         }, 1000);
+    }
+
+    /** 合併版：問引擎原廠準備好了沒；B 模式（沒有引擎）照舊用啟動時間判斷。 */
+    private static boolean engineReady() {
+        try {
+            if (engine() != null) return (Boolean) engineCall("isReady", new Class<?>[]{});
+        } catch (Throwable ignore) { return false; }
+        return android.os.Build.VERSION.SDK_INT < 24 ||
+            android.os.SystemClock.elapsedRealtime() - android.os.Process.getStartElapsedRealtime() >= 11000;
     }
 
     private static Method findMethod(Class<?> k, String name, Class<?>... types) {
