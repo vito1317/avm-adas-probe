@@ -290,7 +290,7 @@ object Engine360 {
         lastViewKey = key
         log("原廠視角：$key" + if (lastBvName.isNotEmpty() && !key.contains(lastBvName)) "（$lastBvName）" else "")
         view?.get()?.viewKey = key
-        main.post { maybeAutoCalibrate(key) }
+        main.post { maybeAutoCalibrate(key); maybeAutoCaptureUnsupported(key) }
     }
 
     // ── 直接問原廠原生繪圖現在畫哪個場景／版面（比 setBvState 可靠：打燈的側邊畫面、
@@ -508,6 +508,50 @@ object Engine360 {
     }
 
     /** 設定裡「存原始影格」：下一幀存檔，完成後跳提示。沒在跑偵測時直接說明。 */
+    // ───────── 還不支援的原廠畫面（第一人稱等）：停留 2 秒自動存一份給開發者 ─────────
+    // 使用者開設定視窗按「存原始影格」時，原廠會跳回第三人稱，所以改成自動存
+
+    private val autoSaved = HashMap<String, MutableList<Float?>>()
+
+    private fun maybeAutoCaptureUnsupported(key: String) {
+        if (!key.startsWith("SCENE_") || FactoryViews.forKey(key) != null) return
+        if (FactoryViews.scenes.isEmpty()) return            // 原廠設定還沒讀到，不知道支不支援
+        main.postDelayed({ autoCaptureTick(key) }, 2000)
+    }
+
+    /** 同一個畫面最多存 3 次：第一次、之後方向盤轉了 90° 以上再存（動態輔助線會讓畫面跟著方向盤轉）。 */
+    private fun autoCaptureTick(key: String) {
+        if (lastViewKey != key) return
+        val act = activity?.get() ?: return
+        val p = pipeline ?: return
+        val list = autoSaved.getOrPut(key) { ArrayList() }
+        val w = FactoryVehicle.wheel
+        val need = list.isEmpty() || (list.size < 3 && w != null && list.none { it != null && kotlin.math.abs(it - w) < 90f })
+        if (need) {
+            list.add(w)
+            val ts = java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.US).format(java.util.Date())
+            // 先截原廠畫面（存檔的提示會擋到畫面），再存原始影格
+            FactoryScreen.capture(act, maxW = 1920, hide = ownViews()) { scr ->
+                if (scr != null) cal.post {
+                    try {
+                        val bmp = android.graphics.Bitmap.createBitmap(scr.argb, scr.w, scr.h, android.graphics.Bitmap.Config.ARGB_8888)
+                        val bos = java.io.ByteArrayOutputStream()
+                        bmp.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, bos)
+                        MediaSaver.save(act, "auto_screen_${key}_$ts.png", "image/png", bos.toByteArray())
+                        val meta = JSONObject().put("view", key).put("wheel", w ?: JSONObject.NULL)
+                            .put("speed", VehicleBus.signals.snapshot().speedKmh ?: JSONObject.NULL)
+                            .put("sx0", scr.sx0).put("sy0", scr.sy0).put("sw", scr.sw).put("sh", scr.sh)
+                            .put("screenW", scr.screenW).put("screenH", scr.screenH)
+                        MediaSaver.save(act, "auto_screen_${key}_$ts.json", "application/json", meta.toString(2).toByteArray())
+                    } catch (_: Throwable) {}
+                }
+                p.requestSaveRaw { msg -> log("自動存（還不支援的畫面 $key，方向盤 ${w ?: "—"}）：$msg") }
+            }
+        }
+        // 還在這個畫面就繼續看方向盤有沒有轉
+        if (list.size < 3) main.postDelayed({ autoCaptureTick(key) }, 1500)
+    }
+
     fun saveRaw(act: Activity) {
         val p = pipeline
         if (p == null) {

@@ -16,6 +16,9 @@ object FactoryVehicle {
     @Volatile var status: String = "還沒讀"
         private set
     @Volatile private var lastValidAt = 0L
+    /** 原廠的方向盤角度（診斷、自動存檔用；單位與正負待實車確認）。 */
+    @Volatile var wheel: Float? = null
+        private set
     @Volatile private var running = false
 
     /** 最近 2 秒內從原廠讀到有效車速（車機那邊的車速就不要再蓋過去）。 */
@@ -82,6 +85,7 @@ object FactoryVehicle {
         val left = f("leftSignalState") as? Boolean
         val right = f("rightSignalState") as? Boolean
         val wheel = f("wheelDegree") as? Float
+        this.wheel = wheel
         val gear = f("gearState") as? Int
         val now = SystemClock.elapsedRealtime()
         val gps = if (now - gpsAt < 3000) gpsKmh else -1f

@@ -651,6 +651,10 @@ class AdasPipeline(
     private fun sameObject(a: WObj, b: WObj): Boolean {
         val g = ObjTypes.group(a.t)
         if (g != ObjTypes.group(b.t)) return false
+        // 框大面積重疊（中心距離小於兩者半寬／半長和的 80%）→ 同一個，只留信心度高的（使用者要求）
+        val ha = ObjTypes.radius(a.t); val hb = ObjTypes.radius(b.t)
+        val la = if (g == "veh") ha * 2.5f else ha; val lb = if (g == "veh") hb * 2.5f else hb   // 半長：車約是半寬的 2.5 倍
+        if (abs(a.x - b.x) < (ha + hb) * 0.8f && abs(a.z - b.z) < (la + lb) * 0.8f) return true
         val (lat, rad) = when (g) { "veh" -> 1.3f to 2.6f; "two" -> 0.8f to 1.5f; else -> 0.6f to 1.0f }
         val mx = (a.x + b.x) / 2f; val mz = (a.z + b.z) / 2f
         val r = hypot(mx, mz).coerceAtLeast(1e-3f)
