@@ -19,6 +19,7 @@ import android.widget.TextView
  * 調滑桿讓紫色外框跟原廠車模重疊即可。
  */
 object Engine360Settings {
+    private var dlgRef: AlertDialog? = null
 
     /** 開著的設定視窗（系統截圖前要先藏起來）。 */
     @Volatile var dialogDecor: java.lang.ref.WeakReference<android.view.View>? = null
@@ -158,6 +159,10 @@ object Engine360Settings {
         col.addView(Button(act).apply {
             text = "存一張原始影格（停車格認錯、偵測怪怪的時候按，給開發者分析）"; isAllCaps = false
             setOnClickListener { Engine360.saveRaw(act) }
+        })
+        col.addView(Button(act).apply {
+            text = "10 秒後存一張（按了關掉設定、切到要存的畫面；開設定會跳畫面時用）"; isAllCaps = false
+            setOnClickListener { Engine360.delayedCapture(act); dlgRef?.dismiss() }
         })
 
         // ───────── 對位：針對「原廠現在顯示的視角」─────────
@@ -317,13 +322,13 @@ object Engine360Settings {
         })
         refreshAll()
 
-        AlertDialog.Builder(act)
+        dlgRef = AlertDialog.Builder(act)
             .setTitle("ADAS 設定")
             .setView(ScrollView(act).apply { addView(col) })
             .setPositiveButton("完成") { _, _ -> av.calibrating = false }
             .setOnCancelListener { av.calibrating = false }
             .show()
-            .window?.let { w ->
+        dlgRef?.window?.let { w ->
                 win = w
                 dialogDecor = java.lang.ref.WeakReference(w.decorView)
                 // 對位時要看得到後面的原廠畫面：對話框不要變暗背景

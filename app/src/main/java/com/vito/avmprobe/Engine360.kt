@@ -534,27 +534,45 @@ object Engine360 {
         val need = list.isEmpty() || (list.size < 3 && w != null && list.none { it != null && kotlin.math.abs(it - w) < 90f })
         if (need) {
             list.add(w)
+            captureForDev(act, p, key, w, "auto_screen")
+        }
+        // 還在這個畫面就繼續看方向盤有沒有轉
+        if (list.size < 3) main.postDelayed({ autoCaptureTick(key) }, 1500)
+    }
+
+    /**
+     * 設定裡「10 秒後存一張」：按了之後關掉設定、切回想存的畫面（開設定時原廠會跳畫面），時間到自動截圖＋存原始影格。
+     */
+    fun delayedCapture(act: Activity, sec: Int = 10) {
+        val p = pipeline ?: run { Toast.makeText(act, "還沒收到影格，存不了", Toast.LENGTH_LONG).show(); return }
+        Toast.makeText(act, "$sec 秒後存檔：請關掉設定、切到要存的畫面", Toast.LENGTH_LONG).show()
+        main.postDelayed({
+            val a = activity?.get() ?: return@postDelayed
+            val key = lastViewKey ?: "unknown"
+            captureForDev(a, p, key, FactoryVehicle.wheel, "dev_screen")
+            try { Toast.makeText(a, "已存（$key）", Toast.LENGTH_SHORT).show() } catch (_: Throwable) {}
+        }, sec * 1000L)
+    }
+
+    /** 截原廠畫面（存檔提示會擋到畫面，所以先截）＋存原始影格，檔名帶畫面名稱。 */
+    private fun captureForDev(act: Activity, p: AdasPipeline, key: String, w: Float?, prefix: String) {
             val ts = java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.US).format(java.util.Date())
-            // 先截原廠畫面（存檔的提示會擋到畫面），再存原始影格
             FactoryScreen.capture(act, maxW = 1920, hide = ownViews()) { scr ->
                 if (scr != null) cal.post {
                     try {
                         val bmp = android.graphics.Bitmap.createBitmap(scr.argb, scr.w, scr.h, android.graphics.Bitmap.Config.ARGB_8888)
                         val bos = java.io.ByteArrayOutputStream()
                         bmp.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, bos)
-                        MediaSaver.save(act, "auto_screen_${key}_$ts.png", "image/png", bos.toByteArray())
+                        MediaSaver.save(act, "${prefix}_${key}_$ts.png", "image/png", bos.toByteArray())
                         val meta = JSONObject().put("view", key).put("wheel", w ?: JSONObject.NULL)
                             .put("speed", VehicleBus.signals.snapshot().speedKmh ?: JSONObject.NULL)
                             .put("sx0", scr.sx0).put("sy0", scr.sy0).put("sw", scr.sw).put("sh", scr.sh)
                             .put("screenW", scr.screenW).put("screenH", scr.screenH)
-                        MediaSaver.save(act, "auto_screen_${key}_$ts.json", "application/json", meta.toString(2).toByteArray())
+                        MediaSaver.save(act, "${prefix}_${key}_$ts.json", "application/json", meta.toString(2).toByteArray())
                     } catch (_: Throwable) {}
                 }
-                p.requestSaveRaw { msg -> log("自動存（還不支援的畫面 $key，方向盤 ${w ?: "—"}）：$msg") }
+                p.requestSaveRaw { msg -> log("存檔（$key，方向盤 ${w ?: "—"}）：$msg") }
             }
-        }
-        // 還在這個畫面就繼續看方向盤有沒有轉
-        if (list.size < 3) main.postDelayed({ autoCaptureTick(key) }, 1500)
     }
 
     fun saveRaw(act: Activity) {
