@@ -49,8 +49,18 @@ object Engine360 {
     @JvmStatic
     fun enabled(ctx: Context): Boolean = try { AppPrefs(ctx).annotEnabled } catch (_: Throwable) { false }
 
+    /** 360 程式啟動後這麼久內，引擎不碰原廠（原廠自己的相機、原生繪圖還在初始化）。 */
+    private const val START_DELAY_MS = 6000L
+    /** 這麼久內原廠建相機 session 時不塞我們的 Surface（之後由 FrameTap 等相機穩定再用 addOutputSurface 接）。 */
+    private const val SURFACE_DELAY_MS = 10_000L
+
+    private fun processStart(): Long =
+        if (android.os.Build.VERSION.SDK_INT >= 24) android.os.Process.getStartElapsedRealtime() else 0L
+
     @JvmStatic
-    fun surface(w: Int, h: Int): Surface? = try { FrameShareHub.surface(w, h) } catch (_: Throwable) { null }
+    fun surface(w: Int, h: Int): Surface? = try {
+        if (SystemClock.elapsedRealtime() - processStart() < SURFACE_DELAY_MS) null else FrameShareHub.surface(w, h)
+    } catch (_: Throwable) { null }
 
     @JvmStatic
     fun log(msg: String) { try { FrameShareHub.log(msg) } catch (_: Throwable) {} }
@@ -371,11 +381,18 @@ object Engine360 {
             val app = act.applicationContext
             val prefs = AppPrefs(app)
             crashGuard(act, prefs)
-            startBackground(app)
             activity = WeakReference(act)
             addViews(act, prefs)
-            if (!ticking) { ticking = true; main.post(statusTick) }
-            if (!scenePolling) { scenePolling = true; main.post(scenePoll) }
+            // 引擎其他部分延後：原廠剛 onCreate 時相機、原生繪圖都還在初始化，這時去叫它的原生函式（讀場景）、
+            // 讀它的物件、開我們的偵測，會跟它的開機流程撞在一起（實車：一開 360 就閃退）
+            val wait = (START_DELAY_MS - (SystemClock.elapsedRealtime() - processStart())).coerceIn(0L, START_DELAY_MS)
+            main.postDelayed({
+                try {
+                    startBackground(app)
+                    if (!ticking) { ticking = true; main.post(statusTick) }
+                    if (!scenePolling) { scenePolling = true; main.post(scenePoll) }
+                } catch (t: Throwable) { Log.e(TAG, "延後啟動失敗（不影響原廠）", t) }
+            }, wait)
             log("合併版已掛上 ${act.javaClass.simpleName}（ADAS ${if (prefs.annotEnabled) "開" else "關"}）")
         } catch (t: Throwable) {
             Log.e(TAG, "attach 失敗（不影響原廠）", t)

@@ -215,8 +215,11 @@ public final class FrameTap {
                         } catch (Throwable ignore) {}
                     }
                     int st = capturing ? stable + 1 : 0;
-                    if (st >= STABLE_TICKS) { sWaiting = false; attachAll(); return; }
-                    if (tick >= MAX_TICKS) {
+                    // 360 程式啟動 11 秒內不接（引擎那邊這段時間不給 Surface，避免跟原廠開機流程撞在一起）
+                    boolean warm = android.os.Build.VERSION.SDK_INT < 24 ||
+                        android.os.SystemClock.elapsedRealtime() - android.os.Process.getStartElapsedRealtime() >= 11000;
+                    if (st >= STABLE_TICKS && warm) { sWaiting = false; attachAll(); return; }
+                    if (tick >= MAX_TICKS && warm) {
                         // 等不到在擷取：照樣加進清單（相機沒在跑時 addOutputSurface 只是記下來，不會停／開相機）
                         report("等了 " + MAX_TICKS + " 秒相機都沒在擷取，直接登記輸出");
                         sWaiting = false;

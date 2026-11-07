@@ -36,6 +36,8 @@ object FactoryVehicle {
         running = true
         ctx?.let { startGps(it) }
         Thread({
+            // 原廠剛啟動時不碰它的物件
+            SystemClock.sleep(10_000)
             while (running) {
                 try { pollOnce() } catch (t: Throwable) { status = "讀取失敗：$t" }
                 SystemClock.sleep(POLL_MS)
@@ -46,10 +48,12 @@ object FactoryVehicle {
     private fun resolve(): (() -> Any?)? {
         getState?.let { return it }
         val cmm = Class.forName("com.baony.sdk.media.CameraModelManager")
-        val inst = cmm.getMethod("getInstance")
+        // 直接讀它已經建好的單例欄位（mInstance）：不叫 getInstance()，那個「沒有就新建」，
+        // 原廠還沒建好時我們會在別的執行緒搶先建出來
+        val instF = cmm.getDeclaredField("mInstance").apply { isAccessible = true }
         val disp = cmm.getMethod("getDisplayProcessor")
         val f: () -> Any? = {
-            val dp = disp.invoke(inst.invoke(null))
+            val dp = instF.get(null)?.let { disp.invoke(it) }
             dp?.javaClass?.getMethod("getVehicleState")?.invoke(dp)
         }
         getState = f
