@@ -92,9 +92,11 @@ object FactoryVehicle {
             kmh >= 0f && kmh < 320f -> kmh
             else -> -1f
         }
-        if (use >= 0f) {
+        // 停著時原廠會報 2～3 km/h 的雜訊（實車）：4 km/h 以下當 0，除非 GPS 也說在動
+        val useClean = if (use in 0f..4f && !(gps > 4f)) 0f else use
+        if (useClean >= 0f) {
             lastValidAt = now
-            VehicleBus.signals.reportSpeed(use)
+            VehicleBus.signals.reportSpeed(useClean)
         }
         status = "原廠車速 ${if (kmh >= 0f) "%.0f km/h".format(kmh) else "—"}；GPS ${if (gps >= 0f) "%.0f km/h".format(gps) else "—"}；方向燈 ${if (left == true) "左" else ""}${if (right == true) "右" else ""}${if (left != true && right != true) "無" else ""}；方向盤 ${wheel?.let { "%.1f".format(it) } ?: "—"}；檔位碼 ${gear ?: "—"}"
         if (now - lastLog > 30_000) { lastLog = now; Engine360.log(status) }

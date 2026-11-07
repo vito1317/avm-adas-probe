@@ -41,11 +41,32 @@ class SlotSelection {
         val c = center(hit)
         val cur = center
         center = if (cur != null && hypot(cur[0] - c[0], cur[1] - c[1]) < FOLLOW_M) null else c
+        auto = false
         lastSeen = now
         return true
     }
 
-    fun clear() { center = null }
+    fun clear() { center = null; auto = false }
+
+    /** 目前的選擇是倒車打燈自動選的（換邊打燈可以改選；使用者點過就不動）。 */
+    private var auto = false
+
+    /**
+     * 倒車時打方向燈：自動選那一側最近的空格（格子中心在打燈那側 0.5 m 外、車頭前 3 m 以內，也就是旁邊或後面）。
+     * 使用者自己點選的不蓋掉。回傳是否有選到。
+     */
+    fun autoPick(slots: List<ParkingSlot>, turn: Char, now: Long): Boolean {
+        if (center != null && !auto) return false
+        val d = if (turn == 'L') -1f else 1f
+        val cur = center
+        if (cur != null && cur[0] * d > 0f) return true          // 已經自動選了這一側
+        val best = slots.filter { !it.occupied }
+            .map { it to center(it) }
+            .filter { (_, c) -> c[0] * d > 0.5f && c[1] < 3f }
+            .minByOrNull { (_, c) -> hypot(c[0], c[1]) } ?: return false
+        center = best.second; auto = true; lastSeen = now
+        return true
+    }
 
     /** 偵測更新：回傳目前選的格子（跟著移動）；沒選或跟丟回 null。 */
     fun track(slots: List<ParkingSlot>, now: Long): ParkingSlot? {

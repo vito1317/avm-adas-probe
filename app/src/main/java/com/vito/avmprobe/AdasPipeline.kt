@@ -748,6 +748,9 @@ class AdasPipeline(
                 .put("er", rd.edgeR?.let { r2(it) } ?: JSONObject.NULL))
         }
         if (now - slotsAt < BEV_TTL_MS && slots.isNotEmpty()) {
+            // 倒車時打方向燈 → 自動選那一側最近的空格
+            val tn = vs.turn
+            if (vs.gear == 'R' && (tn == 'L' || tn == 'R')) slotSelection.autoPick(slots, tn, now)
             val sj = slotsJson(slots, false)
             for (i in slots.indices) if (slotSelection.isSelected(slots[i])) sj.getJSONObject(i).put("sel", 1)
             p.put("slots", sj)
@@ -767,12 +770,18 @@ class AdasPipeline(
         // 變道預測：打方向燈、方向盤還沒轉到要轉彎 → 從目前車道畫到那一側車道。
         // 變道輔助有算出路徑（有車道線、速度夠）就用它的；沒有（慢速被當成可能轉彎、或沒偵測到車道）
         // 就用車道寬畫一條，長度 = 車速 × 3 s（10～30 m），畫面上才看得出是切過去的。
-        if (turnPlan == null && (vs.turn == 'L' || vs.turn == 'R')) {
+        // 慢速（可能是路口轉彎）而前方是直路：轉彎線不畫，也不當成變道
+        val slowTurn = vs.speedKmh?.let { it <= TurnPathPlanner.EST_MAX_KMH } ?: false
+        val lcTarget = if (turnPlan == null && !slowTurn) lcTrack.update(now, vs.turn,
+            road?.takeIf { now - roadAt < BEV_TTL_MS }?.lines, lcaState?.laneW ?: LaneChangeAssist.LANE_W) else { lcTrack.reset(); null }
+        if (turnPlan == null && !slowTurn && lcTarget != 0f && (vs.turn == 'L' || vs.turn == 'R')) {
             val dir = if (vs.turn == 'L') -1 else 1
             val st = lcaState
             val w = st?.laneW ?: LaneChangeAssist.LANE_W
             val len = ((vs.speedKmh ?: 30f) / 3.6f * 3f).coerceIn(10f, 30f)
-            val path = st?.path?.takeIf { now - tracksAt < OBJ_TTL_MS && it.size >= 2 }
+            // 鎖定到要跨過的車道線 → 終點跟著目標車道中央走（變道過程中線會跟著移、到了就收掉）
+            val path = lcTarget?.let { lca.lanePath(it.toDouble(), 0.0, len.toDouble()) }
+                ?: st?.path?.takeIf { now - tracksAt < OBJ_TTL_MS && it.size >= 2 }
                 ?: lca.lanePath(dir * w.toDouble(), 0.0, len.toDouble())
             // 打燈那一側有車（相鄰車道／盲點，不只是快速接近的危險等級）→ 暫緩變道
             val sideLv = if (st != null && now - tracksAt < OBJ_TTL_MS) (if (dir < 0) st.L else st.R) else 0
@@ -837,6 +846,8 @@ class AdasPipeline(
         }
         return if (wsum > 0) sum / wsum else null
     }
+
+    private val lcTrack = LaneChangeTracker()
 
     /** 使用者點選要停的格子（[AnnotationView] 點俯視圖）。 */
     val slotSelection = SlotSelection()

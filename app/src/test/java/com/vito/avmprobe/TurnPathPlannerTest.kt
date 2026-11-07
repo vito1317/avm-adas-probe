@@ -174,30 +174,85 @@ class TurnSweptPolygonTest {
 
 class TurnEstimateTest {
     @org.junit.Test
-    fun estimateAppearsWithSignalBeforeSteering() {
-        val e = TurnPathPlanner.estimate('R', 12f, null)!!
-        org.junit.Assert.assertTrue(e.estimated)
-        org.junit.Assert.assertEquals(TurnPathPlanner.EST_RIGHT_R, e.radius.toDouble(), 1e-3)
-        org.junit.Assert.assertTrue("右轉要往右", e.pts.last()[0] > 1f)
-        val l = TurnPathPlanner.estimate('L', 12f, null)!!
-        org.junit.Assert.assertEquals(TurnPathPlanner.EST_LEFT_R, l.radius.toDouble(), 1e-3)
-        org.junit.Assert.assertTrue("左轉要往左", l.pts.last()[0] < -1f)
+    fun straightRoadAheadDrawsNoTurn() {
+        // 前方是直路（沒有彎度）→ 不畫轉彎預測線（不再用固定的路口半徑）
+        org.junit.Assert.assertNull(TurnPathPlanner.estimate('R', 12f, null))
+        org.junit.Assert.assertNull(TurnPathPlanner.estimate('L', 12f, 0.0))
+        org.junit.Assert.assertNull(TurnPathPlanner.estimate('R', 12f, 1.0 / 200.0))
     }
 
     @org.junit.Test
     fun followsRoadCurvatureTowardSignal() {
         // 道路往右彎半徑 30 m，打右燈 → 照道路
         val e = TurnPathPlanner.estimate('R', 15f, 1.0 / 30.0)!!
+        org.junit.Assert.assertTrue(e.estimated)
         org.junit.Assert.assertEquals(30.0, e.radius.toDouble(), 0.1)
-        // 道路往左彎，打右燈 → 不照道路（是路口右轉），用典型半徑
-        val f = TurnPathPlanner.estimate('R', 15f, -1.0 / 30.0)!!
-        org.junit.Assert.assertEquals(TurnPathPlanner.EST_RIGHT_R, f.radius.toDouble(), 1e-3)
+        org.junit.Assert.assertTrue("右轉要往右", e.pts.last()[0] > 1f)
+        // 半徑隨道路變：彎得越急半徑越小
+        val sharp = TurnPathPlanner.estimate('L', 15f, -1.0 / 12.0)!!
+        org.junit.Assert.assertEquals(12.0, sharp.radius.toDouble(), 0.1)
+        org.junit.Assert.assertTrue("左轉要往左", sharp.pts.last()[0] < -1f)
+        // 道路往左彎，打右燈 → 不畫
+        org.junit.Assert.assertNull(TurnPathPlanner.estimate('R', 15f, -1.0 / 30.0))
     }
 
     @org.junit.Test
     fun fastOrUnknownSpeedIsLaneChangeNotTurn() {
-        org.junit.Assert.assertNull(TurnPathPlanner.estimate('R', 40f, null))
-        org.junit.Assert.assertNull(TurnPathPlanner.estimate('R', null, null))
-        org.junit.Assert.assertNull(TurnPathPlanner.estimate(null, 10f, null))
+        org.junit.Assert.assertNull(TurnPathPlanner.estimate('R', 40f, 1.0 / 30.0))
+        org.junit.Assert.assertNull(TurnPathPlanner.estimate('R', null, 1.0 / 30.0))
+        org.junit.Assert.assertNull(TurnPathPlanner.estimate(null, 10f, 1.0 / 30.0))
+    }
+}
+
+class LaneChangeTrackerTest {
+    private fun line(x: Float) = RoadLine('w', true, x, -2f, x, 10f, 0.9f)
+
+    @org.junit.Test
+    fun targetFollowsTheCrossedLineAndFinishes() {
+        val t = LaneChangeTracker()
+        // 車道寬 3.5：右邊線在 +1.75 → 目標 = 3.5
+        org.junit.Assert.assertEquals(3.5f, t.update(0, 'R', listOf(line(-1.75f), line(1.75f)), 3.5f)!!, 0.01f)
+        // 車一幀一幀往右移（每幀 0.5 m 內），線看起來往左移，目標跟著變
+        var x = 1.75f; var now = 0L
+        while (x > 0.8f) { x -= 0.45f; now += 100; t.update(now, 'R', listOf(line(x - 3.5f), line(x)), 3.5f) }
+        org.junit.Assert.assertEquals(x + 1.75f, t.update(now + 100, 'R', listOf(line(x - 3.5f), line(x)), 3.5f)!!, 0.01f)
+        // 壓在線上，新的右邊線也出現了：還是跟著跨過去的那條
+        while (x > -0.2f) { x -= 0.45f; now += 100; t.update(now, 'R', listOf(line(x), line(x + 3.5f)), 3.5f) }
+        org.junit.Assert.assertEquals(x + 1.75f, t.update(now + 100, 'R', listOf(line(x), line(x + 3.5f)), 3.5f)!!, 0.01f)
+        // 到了新車道中央附近 → 0 = 完成
+        while (x > -1.6f) { x -= 0.45f; now += 100; t.update(now, 'R', listOf(line(x), line(x + 3.5f)), 3.5f) }
+        org.junit.Assert.assertEquals(0f, t.update(now + 100, 'R', listOf(line(x), line(x + 3.5f)), 3.5f)!!, 0.01f)
+    }
+
+    @org.junit.Test
+    fun noLineMeansFallback() {
+        val t = LaneChangeTracker()
+        org.junit.Assert.assertNull(t.update(0, 'L', emptyList(), 3.5f))
+        org.junit.Assert.assertNull(t.update(0, null, listOf(line(-1.7f)), 3.5f))
+    }
+}
+
+class SlotAutoPickTest {
+    private fun slot(cx: Float, cz: Float, occ: Boolean = false) =
+        ParkingSlot(floatArrayOf(cx - 1.2f, cz - 2.5f, cx + 1.2f, cz - 2.5f, cx + 1.2f, cz + 2.5f, cx - 1.2f, cz + 2.5f), 'p', occ, 0.9f)
+
+    @org.junit.Test
+    fun reversingWithSignalPicksNearestEmptyOnThatSide() {
+        val sel = SlotSelection()
+        val slots = listOf(slot(3f, -2f), slot(5.5f, -2f), slot(-3f, -2f), slot(3f, -6f, occ = true))
+        org.junit.Assert.assertTrue(sel.autoPick(slots, 'R', 0))
+        org.junit.Assert.assertTrue(sel.isSelected(slots[0]))
+        // 換打左燈 → 改選左邊
+        org.junit.Assert.assertTrue(sel.autoPick(slots, 'L', 10))
+        org.junit.Assert.assertTrue(sel.isSelected(slots[2]))
+    }
+
+    @org.junit.Test
+    fun userChoiceIsNotOverridden() {
+        val sel = SlotSelection()
+        val slots = listOf(slot(3f, -2f), slot(-3f, -2f))
+        sel.tap(slots, -3f, -2f, 0)
+        org.junit.Assert.assertFalse(sel.autoPick(slots, 'R', 10))
+        org.junit.Assert.assertTrue(sel.isSelected(slots[1]))
     }
 }

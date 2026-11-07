@@ -1228,7 +1228,12 @@ class RoadTracker {
     private class Track(
         val kind: Char, var ang: Double, var off: Double, var sMin: Double, var sMax: Double,
         var conf: Double, var dashP: Double, var k: Double, var last: Long, var hist: Int
-    )
+    ) {
+        /** 已經穩定（最近 5 次有 3 次對到）→ 開始輸出，之後一直輸出到軌跡被丟掉為止（不跟著單幀漏抓閃爍）。 */
+        var shown = false
+        /** 虛／實線判定加遲滯：dashP > 0.65 才變虛線、< 0.35 才變回實線，不會一幀一幀跳。 */
+        var dashed = dashP >= 0.5
+    }
 
     private val tracks = ArrayList<Track>()
     private var eL: Double? = null
@@ -1242,6 +1247,9 @@ class RoadTracker {
         private const val MATCH_DEG = 8.0
         private const val MATCH_OFF = 0.35
         private const val DROP_MS = 800L
+        /** 已輸出的線多撐一點（停車不動時偵測時有時無，線不要一閃一閃）。 */
+        private const val DROP_SHOWN_MS = 1500L
+        private const val SHOW_HITS = 3
         private const val EDGE_NULL_MS = 1500L
     }
 
@@ -1301,7 +1309,7 @@ class RoadTracker {
             t.last = nowMs
             t.hist = t.hist or 1
         }
-        tracks.removeAll { nowMs - it.last > DROP_MS }
+        tracks.removeAll { nowMs - it.last > (if (it.shown) DROP_SHOWN_MS else DROP_MS) }
 
         r.edgeL?.let { v -> eL = eL?.let { it + EDGE_ALPHA * (v - it) } ?: v.toDouble(); eLt = nowMs }
         r.edgeR?.let { v -> eR = eR?.let { it + EDGE_ALPHA * (v - it) } ?: v.toDouble(); eRt = nowMs }
@@ -1310,13 +1318,15 @@ class RoadTracker {
 
         val out = ArrayList<RoadLine>()
         for (t in tracks) {
-            if (Integer.bitCount(t.hist) < 2) continue
+            if (!t.shown && Integer.bitCount(t.hist) >= SHOW_HITS) t.shown = true
+            if (!t.shown) continue
+            if (t.dashed && t.dashP < 0.35) t.dashed = false else if (!t.dashed && t.dashP > 0.65) t.dashed = true
             val pr = Math.toRadians(t.ang)
             val c = cos(pr)
             val s = sin(pr)
             out.add(
                 RoadLine(
-                    t.kind, t.dashP >= 0.5,
+                    t.kind, t.dashed,
                     (t.off * c + t.sMin * s).toFloat(), (-t.off * s + t.sMin * c).toFloat(),
                     (t.off * c + t.sMax * s).toFloat(), (-t.off * s + t.sMax * c).toFloat(),
                     t.conf.toFloat(), t.k.toFloat()

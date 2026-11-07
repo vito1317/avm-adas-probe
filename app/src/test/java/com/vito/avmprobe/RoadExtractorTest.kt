@@ -409,40 +409,65 @@ class RoadExtractorTest {
     private fun line(x: Float, dashed: Boolean = false, kind: Char = 'w') = RoadLine(kind, dashed, x, -5f, x, 5f, 1f)
 
     @Test
-    fun trackerNeedsTwoHitsAndSmooths() {
+    fun trackerNeedsThreeHitsAndSmooths() {
         val tr = RoadTracker()
         val r1 = tr.update(RoadResult(listOf(line(1.70f)), null, 3.0f, 5), 0)
         assertTrue("第一次只看到一次，不該輸出", r1.lines.isEmpty())
         assertEquals(3.0f, r1.edgeR!!, 1e-6f)
         val r2 = tr.update(RoadResult(listOf(line(1.80f)), null, 3.2f, 5), 100)
-        assertEquals(1, r2.lines.size)
-        // EMA α=0.35：1.70 + 0.35×0.10 = 1.735；路緣 α=0.3：3.0 + 0.3×0.2 = 3.06
-        assertEquals(1.735f, r2.lines[0].x1, 1e-4f)
+        assertTrue("兩次還不夠（單幀誤判常常連兩幀）", r2.lines.isEmpty())
+        // 路緣 α=0.3：3.0 + 0.3×0.2 = 3.06
         assertEquals(3.06f, r2.edgeR!!, 1e-4f)
-        // 不同種類 / 太遠的不會併進同一軌
-        val r3 = tr.update(RoadResult(listOf(line(1.80f), line(1.80f, kind = 'y'), line(2.5f)), null, null, 5), 200)
+        val r3 = tr.update(RoadResult(listOf(line(1.80f)), null, null, 5), 200)
         assertEquals(1, r3.lines.size)
-        val r4 = tr.update(RoadResult(listOf(line(1.80f), line(1.80f, kind = 'y'), line(2.5f)), null, null, 5), 300)
-        assertEquals(3, r4.lines.size)
+        // EMA α=0.35：1.70 → 1.735 → 1.735 + 0.35×0.065 = 1.75775
+        assertEquals(1.75775f, r3.lines[0].x1, 1e-4f)
+        // 不同種類 / 太遠的不會併進同一軌，各自要三次
+        for (t in listOf(300L, 400L)) {
+            val r = tr.update(RoadResult(listOf(line(1.80f), line(1.80f, kind = 'y'), line(2.5f)), null, null, 5), t)
+            assertEquals(1, r.lines.size)
+        }
+        val r6 = tr.update(RoadResult(listOf(line(1.80f), line(1.80f, kind = 'y'), line(2.5f)), null, null, 5), 500)
+        assertEquals(3, r6.lines.size)
     }
 
     @Test
-    fun trackerDropsStaleTracksAndEdges() {
+    fun trackerKeepsShownLinesThroughDropouts() {
         val tr = RoadTracker()
-        tr.update(RoadResult(listOf(line(-1.6f, dashed = true)), -3.0f, null, 5), 0)
+        for (t in listOf(0L, 100L)) tr.update(RoadResult(listOf(line(-1.6f, dashed = true)), -3.0f, null, 5), t)
         val a = tr.update(RoadResult(listOf(line(-1.6f, dashed = true)), -3.0f, null, 5), 300)
         assertEquals(1, a.lines.size)
         assertTrue(a.lines[0].dashed)
-        val b = tr.update(RoadResult(emptyList(), null, null, 5), 600)
-        assertEquals("最近 5 次還有 2 次對到、600 ms 內 → 留著", 1, b.lines.size)
-        assertEquals(-3.0f, b.edgeL!!, 1e-6f)
-        val c = tr.update(RoadResult(emptyList(), null, null, 5), 1200)
-        assertTrue("超過 800 ms 沒對到要丟掉", c.lines.isEmpty())
-        assertEquals(-3.0f, c.edgeL!!, 1e-6f)
-        val d = tr.update(RoadResult(emptyList(), null, null, 5), 1700)
-        assertEquals("最後一次有值在 300 ms，1.4 s 後還留著", -3.0f, d.edgeL!!, 1e-6f)
-        val e = tr.update(RoadResult(emptyList(), null, null, 5), 1900)
-        assertNull("路緣超過 1.5 s 沒值要變 null", e.edgeL)
+        // 停著不動時偵測時有時無：已經顯示的線 1.5 s 內漏抓也留著，不閃
+        val b = tr.update(RoadResult(emptyList(), null, null, 5), 900)
+        assertEquals(1, b.lines.size)
+        val c = tr.update(RoadResult(emptyList(), null, null, 5), 1700)
+        assertEquals(1, c.lines.size)
+        assertEquals("最後一次有值在 300 ms，1.4 s 後還留著", -3.0f, c.edgeL!!, 1e-6f)
+        val d = tr.update(RoadResult(emptyList(), null, null, 5), 1900)
+        assertTrue("超過 1.5 s 沒對到要丟掉", d.lines.isEmpty())
+        assertNull("路緣超過 1.5 s 沒值要變 null", d.edgeL)
+    }
+
+    @Test
+    fun trackerDashedHasHysteresis() {
+        val tr = RoadTracker()
+        var r = tr.update(RoadResult(listOf(line(1.7f, dashed = true)), null, null, 5), 0)
+        for (t in listOf(100L, 200L)) r = tr.update(RoadResult(listOf(line(1.7f, dashed = true)), null, null, 5), t)
+        assertTrue(r.lines[0].dashed)
+        // 偶爾一幀判成實線，不會馬上變
+        r = tr.update(RoadResult(listOf(line(1.7f, dashed = false)), null, null, 5), 300)
+        assertTrue("單幀誤判不該翻轉虛實", r.lines[0].dashed)
+    }
+
+    @Test
+    fun trackerUnconfirmedTrackDropsFast() {
+        val tr = RoadTracker()
+        tr.update(RoadResult(listOf(line(0.5f)), null, null, 5), 0)
+        tr.update(RoadResult(listOf(line(0.5f)), null, null, 5), 100)
+        tr.update(RoadResult(emptyList(), null, null, 5), 1000)
+        val r = tr.update(RoadResult(listOf(line(0.5f)), null, null, 5), 1100)
+        assertTrue("還沒確認的軌 800 ms 沒對到就丟，重新起算", r.lines.isEmpty())
     }
 
     @Test
@@ -450,7 +475,8 @@ class RoadExtractorTest {
         // 橫向停止線：方向角在 +89° 與 -89° 之間跳（同一條線的兩種表示）
         val tr = RoadTracker()
         tr.update(RoadResult(listOf(RoadLine('w', false, -1.8f, 4.00f, 1.8f, 4.06f, 0.9f)), null, null, 5), 0)
-        val r = tr.update(RoadResult(listOf(RoadLine('w', false, -1.8f, 4.04f, 1.8f, 3.98f, 0.9f)), null, null, 5), 100)
+        tr.update(RoadResult(listOf(RoadLine('w', false, -1.8f, 4.04f, 1.8f, 3.98f, 0.9f)), null, null, 5), 100)
+        val r = tr.update(RoadResult(listOf(RoadLine('w', false, -1.8f, 4.00f, 1.8f, 4.06f, 0.9f)), null, null, 5), 200)
         assertEquals(1, r.lines.size)
         val L = r.lines[0]
         assertEquals(4.02, (L.z1 + L.z2) / 2.0, 0.03)
@@ -462,11 +488,10 @@ class RoadExtractorTest {
         val tr = RoadTracker()
         fun curved(k: Float) = RoadLine('w', false, 1.7f, -5f, 1.7f, 5f, 1f, k)
         tr.update(RoadResult(listOf(curved(0f)), null, null, 5), 0)
-        val a = tr.update(RoadResult(listOf(curved(0.04f)), null, null, 5), 100)
-        // EMA α=0.35：0 + 0.35×0.04 = 0.014
-        assertEquals(1, a.lines.size)
-        assertEquals(0.014f, a.lines[0].k, 1e-5f)
+        tr.update(RoadResult(listOf(curved(0.04f)), null, null, 5), 100)
         val b = tr.update(RoadResult(listOf(curved(0.04f)), null, null, 5), 200)
+        // EMA α=0.35：0 → 0.014 → 0.0231
+        assertEquals(1, b.lines.size)
         assertEquals(0.0231f, b.lines[0].k, 1e-4f)
         // 曲率差很大也不可以把同一條線拆成兩軌
         val c = tr.update(RoadResult(listOf(curved(-0.06f)), null, null, 5), 300)
@@ -481,7 +506,8 @@ class RoadExtractorTest {
         val fwd = RoadLine('w', false, 1.7f, -5f, 1.9f, 5f, 1f, 0.05f)
         val rev = RoadLine('w', false, 1.9f, 5f, 1.7f, -5f, 1f, -0.05f)
         tr.update(RoadResult(listOf(fwd), null, null, 5), 0)
-        val a = tr.update(RoadResult(listOf(rev), null, null, 5), 100)
+        tr.update(RoadResult(listOf(rev), null, null, 5), 100)
+        val a = tr.update(RoadResult(listOf(rev), null, null, 5), 200)
         assertEquals(1, a.lines.size)
         assertEquals("兩種表示法的曲率要一致", 0.05, abs(a.lines[0].k).toDouble(), 1e-4)
         // 輸出的端點順序決定符號：端點 1 的 z 比較小 → 跟 fwd 同向 → k > 0

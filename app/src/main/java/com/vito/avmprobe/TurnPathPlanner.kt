@@ -114,9 +114,9 @@ object TurnPathPlanner {
         if (turn != 'L' && turn != 'R') return null
         if (speedKmh == null || speedKmh > EST_MAX_KMH) return null   // 不知道車速或太快 → 當成變道
         val sgn = if (turn == 'R') 1.0 else -1.0
-        val r = if (roadK != null && abs(roadK) >= ROAD_K_MIN && sign(roadK) == sgn) maxOf(ROAD_R_MIN, 1.0 / abs(roadK))
-        else if (turn == 'R') EST_RIGHT_R else EST_LEFT_R
-        return arc(sgn, r, geo, estimated = true)
+        // 只照前方道路的彎度畫；前方是直路（或往另一邊彎）就不畫，不再用固定的路口半徑亂猜
+        if (roadK == null || abs(roadK) < ROAD_K_MIN || sign(roadK) != sgn) return null
+        return arc(sgn, maxOf(ROAD_R_MIN, 1.0 / abs(roadK)), geo, estimated = true)
     }
 
     private fun arc(sgn: Double, r: Double, geo: VehicleGeometry, estimated: Boolean): TurnPath {
