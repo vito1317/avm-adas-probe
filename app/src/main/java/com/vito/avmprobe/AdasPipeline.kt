@@ -691,6 +691,20 @@ class AdasPipeline(
         return dLat < lat && dRad < rad + 0.15f * r
     }
 
+    /**
+     * 四個輪子在俯視圖上的黑影範圍（自車框外側 0.45 m、輪軸前後 0.6 m）：拼接時立起來的輪胎被拉長成一大塊，
+     * 輪子擺正時左前輪剛好壓在隔壁格裡，停車格偵測就把那格當成不乾淨或有東西
+     * （實車：左邊的格子要方向盤右轉到底、輪子往內轉才偵測得到）。當成「看不到」，不算證據。
+     */
+    private fun wheelZones(): List<FloatArray> {
+        val vg = VehicleGeometry()
+        val front = (vg.rearAxleZ + vg.wheelbase).toFloat(); val rear = vg.rearAxleZ.toFloat()
+        val x0 = EGO_HW + 0.15f; val x1 = EGO_HW + 0.6f
+        return listOf(front, rear).flatMap { z ->
+            listOf(floatArrayOf(-x1, z - 0.6f, -x0, z + 0.6f), floatArrayOf(x0, z - 0.6f, x1, z + 0.6f))
+        }
+    }
+
     private fun runBev(g: AvmGeometry, now: Long) {
         val key = (frame.width.toLong() shl 32) or frame.height.toLong()
         var table = lut
@@ -732,7 +746,7 @@ class AdasPipeline(
         ground.post {
             try {
                 cones = coneDet.detect(buf, bw, bh, mpp, cx, cy, excl); conesAt = now
-                slots = slotTrack.update(slotDet.detect(buf, bw, bh, mpp, cx, cy, listOf(ego), vehicles), now); slotsAt = now
+                slots = slotTrack.update(slotDet.detect(buf, bw, bh, mpp, cx, cy, listOf(ego) + wheelZones(), vehicles), now); slotsAt = now
                 if (mode == AppPrefs.GROUND_VIRTUAL) {
                     road = roadTrack.update(roadEx.extract(buf, bw, bh, mpp, cx, cy, excl, g.ipmValidMask()), now); roadAt = now
                 }

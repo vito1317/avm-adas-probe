@@ -182,7 +182,10 @@ class ParkingSlotDetectorTest {
     fun matchesPrototype() {
         for (name in SYNTH + REAL + QUAD) {
             val f = load(name)
-            val out = run(f)
+            var out = run(f)
+            // 刻意跟原型不同的地方：停在格子裡看隔壁格時放寬平行容許值（外圈拼接變形），
+            // v256_egoperp_own 多找到左邊隔壁格（三個角跟真值差 < 0.1 m，外側被畫面邊緣切掉），原型找不到
+            if (name == "v256_egoperp_own") out = out.filterNot { s -> (0 until 4).all { s.p[it * 2] < -1.0f } }
             assertEquals("$name: 格數與原型不同", f.proto.size, out.size)
             for (ps in f.proto) {
                 val m = out.firstOrNull { k ->
@@ -334,6 +337,20 @@ class ParkingSlotDetectorTest {
         val eg = load("egoperp")
         val around = run(eg).filter { s -> val c = centroid(d(s)); abs(c[0]) < 1.0 && abs(c[1]) < 1.0 }
         assertTrue(around.isNotEmpty() && around.all { it.occupied })
+    }
+
+    /** 停在格子裡：隔壁格的外側線在俯視圖外圈歪了幾度，也要配得起來（原型配不起來）。 */
+    @Test
+    fun neighborOfOwnSlotFoundDespiteOuterWarp() {
+        val f = load("v256_egoperp_own")
+        val gt = f.gt.first { g -> (0 until 4).all { g.p[it * 2] < -1.0f && g.p[it * 2] > -4.2f } }
+        val hit = run(f).firstOrNull { s -> (0 until 4).all { s.p[it * 2] < -1.0f } }
+        assertTrue("左邊隔壁格要找得到", hit != null)
+        // 靠自車那兩個角跟真值差 < 0.15 m
+        for (k in listOf(0, 3)) {
+            val d = (0 until 4).minOf { j -> kotlin.math.hypot(hit!!.p[k * 2] - gt.p[j * 2], hit.p[k * 2 + 1] - gt.p[j * 2 + 1]) }
+            assertTrue("角點誤差 $d", d < 0.15f)
+        }
     }
 
     @Test

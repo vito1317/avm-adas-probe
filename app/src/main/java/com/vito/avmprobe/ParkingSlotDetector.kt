@@ -96,6 +96,9 @@ class ParkingSlotDetector {
         private const val SENT = 1 shl 24
 
         private val SIN_PAR = sin(PAR_DEG * (PI / 180.0))
+        private const val FAR_X_M = 3.0
+        private const val NEAR_X_M = 2.0
+        private val SIN_PAR_FAR = sin(7.0 * (PI / 180.0))
         private val COS_OBLIQUE = cos(20.0 * (PI / 180.0))
         private val COS_CROSS = cos(CROSS_MIN_DEG * (PI / 180.0))
         private val SIN_PERP = sin(PERP_TOL_DEG * (PI / 180.0))
@@ -251,6 +254,7 @@ class ParkingSlotDetector {
         buildLines()
         for (l in lines) extend(l)
         markEgoAdjacent(exclude)
+        trace?.let { tr -> for (l in lines) tr("line (%.2f,%.2f) 方向 (%.2f,%.2f) 長 %.2f 段 %d".format(l.cx, l.cz, l.ux, l.uz, l.pieces.let { pc -> var s2 = 0.0; var i = 0; while (i + 1 < pc.size) { s2 += pc[i + 1] - pc[i]; i += 2 }; s2 }, l.pieces.size / 2)) }
         if (prof != null) { val t = System.nanoTime(); prof[1] += t - t0; t0 = t }
         val cells = ArrayList<Cell>()
         for (a in lines.indices) for (b in a + 1 until lines.size) pair(a, b, cells)
@@ -1100,7 +1104,11 @@ class ParkingSlotDetector {
     private fun pair(a: Int, b: Int, cells: ArrayList<Cell>) {
         val la = lines[a]; val lb = lines[b]
         val dot = la.ux * lb.ux + la.uz * lb.uz
-        if (abs(la.ux * lb.uz - la.uz * lb.ux) > SIN_PAR) return
+        // 停在格子裡看隔壁格：俯視圖外圈拼接變形大（實車：離車 4 m 的外側線歪了 6°，跟緊貼自車的共用線差 4.6°）。
+        // 只在「一條緊貼自車（2 m 內）、另一條在 3 m 外、同一側」時放寬，其他情況照原本的 4°
+        val near = min(abs(la.cx), abs(lb.cx)); val farX = max(abs(la.cx), abs(lb.cx))
+        val far = near < NEAR_X_M && farX > FAR_X_M && la.cx * lb.cx > 0 && abs(la.cz) < 3.0 && abs(lb.cz) < 3.0
+        if (abs(la.ux * lb.uz - la.uz * lb.ux) > (if (far) SIN_PAR_FAR else SIN_PAR)) { if (far) trace?.invoke("pair ${tag(a, b)} 不平行"); return }
         val tr = trace
         val sg = if (dot >= 0) 1.0 else -1.0
         var ux = la.ux + sg * lb.ux; var uz = la.uz + sg * lb.uz
@@ -1385,7 +1393,7 @@ class ParkingSlotDetector {
             if (rA.isNaN() || rB.isNaN() || rA < 0.6 || rB < 0.6 || w > OPEN_WMAX) { tr?.invoke("eval ${tag(c.a, c.b)} 兩端開口 rA=%.2f rB=%.2f".format(rA, rB)); return null }
         }
         // 格內不得有平行線 / 橫線
-        if (interior(f, c.a, c.b, tA0, tA1, tB0, tB1, c0, c1)) { tr?.invoke("eval ${tag(c.a, c.b)} 格內有線"); return null }
+        if (interior(f, c.a, c.b, tA0, tA1, tB0, tB1, c0, c1, adjA || adjB)) { tr?.invoke("eval ${tag(c.a, c.b)} 格內有線"); return null }
         val rsep = if (!rA.isNaN() && !rB.isNaN()) (rA + rB) / 2.0 else if (!rA.isNaN()) rA else if (!rB.isNaN()) rB else 0.3
         val cfrac = if (cornersN > 0) cornersOk.toDouble() / cornersN else 0.5
         var endsEv = 0.0
@@ -1478,7 +1486,8 @@ class ParkingSlotDetector {
 
     /** 格內有與長邊平行的線（機車格、兩格合成一格）或橫過的線 → true。車框內不算。 */
     private fun interior(
-        f: Frame, ia: Int, ib: Int, tA0: Double, tA1: Double, tB0: Double, tB1: Double, c0: Crossing, c1: Crossing?
+        f: Frame, ia: Int, ib: Int, tA0: Double, tA1: Double, tB0: Double, tB1: Double, c0: Crossing, c1: Crossing?,
+        egoRow: Boolean = false
     ): Boolean {
         val la = lines[ia]; val lb = lines[ib]
         val sA = if (tA1 >= tA0) 1.0 else -1.0
@@ -1486,7 +1495,10 @@ class ParkingSlotDetector {
         // 從真的橫邊伸進格內的短分隔線頭（機車格的 T 字、每 1 m 一格）→ 不是汽車格。
         // 沿橫邊在寬度 20–80 % 處逐點往格內探 STUB_IN（直接看遮罩，短線頭常常抽不成 Hough 線）；
         // 線頭是細的：該點命中、左右各 0.2 m 的探針都沒命中（橫向的東西會讓三支都命中）。
+        // 跟自車共用分隔線的格子（自己停的是汽車格，同一排的隔壁也是）→ 不做機車格線頭檢查：
+        // 格號數字寫在前端橫線旁，筆畫會被當成線頭（實車：16 號格因此被淘汰）
         for (side in 0..1) {
+            if (egoRow) break
             val cr = (if (side == 0) c0 else c1) ?: continue
             if (cr.open) continue
             val sg = if (side == 0) sA else -sA
