@@ -257,6 +257,8 @@ object Engine360 {
         val ctx = activity?.get() ?: return
         val prefs = AppPrefs(ctx)
         if (!prefs.annotEnabled || prefs.viewCalMode(key).isNotEmpty()) return
+        // 雙閃三格版面：左右兩格也有地面標線，自動對位會把俯視圖認到旁邊那格（實車）→ 不做，直接用中間那格
+        if (FactoryViews.hazardViews(key) != null) return
         main.postDelayed({
             if (lastViewKey != key) return@postDelayed
             val spd = VehicleBus.signals.snapshot().speedKmh
@@ -493,18 +495,13 @@ object Engine360 {
 
     /** 設定裡「測試提示音」：依序播三種提示音（起步／轉綠、偏離車道、危險），確認有聲音、音量夠。 */
     fun testSounds(act: Activity) {
-        val tg = try { android.media.ToneGenerator(android.media.AudioManager.STREAM_MUSIC, 90) } catch (_: Throwable) {
-            Toast.makeText(act, "這台車機開不了提示音", Toast.LENGTH_LONG).show(); return
+        val ch = AppPrefs(act).alertChannel
+        val seq = listOf("起步／轉綠" to AlertSounder.Kind.INFO, "偏離車道" to AlertSounder.Kind.LANE, "危險（來車、太近）" to AlertSounder.Kind.DANGER)
+        seq.forEachIndexed { i, (name, k) ->
+            main.postDelayed({
+                try { AlertTone.play(act.applicationContext, k, ch); Toast.makeText(act, "提示音（${AlertTone.CHANNELS[ch.coerceIn(0, 3)]}）：$name", Toast.LENGTH_SHORT).show() } catch (_: Throwable) {}
+            }, i * 1800L)
         }
-        val seq = listOf(
-            "起步／轉綠" to { tg.startTone(android.media.ToneGenerator.TONE_PROP_BEEP2, 300) },
-            "偏離車道" to { tg.startTone(android.media.ToneGenerator.TONE_CDMA_PIP, 400) },
-            "危險（來車、太近）" to { tg.startTone(android.media.ToneGenerator.TONE_CDMA_EMERGENCY_RINGBACK, 700) }
-        )
-        seq.forEachIndexed { i, (name, play) ->
-            main.postDelayed({ try { play(); Toast.makeText(act, "提示音：$name", Toast.LENGTH_SHORT).show() } catch (_: Throwable) {} }, i * 1500L)
-        }
-        main.postDelayed({ tg.release() }, seq.size * 1500L + 1000L)
     }
 
     /** 設定裡「存原始影格」：下一幀存檔，完成後跳提示。沒在跑偵測時直接說明。 */

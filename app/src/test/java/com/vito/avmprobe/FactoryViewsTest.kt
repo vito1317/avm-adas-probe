@@ -236,3 +236,18 @@ class FactoryHazardViewTest {
         org.junit.Assert.assertEquals(0.325f, c.clipL, 1e-4f)
     }
 }
+
+class PolygonClipTest {
+    @Test
+    fun slotHalfBehindSideCameraStillDraws() {
+        FactoryViews.setCameras(null, null, floatArrayOf(-1.02f, 0.84f, 0.96f), floatArrayOf(1.07f, 0.83f, 0.90f))
+        val (l, _) = FactoryViews.hazardViews("SCENE_49_L0")!!
+        val m = PerspectiveMapper(l, 1920, 720)
+        // 隔壁格（左邊），一大半在鏡頭後面
+        val slot = listOf(floatArrayOf(-3.75f, -2.6f), floatArrayOf(-1.25f, -2.6f), floatArrayOf(-1.25f, 2.6f), floatArrayOf(-3.75f, 2.6f))
+        val pts = m.projectGroundPolygon(slot)
+        org.junit.Assert.assertTrue("切完還是一個面：${pts.size}", pts.size >= 3)
+        // 白線（x = −1.25）那一邊要延伸到畫面下半部（靠近鏡頭的地方）
+        org.junit.Assert.assertTrue(pts.maxOf { it[1] } > 0.87f * 720f * 0.6f)
+    }
+}

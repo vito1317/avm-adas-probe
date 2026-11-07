@@ -115,6 +115,29 @@ class PerspectiveMapper(val p: Params, val screenW: Int, val screenH: Int) {
         return floatArrayOf(cx + t * dx, cz + t * dz)
     }
 
+    /** 點在鏡頭前方多遠（沿光軸，m）；負的 = 在鏡頭後面。 */
+    fun depth(x: Float, y: Float, z: Float): Float = (x - cx) * fx + (y - cy) * fy + (z - cz) * fz
+
+    /**
+     * 地面多邊形投影成螢幕多邊形：先把鏡頭後面（深度 < [NEAR]）的部分切掉（Sutherland–Hodgman），
+     * 不是只丟掉看不到的角點（那樣剩下的點會連成錯的形狀；實車：側鏡頭看隔壁格只看得到前半段）。
+     */
+    fun projectGroundPolygon(poly: List<FloatArray>): List<FloatArray> {
+        if (poly.size < 3) return emptyList()
+        val near = 0.3f
+        val clipped = ArrayList<FloatArray>()
+        for (i in poly.indices) {
+            val a = poly[i]; val b = poly[(i + 1) % poly.size]
+            val da = depth(a[0], 0f, a[1]) - near; val db = depth(b[0], 0f, b[1]) - near
+            if (da >= 0f) clipped.add(a)
+            if ((da >= 0f) != (db >= 0f)) {
+                val t = da / (da - db)
+                clipped.add(floatArrayOf(a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t))
+            }
+        }
+        return clipped.mapNotNull { project(it[0], 0f, it[1]) }
+    }
+
     /** 投影；在鏡頭後面（或太貼近鏡頭）回 null。結果 [0] = x、[1] = y（螢幕像素）。 */
     fun project(x: Float, y: Float, z: Float): FloatArray? {
         val dx = x - cx; val dy = y - cy; val dz = z - cz

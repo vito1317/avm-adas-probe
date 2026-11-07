@@ -60,9 +60,15 @@ object Engine360Settings {
         check("啟用偵測與標注（關掉後下次進 360 起不再接相機）", { prefs.annotEnabled }) {
             prefs.annotEnabled = it; prefs.annotBoots = 0; prefs.annotCrashes = 0
         }
-        check("提示音（用媒體音量）", { prefs.alertSound }) { prefs.alertSound = it }
+        check("提示音", { prefs.alertSound }) { prefs.alertSound = it }
         col.addView(Button(act).apply {
-            text = "測試提示音（依序播三種，聽不到就把媒體音量調大）"; isAllCaps = false
+            isAllCaps = false
+            fun label() { text = "提示音聲道：${AlertTone.CHANNELS[prefs.alertChannel.coerceIn(0, 3)]}（按一下切換；沒播音樂也聽得到的選這個）" }
+            label()
+            setOnClickListener { prefs.alertChannel = (prefs.alertChannel + 1) % AlertTone.CHANNELS.size; label(); Engine360.testSounds(act) }
+        })
+        col.addView(Button(act).apply {
+            text = "測試提示音（依序播三種）"; isAllCaps = false
             setOnClickListener { Engine360.testSounds(act) }
         })
         check("車道偵測（偏離車道警示、變道輔助要用）", { prefs.groundMode == AppPrefs.GROUND_VIRTUAL }) {

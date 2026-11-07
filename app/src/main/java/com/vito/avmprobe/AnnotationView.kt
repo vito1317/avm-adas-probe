@@ -238,7 +238,7 @@ class AnnotationView(context: Context) : View(context) {
             }
             val sel = s.optInt("sel") == 1
             val col = if (sel) Color.rgb(60, 150, 255) else Color.rgb(80, 230, 120)
-            val pts = dense.mapNotNull { m.project(it[0], 0f, it[1]) }
+            val pts = m.projectGroundPolygon(dense)
             if (pts.size < 3) continue
             path.reset()
             pts.forEachIndexed { k, pt -> if (k == 0) path.moveTo(pt[0], pt[1]) else path.lineTo(pt[0], pt[1]) }
@@ -266,7 +266,7 @@ class AnnotationView(context: Context) : View(context) {
 
     /** 地面（y = 0）上的多邊形。鏡頭背後的點丟掉（鏡頭在車後上方往前看，丟的都是看不到的部分）。 */
     private fun groundPolygon3d(c: Canvas, m: PerspectiveMapper, poly: List<FloatArray>, col: Int, alpha: Int = 80) {
-        val pts = poly.mapNotNull { m.project(it[0], 0f, it[1]) }
+        val pts = m.projectGroundPolygon(poly)
         if (pts.size < 3) return
         path.reset()
         pts.forEachIndexed { i, q -> if (i == 0) path.moveTo(q[0], q[1]) else path.lineTo(q[0], q[1]) }

@@ -229,6 +229,11 @@ class AppPrefs(context: Context) {
         set(v) = sp.edit().putInt("ldwMinKmh", v).apply()
 
     /** 提示音（起步、偏離車道、變道來車、轉彎路徑有人車、移動中太近）。 */
+    /** 提示音走哪個聲道：0 導航提示（預設）、1 媒體、2 通知、3 鬧鐘（[AlertTone.CHANNELS]）。 */
+    var alertChannel: Int
+        get() = sp.getInt("alertChannel", 0)
+        set(v) = sp.edit().putInt("alertChannel", v).apply()
+
     var alertSound: Boolean
         get() = sp.getBoolean("alertSound", true)
         set(v) = sp.edit().putBoolean("alertSound", v).apply()
@@ -246,7 +251,7 @@ class AppPrefs(context: Context) {
             // 讀得到原廠這個場景的 3D 參數 → 一律用原廠的（之前自動／估的對位作廢）；使用者手動調過的除外
             if (viewCalMode(key) != "manual") {
                 FactoryViews.forKey(key, bvName)?.let { prof = prof.copy(p3 = it) }
-                FactoryViews.hazardViews(key)?.let { (l, r) -> prof = prof.copy(p3 = l, p3b = r) }
+                FactoryViews.hazardViews(key)?.let { (l, r) -> prof = prof.copy(top = FactoryViews.centerTop(annotParams), p3 = l, p3b = r) }
                 if (FactoryViews.noTopFor(key)) prof = prof.copy(top = null)
             }
             // 存的沒有 3D（只對位過俯視、或被清掉）→ 用實車校準的左右燈預設；使用者手動關掉 3D 的不補

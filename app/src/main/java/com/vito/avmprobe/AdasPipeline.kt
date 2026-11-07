@@ -382,14 +382,8 @@ class AdasPipeline(
 
     /** 用媒體音量（車機的通知音量常常是關的）。 */
     fun playTone(k: AlertSounder.Kind) {
-        try {
-            val tg = tone ?: android.media.ToneGenerator(android.media.AudioManager.STREAM_MUSIC, 90).also { tone = it }
-            when (k) {
-                AlertSounder.Kind.INFO -> tg.startTone(android.media.ToneGenerator.TONE_PROP_BEEP2, 300)
-                AlertSounder.Kind.LANE -> tg.startTone(android.media.ToneGenerator.TONE_CDMA_PIP, 400)
-                AlertSounder.Kind.DANGER -> tg.startTone(android.media.ToneGenerator.TONE_CDMA_EMERGENCY_RINGBACK, 700)
-            }
-        } catch (_: Throwable) { tone = null }
+        // 不用 ToneGenerator＋媒體聲道：車機沒播音樂時擴大機是關的，聽不到（實車）
+        try { AlertTone.play(ctx, k, prefs.alertChannel) } catch (_: Throwable) {}
     }
 
     private fun egoMps(vs: VehicleState): Float? =
