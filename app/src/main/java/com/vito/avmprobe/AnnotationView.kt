@@ -625,6 +625,20 @@ class AnnotationView(context: Context) : View(context) {
             else if (s.optBoolean("green")) msgs.add("綠燈了" to Color.rgb(30, 170, 80))
             Unit
         }
+        p.optJSONObject("lead")?.let { ld ->
+            if (ld.optBoolean("hazard")) msgs.add("前車打雙閃" to Color.rgb(230, 140, 20))
+            else ld.optString("turn").takeIf { it == "L" || it == "R" }?.let { msgs.add((if (it == "L") "◀ 前車打左燈" else "前車打右燈 ▶") to Color.rgb(230, 160, 20)) }
+            if (ld.optBoolean("brake")) msgs.add(0, "前車煞車" to Color.rgb(220, 40, 40))
+        }
+        p.optJSONObject("curb")?.let { cb ->
+            val ahead = cb.optDouble("ahead").toFloat()
+            msgs.add((if (ahead > 0.4f) "路邊空位 %.1f m：往前 %.1f m 停下，再倒車入位".format(cb.optDouble("len"), ahead)
+                else "路邊空位：倒車，方向盤先往右、再往左回正") to Color.rgb(40, 140, 240))
+        }
+        p.optJSONObject("shoulder")?.let { sh ->
+            if (sh.optBoolean("brake")) msgs.add("前方急煞，注意後方來車" to Color.rgb(220, 40, 40))
+            else msgs.add("引導至路肩 ▶" to Color.rgb(40, 140, 240))
+        }
         p.optJSONObject("ldw")?.let { l ->
             if (l.optBoolean("l")) msgs.add("◀ 偏離車道" to Color.rgb(230, 160, 20))
             if (l.optBoolean("r")) msgs.add("偏離車道 ▶" to Color.rgb(230, 160, 20))

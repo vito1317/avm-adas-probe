@@ -503,8 +503,20 @@ class AdasPipeline(
             if (w[3] > 0f) tDets.add(Det(d.type, w[0], w[1], d.score, cam = "front", atMs = atMs))
         }
         camResults[slot] = CamResult(now, objs, emptyList())
+        // 前車燈號：用窄角（看得比較大）那一格；正前方（框中心在畫面中間 30%）最近的那台車
+        if (slot == "front:n") {
+            val lead = dets.filter { ObjTypes.group(it.type) == "veh" && it.rect.centerX() in v.size * 0.35f..v.size * 0.65f }
+                .maxByOrNull { it.rect.bottom }
+            leadLight = if (lead != null) leadLights.update(now, argb, v.size, lead.rect.left, lead.rect.top, lead.rect.right, lead.rect.bottom)
+                else leadLights.update(now, null, v.size, 0f, 0f, 0f, 0f)
+            leadLightAt = now
+        }
         afterDetections(tDets, vs, now)
     }
+
+    private val leadLights = LeadLightDetector()
+    @Volatile private var leadLight: LeadLightDetector.State? = null
+    @Volatile private var leadLightAt = 0L
 
     /** 虛擬鏡頭裡偵測框底部中點 → 世界座標（跟 [toWorld] 同一套處理：太遠用方位角、推到物件中心、離自車距離）。 */
     private fun toWorldVirtual(v: VirtualView, u: Double, vv: Double, t: String, widthDist: Double? = null): FloatArray? {
@@ -780,6 +792,10 @@ class AdasPipeline(
             p.put("slots", sj)
             if (spd(vs)) parkPathJson(slots)?.let { p.put("park", it) }
         }
+        roadsideAndShoulder(p, vs, now)
+        leadLight?.takeIf { now - leadLightAt < 1500 && (it.brake || it.hazard || it.turn != null) }?.let { ll ->
+            p.put("lead", JSONObject().put("brake", ll.brake).put("hazard", ll.hazard).put("turn", ll.turn?.toString() ?: JSONObject.NULL))
+        }
         val obs = obstacles
         if (now - obstaclesAt < OBS_TTL_MS && obs.isNotEmpty()) {
             val oa = JSONArray()
@@ -872,6 +888,61 @@ class AdasPipeline(
     }
 
     private val lcTrack = LaneChangeTracker()
+    private val roadside = RoadsideSpaceFinder()
+    private var spdPrev = Float.NaN; private var spdPrevAt = 0L; private var decel = 0f   // 自車減速度（m/s²，EMA）
+
+    /**
+     * 打雙閃：
+     * - 慢速（≤ 25 km/h）→ 找右側路邊空位，找到就畫成選好的格子＋平行停車路徑（往前開到起點再倒車入位）。
+     * - 高速（≥ 50 km/h）→ 前車急速接近或自己在急減速 = 前方急煞（打雙閃是提醒後車），不引導，只提醒；
+     *   否則當成要靠邊停：畫往右到路肩的引導線（路肩線是實線，這時不打叉）。
+     */
+    private fun roadsideAndShoulder(p: JSONObject, vs: VehicleState, now: Long) {
+        val v = vs.speedKmh
+        if (v != null) {
+            if (!spdPrev.isNaN() && now > spdPrevAt) {
+                val a = ((spdPrev - v) / 3.6f) / ((now - spdPrevAt) / 1000f)
+                decel += 0.3f * (a - decel)
+            }
+            spdPrev = v; spdPrevAt = now
+        }
+        val rd = road?.takeIf { now - roadAt < BEV_TTL_MS }
+        val objs = currentObjects(now)
+        val red = rd?.lines?.any { it.kind == 'r' && minOf(it.x1, it.x2) > 0.8f && minOf(it.z1, it.z2) < 2f && maxOf(it.z1, it.z2) > -2f } ?: false
+        val spot = roadside.update(now, v, vs.turn, vs.gear, objs.map { RoadsideSpaceFinder.Obj(it.t, it.x, it.z) }, rd?.edgeR, red)
+        if (spot != null) {
+            val sj = p.optJSONArray("slots") ?: JSONArray().also { p.put("slots", it) }
+            val c = spot.corners()
+            sj.put(JSONObject().put("p", JSONArray().apply { c.forEach { put(r2(it)) } }).put("k", "l").put("o", 0).put("c", 1.0).put("sel", 1))
+            roadside.plan(spot)?.let { pl ->
+                val pts = JSONArray(); for (q in pl.points) pts.put(JSONArray().put(r2(q[0])).put(r2(q[1])))
+                p.put("park", JSONObject().put("pts", pts).put("rev", pl.reverseFrom).put("r", r2(pl.radius))
+                    .put("goal", JSONArray().put(r2(pl.goal[0])).put(r2(pl.goal[1])).put(0)))
+                p.put("curb", JSONObject().put("len", r2(spot.len)).put("ahead", r2(pl.stopAheadM)))
+            }
+        }
+        if (vs.turn == 'H' && v != null && v >= 50f) {
+            // 前方急煞：正前方的車快速接近（相對速度 < −4 m/s），或自車減速度 > 3 m/s²
+            val leadClosing = now - tracksAt < OBJ_TTL_MS && tracks.any { it.confirmed && abs(it.x) < 1.8f && it.z in 3f..60f && it.vz < -4f }
+            if (leadClosing || decel > 3f) {
+                p.put("shoulder", JSONObject().put("brake", true))
+            } else {
+                // 路肩：右側路緣往內 1.2 m；沒有路緣 → 最右邊那條車道線再往右 1.6 m；都沒有 → 一個半車道
+                val rightLine = rd?.lines?.filter { abs(it.z2 - it.z1) > 2f * abs(it.x2 - it.x1) }
+                    ?.map { l -> l.x1 + (l.x2 - l.x1) * (if (abs(l.z2 - l.z1) < 1e-6f) 0f else -l.z1 / (l.z2 - l.z1)) }
+                    ?.filter { it > 0.5f }?.maxOrNull()
+                val target = rd?.edgeR?.let { it - 1.2f } ?: rightLine?.let { it + 1.6f } ?: (LaneChangeAssist.LANE_W * 1.5f)
+                val len = (v / 3.6f * 5f).coerceIn(30f, 80f)
+                val path = lca.lanePath(target.toDouble(), 0.0, len.toDouble())
+                val pts = JSONArray(); for (q in path) pts.put(JSONArray().put(r2(q[0])).put(r2(q[1])))
+                val st = lcaState
+                val danger = st != null && now - tracksAt < OBJ_TTL_MS && st.R >= 1
+                p.put("lc", JSONObject().put("pts", pts).put("dir", 1).put("w", r2(LaneChangeAssist.LANE_W)).put("car", if (danger) 1 else 0)
+                    .put("ok", !danger).put("sh", 1))
+                p.put("shoulder", JSONObject().put("brake", false).put("x", r2(target)))
+            }
+        }
+    }
 
     /** 使用者點選要停的格子（[AnnotationView] 點俯視圖）。 */
     val slotSelection = SlotSelection()
