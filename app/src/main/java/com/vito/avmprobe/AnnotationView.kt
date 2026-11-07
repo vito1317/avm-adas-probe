@@ -626,6 +626,9 @@ class AnnotationView(context: Context) : View(context) {
             else if (s.optBoolean("green")) msgs.add("綠燈了" to Color.rgb(30, 170, 80))
             Unit
         }
+        p.optJSONObject("cutin")?.let { ci ->
+            msgs.add(0, (if (ci.optString("side") == "L") "◀ 左前車打燈要切入" else "右前車打燈要切入 ▶") to Color.rgb(220, 40, 40))
+        }
         p.optJSONObject("lead")?.let { ld ->
             if (ld.optBoolean("hazard")) msgs.add("前車打雙閃" to Color.rgb(230, 140, 20))
             else ld.optString("turn").takeIf { it == "L" || it == "R" }?.let { msgs.add((if (it == "L") "◀ 前車打左燈" else "前車打右燈 ▶") to Color.rgb(230, 160, 20)) }

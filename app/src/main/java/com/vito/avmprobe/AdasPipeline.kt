@@ -374,7 +374,8 @@ class AdasPipeline(
         sounder.update(now, AlertSounder.State(
             start = st != null && (st.lead || st.green),
             ldw = (ld != null && (ld.any || ld.straddle != null)) || noLaneChange,
-            lcaDanger = (lcaFresh && (l!!.L >= 2 || l.R >= 2)) || laneChangeBlocked,
+            lcaDanger = (lcaFresh && (l!!.L >= 2 || l.R >= 2)) || laneChangeBlocked ||
+                (cutIn != null && now - cutInAt < 1500),
             turnHit = turnHit,
             collision = AlertSounder.moving(vs.speedKmh, vs.gear) && currentObjects(now).any { it.clr < 0.5f }
         ))
@@ -504,6 +505,15 @@ class AdasPipeline(
         }
         camResults[slot] = CamResult(now, objs, emptyList())
         // 前車燈號：用窄角（看得比較大）那一格；正前方（框中心在畫面中間 30%）最近的那台車
+        // 旁邊車道的車打方向燈要切進來：寬角那一格
+        if (slot == "front:w") try {
+            val boxes = dets.mapNotNull { d ->
+                if (ObjTypes.group(d.type) != "veh") return@mapNotNull null
+                val w = toWorldVirtual(v, d.rect.centerX().toDouble(), d.rect.bottom.toDouble(), d.type) ?: return@mapNotNull null
+                CutInWatcher.Box(d.rect.left, d.rect.top, d.rect.right, d.rect.bottom, w[0], w[1])
+            }
+            cutIn = cutInWatch.update(now, argb, v.size, boxes); cutInAt = now
+        } catch (t: Throwable) { Log.w(TAG, "cut-in", t) }
         if (slot == "front:n") {
             val lead = dets.filter { ObjTypes.group(it.type) == "veh" && it.rect.centerX() in v.size * 0.35f..v.size * 0.65f }
                 .maxByOrNull { it.rect.bottom }
@@ -515,6 +525,9 @@ class AdasPipeline(
     }
 
     private val leadLights = LeadLightDetector()
+    private val cutInWatch = CutInWatcher()
+    @Volatile private var cutIn: Triple<Char, Float, Float>? = null
+    @Volatile private var cutInAt = 0L
     @Volatile private var leadLight: LeadLightDetector.State? = null
     @Volatile private var leadLightAt = 0L
 
@@ -819,6 +832,9 @@ class AdasPipeline(
             if (spd(vs)) parkPathJson(slots)?.let { p.put("park", it) }
         }
         roadsideAndShoulder(p, vs, now)
+        cutIn?.takeIf { now - cutInAt < 1500 }?.let { (side, x, z) ->
+            p.put("cutin", JSONObject().put("side", side.toString()).put("x", r2(x)).put("z", r2(z)))
+        }
         leadLight?.takeIf { now - leadLightAt < 1500 && (it.brake || it.hazard || it.turn != null) }?.let { ll ->
             p.put("lead", JSONObject().put("brake", ll.brake).put("hazard", ll.hazard).put("turn", ll.turn?.toString() ?: JSONObject.NULL))
         }
