@@ -67,6 +67,7 @@ object FactoryVehicle {
             lm.requestLocationUpdates(android.location.LocationManager.GPS_PROVIDER, 500L, 0f, object : android.location.LocationListener {
                 override fun onLocationChanged(l: android.location.Location) {
                     if (l.hasSpeed()) { gpsKmh = l.speed * 3.6f; gpsAt = SystemClock.elapsedRealtime() }
+                    if (l.hasBearing() && l.hasSpeed()) MotionCurvature.onGps(l.bearing, l.speed * 3.6f)
                 }
                 @Deprecated("") override fun onStatusChanged(p: String?, s: Int, b: android.os.Bundle?) {}
                 override fun onProviderEnabled(p: String) {}

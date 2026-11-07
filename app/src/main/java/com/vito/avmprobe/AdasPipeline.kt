@@ -851,7 +851,7 @@ class AdasPipeline(
         // 方向盤讀值不合理（實車：34 km/h 在緩彎上讀到 329°，一分鐘前後都差不多，像卡住）→ 當作沒有
         val steer = vs.steerDeg?.takeIf { TurnPathPlanner.plausibleSteer(it, vs.speedKmh) }
         val turnPlan = TurnPathPlanner.plan(vs.turn, steer, vs.speedKmh)
-            ?: TurnPathPlanner.estimate(vs.turn, vs.speedKmh, roadCurvatureAhead(now))
+            ?: TurnPathPlanner.estimate(vs.turn, vs.speedKmh, roadCurvature(now, vs.speedKmh))
         if (turnPlan == null) turnHit = false
         // 變道預測：打方向燈、方向盤還沒轉到要轉彎 → 從目前車道畫到那一側車道。
         // 變道輔助有算出路徑（有車道線、速度夠）就用它的；沒有（慢速被當成可能轉彎、或沒偵測到車道）
@@ -926,6 +926,16 @@ class AdasPipeline(
      * 前方道路的彎度（1/m，正 = 往右彎）：自車前方、跟車身大致平行的標線的曲率，依長度加權平均。
      * RoadLine.k 的正負跟端點順序有關（k > 0 = 往左彎是指端點由後往前），先換成「由後往前」。
      */
+    /**
+     * 前方道路彎度：車子正在轉的程度（陀螺儀／GPS，見 [MotionCurvature]）明顯在轉時優先用它；
+     * 否則用俯視圖車道線（只看得到車旁幾公尺，彎道多半看起來是直的）。
+     */
+    private fun roadCurvature(now: Long, speedKmh: Float?): Double? {
+        val km = MotionCurvature.curvature(speedKmh)
+        if (km != null && abs(km) >= TurnPathPlanner.ROAD_K_MIN) return km
+        return roadCurvatureAhead(now) ?: km
+    }
+
     private fun roadCurvatureAhead(now: Long): Double? {
         val rd = road ?: return null
         if (now - roadAt > BEV_TTL_MS) return null

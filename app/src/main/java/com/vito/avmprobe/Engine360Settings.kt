@@ -44,7 +44,9 @@ object Engine360Settings {
         col.addView(TextView(act).apply {
             textSize = 12f
             val v = VehicleBus.signals.snapshot()
-            text = "車輛訊號：" + FactoryVehicle.status + "\n目前使用的車速：" + (v.speedKmh?.let { "%.0f km/h".format(it) } ?: "沒有")
+            text = "車輛訊號：" + FactoryVehicle.status + "\n目前使用的車速：" + (v.speedKmh?.let { "%.0f km/h".format(it) } ?: "沒有") +
+                "\n道路彎度來源：" + MotionCurvature.source + (MotionCurvature.curvature(v.speedKmh)?.let { k ->
+                    if (kotlin.math.abs(k) < 1e-3) "（直行）" else "（目前%s彎，半徑約 %.0f m）".format(if (k > 0) "右" else "左", 1 / kotlin.math.abs(k)) } ?: "")
         })
         if (prefs.lastCrash.isNotEmpty()) {
             col.addView(TextView(act).apply {
