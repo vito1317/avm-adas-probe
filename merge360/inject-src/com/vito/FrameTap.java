@@ -215,7 +215,9 @@ public final class FrameTap {
                         } catch (Throwable ignore) {}
                     }
                     int st = capturing ? stable + 1 : 0;
-                    // 引擎說原廠準備好了才接（之前引擎不給 Surface，接了也是空的、之後不會重試）
+                    // 正常情況原廠建 session 時就已經加了我們的 Surface，attachAll 會看到「已經有」而什麼都不做。
+                    // 真的缺（session 在引擎能給 Surface 之前建好）才會用 addOutputSurface（會停相機重開），
+                    // 所以等原廠完全準備好再做
                     boolean warm = engineReady();
                     if (st >= STABLE_TICKS && warm) { sWaiting = false; attachAll(); return; }
                     if (tick >= MAX_TICKS && warm) {

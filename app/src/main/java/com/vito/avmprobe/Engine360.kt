@@ -121,10 +121,13 @@ object Engine360 {
     @JvmStatic
     fun isReady(): Boolean = ready && SystemClock.elapsedRealtime() - readyAt >= SURFACE_AFTER_READY_MS
 
+    /**
+     * 原廠建相機 session 時就給 Surface（只是一個 ImageReader，很輕；偵測還沒開始前收到的畫面直接丟掉）。
+     * 不能延後：延後了就只能用原廠的 addOutputSurface 在相機運作中加輸出，它會「停相機→加輸出→重開」，
+     * 3D 畫面正在跑時重開相機底層會當掉（實車 m-v37～39：一到第 8 秒就閃退，沒有任何記錄）。
+     */
     @JvmStatic
-    fun surface(w: Int, h: Int): Surface? = try {
-        if (!isReady()) null else FrameShareHub.surface(w, h)
-    } catch (_: Throwable) { null }
+    fun surface(w: Int, h: Int): Surface? = try { FrameShareHub.surface(w, h) } catch (_: Throwable) { null }
 
     @JvmStatic
     fun log(msg: String) { try { FrameShareHub.log(msg) } catch (_: Throwable) {} }
