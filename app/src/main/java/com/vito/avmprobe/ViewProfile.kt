@@ -9,7 +9,11 @@ import org.json.JSONObject
  *
  * 原廠切到哪個視角，就套用那個視角存的設定（[AppPrefs.viewProfile]），每個視角對位一次就好。
  */
-data class ViewProfile(val top: AnnotationMapper.Params?, val p3: PerspectiveMapper.Params?) {
+data class ViewProfile(
+    val top: AnnotationMapper.Params?, val p3: PerspectiveMapper.Params?,
+    /** 第二格鏡頭／3D 畫面（打雙閃的三格版面：左鏡頭 [p3]、右鏡頭 [p3b]）。 */
+    val p3b: PerspectiveMapper.Params? = null
+) {
 
     fun toJson(): JSONObject = JSONObject().apply {
         top?.let { t ->
@@ -23,7 +27,7 @@ data class ViewProfile(val top: AnnotationMapper.Params?, val p3: PerspectiveMap
                 .put("az", p.azDeg.toDouble()).put("el", p.elDeg.toDouble()).put("d", p.dist.toDouble())
                 .put("fov", p.fovDeg.toDouble()).put("tx", p.tx.toDouble()).put("tz", p.tz.toDouble())
                 .put("ty", p.ty.toDouble()).put("mi", p.mirror)
-                .put("cxo", p.cxOff.toDouble()).put("cyo", p.cyOff.toDouble()))
+                .put("cxo", p.cxOff.toDouble()).put("cyo", p.cyOff.toDouble()).put("roll", p.rollDeg.toDouble()))
         }
     }
 
@@ -45,7 +49,8 @@ data class ViewProfile(val top: AnnotationMapper.Params?, val p3: PerspectiveMap
                     dist = it.optDouble("d").toFloat(), fovDeg = it.optDouble("fov").toFloat(),
                     tx = it.optDouble("tx").toFloat(), tz = it.optDouble("tz").toFloat(),
                     ty = it.optDouble("ty", 0.0).toFloat(), mirror = it.optBoolean("mi", false),
-                    cxOff = it.optDouble("cxo", 0.0).toFloat(), cyOff = it.optDouble("cyo", 0.0).toFloat()
+                    cxOff = it.optDouble("cxo", 0.0).toFloat(), cyOff = it.optDouble("cyo", 0.0).toFloat(),
+                    rollDeg = it.optDouble("roll", 0.0).toFloat()
                 )
             }
             return ViewProfile(t, p)
@@ -64,6 +69,10 @@ data class ViewProfile(val top: AnnotationMapper.Params?, val p3: PerspectiveMap
                 k == TURN_L -> PerspectiveMapper.Params.DEFAULT_LEFT
                 k == TURN_R -> PerspectiveMapper.Params.DEFAULT_RIGHT
                 else -> null
+            }
+            // 打雙閃三格版面：左右是鏡頭畫面、俯視圖在中間那格
+            FactoryViews.hazardViews(key.uppercase())?.let { (l, r) ->
+                return ViewProfile(FactoryViews.centerTop(globalTop), l, r)
             }
             // 全 3D 這類沒有俯視圖格子的場景：俯視標注不畫（不然會畫在 3D 畫面上）
             return ViewProfile(if (FactoryViews.noTopFor(key.uppercase())) null else globalTop, p3)

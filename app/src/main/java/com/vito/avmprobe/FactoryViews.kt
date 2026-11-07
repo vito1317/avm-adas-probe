@@ -50,8 +50,44 @@ object FactoryViews {
 
     @Volatile private var camFront: FloatArray? = null
     @Volatile private var camRear: FloatArray? = null
+    @Volatile private var camLeft: FloatArray? = null
+    @Volatile private var camRight: FloatArray? = null
 
-    fun setCameras(front: FloatArray?, rear: FloatArray?) { camFront = front; camRear = rear }
+    fun setCameras(front: FloatArray?, rear: FloatArray?, left: FloatArray? = null, right: FloatArray? = null) {
+        camFront = front; camRear = rear; camLeft = left; camRight = right
+    }
+
+    // ───── 打雙閃的三格版面（場景 49、59）：左鏡頭｜俯視圖｜右鏡頭 ─────
+    // 一樣用實車原始影格比對（2026-11-07，相關係數 0.76／0.77）：
+    //   左：方位 −1.6°（幾乎正前方）、俯角 41.7°、傾斜 1.5°、垂直 FOV 68.2°、中心往右 0.754 半寬、往上 0.243 半高
+    //   右：方位 +16.0°（往外）、俯角 44.1°、傾斜 6.2°、垂直 FOV 63.0°、中心往左 0.472 半寬、往上 0.122 半高
+    private val HAZARD_SCENES = setOf(49, 59)
+
+    /** 雙閃三格版面的（左格, 右格）投影參數；不是這種場景或鏡頭位置還不知道 → null。 */
+    fun hazardViews(key: String): Pair<PerspectiveMapper.Params, PerspectiveMapper.Params>? {
+        val n = sceneOf(key) ?: return null
+        if (n !in HAZARD_SCENES) return null
+        val l = camLeft ?: return null; val r = camRight ?: return null
+        return sideCam(l, floatArrayOf(0f, 0f, 0.325f, 0.87f), -1.6f, 41.7f, 1.5f, 68.2f, 0.754f, -0.243f) to
+            sideCam(r, floatArrayOf(0.675f, 0f, 1f, 0.87f), 16.0f, 44.1f, 6.2f, 63.0f, -0.472f, -0.122f)
+    }
+
+    /** 俯視圖在中間那格（寬 32.5%～67.5%）：比例尺跟平常一樣，中心移到那格中央。 */
+    fun centerTop(g: AnnotationMapper.Params): AnnotationMapper.Params =
+        g.copy(clipL = 0.325f, clipR = 0.675f, cx = g.cx - (g.clipL + g.clipR) / 2f + 0.5f)
+
+    /** 鏡頭位置 [c] 往 yaw（+ = 往右）、往下 pitch 度看，畫面傾斜 roll、中心偏移 → 投影參數。 */
+    private fun sideCam(c: FloatArray, clip: FloatArray, yaw: Float, pitch: Float, roll: Float, fov: Float, cxo: Float, cyo: Float): PerspectiveMapper.Params {
+        val d = 5.0
+        val a = Math.toRadians(yaw.toDouble()); val e = Math.toRadians(pitch.toDouble())
+        val fx = kotlin.math.sin(a) * kotlin.math.cos(e); val fy = -kotlin.math.sin(e); val fz = kotlin.math.cos(a) * kotlin.math.cos(e)
+        return PerspectiveMapper.Params(
+            clipL = clip[0], clipT = clip[1], clipR = clip[2], clipB = clip[3],
+            azDeg = -yaw, elDeg = pitch, dist = d.toFloat(), fovDeg = fov,
+            tx = (c[0] + d * fx).toFloat(), ty = (c[1] + d * fy).toFloat(), tz = (c[2] + d * fz).toFloat(),
+            cxOff = cxo, cyOff = cyo, rollDeg = roll
+        )
+    }
 
     fun cameraView(bvName: String): PerspectiveMapper.Params? {
         val n = bvName.uppercase()

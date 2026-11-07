@@ -31,7 +31,9 @@ class PerspectiveMapper(val p: Params, val screenW: Int, val screenH: Int) {
         /** 原廠畫面左右翻轉（高速打方向燈的往後看視角，像照後鏡）。 */
         val mirror: Boolean = false,
         /** 投影中心偏離格子正中央多少（半寬／半高的比例，+ = 右／下）。鏡頭展開畫面用。 */
-        val cxOff: Float = 0f, val cyOff: Float = 0f
+        val cxOff: Float = 0f, val cyOff: Float = 0f,
+        /** 畫面繞光軸轉了幾度（+ = 逆時針；側鏡頭裝得歪）。 */
+        val rollDeg: Float = 0f
     ) {
         /** 左右鏡像（右燈視角的預設值 = 左燈視角的鏡像）。 */
         fun mirrored() = copy(azDeg = -azDeg, tx = -tx)
@@ -53,6 +55,8 @@ class PerspectiveMapper(val p: Params, val screenW: Int, val screenH: Int) {
 
     private val ox: Float
     private val oy: Float
+    private val rc = kotlin.math.cos(Math.toRadians(p.rollDeg.toDouble())).toFloat()
+    private val rs = kotlin.math.sin(Math.toRadians(p.rollDeg.toDouble())).toFloat()
     private val focal: Float
     // 鏡頭位置與三軸
     private val cx: Float; private val cy: Float; private val cz: Float
@@ -97,8 +101,11 @@ class PerspectiveMapper(val p: Params, val screenW: Int, val screenH: Int) {
      * 自動對位用：拿原廠畫面的像素去對我們俯視圖上同一個地面點。
      */
     fun unprojectToGround(sx: Float, sy: Float): FloatArray? {
-        val xc = (if (p.mirror) ox - sx else sx - ox) / focal
-        val yc = -(sy - oy) / focal
+        val x0 = (if (p.mirror) ox - sx else sx - ox) / focal
+        val y0 = -(sy - oy) / focal
+        // 畫面上的座標轉回沒有傾斜的鏡頭座標
+        val xc = rc * x0 - rs * y0
+        val yc = rs * x0 + rc * y0
         // 世界方向 = f + xc·r + yc·u
         val dx = fx + xc * rx + yc * ux
         val dy = fy + xc * ry + yc * uy
@@ -113,8 +120,11 @@ class PerspectiveMapper(val p: Params, val screenW: Int, val screenH: Int) {
         val dx = x - cx; val dy = y - cy; val dz = z - cz
         val zc = dx * fx + dy * fy + dz * fz
         if (zc < 0.2f) return null
-        val xc = dx * rx + dy * ry + dz * rz
-        val yc = dx * ux + dy * uy + dz * uz
+        val xu = dx * rx + dy * ry + dz * rz
+        val yu = dx * ux + dy * uy + dz * uz
+        // 鏡頭傾斜：沒有傾斜的座標轉到畫面上
+        val xc = rc * xu + rs * yu
+        val yc = -rs * xu + rc * yu
         val px = xc * focal / zc
         return floatArrayOf(if (p.mirror) ox - px else ox + px, oy - yc * focal / zc)
     }

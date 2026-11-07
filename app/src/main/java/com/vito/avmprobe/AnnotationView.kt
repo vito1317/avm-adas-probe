@@ -157,6 +157,7 @@ class AnnotationView(context: Context) : View(context) {
                 c.drawText(t, (m3.clipLeft + m3.clipRight) / 2 - text.measureText(t) / 2, m3.clipTop + 40 * dp, text)
             } else draw3d(c, PerspectiveMapper(p3, width, height), p)
         }
+        if (!suspend3d) prof.p3b?.let { draw3d(c, PerspectiveMapper(it, width, height), p) }
         drawHud(c, p)
         status?.let { drawStatus(c, it, top?.let { t -> AnnotationMapper(t, width, height) }) }
     }

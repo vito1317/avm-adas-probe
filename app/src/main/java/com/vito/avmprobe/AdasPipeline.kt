@@ -61,6 +61,9 @@ class AdasPipeline(
         /** 紅綠燈：往上 14°、視角 40°（10～30 m 外的號誌都落在這格，而且被放大）。 */
         private const val TL_PITCH = -14.0
         private const val TL_FOV = 40.0
+        /** 找燈點用的高解析畫面：窄一點、像素多一點（20 m 外的燈頭約 8 px）。 */
+        private const val TL_HI_FOV = 34.0
+        private const val TL_HI_SIZE = 512
         private val NAMES = mapOf(
             "car" to "轎車", "van" to "箱型車", "truck" to "卡車", "bus" to "公車", "moto" to "機車",
             "bigbike" to "重機", "bike" to "腳踏車", "ped" to "行人", "cone" to "三角錐"
@@ -140,8 +143,10 @@ class AdasPipeline(
         try {
             calibText = ctx.assets.open("avm_calib.json").bufferedReader().readText()
             geo = AvmGeometry.fromJson(calibText)
-            geo?.let { g -> FactoryViews.setCameras(g.cam("front")?.let { floatArrayOf(it.px.toFloat(), it.py.toFloat(), it.pz.toFloat()) },
-                g.cam("rear")?.let { floatArrayOf(it.px.toFloat(), it.py.toFloat(), it.pz.toFloat()) }) }
+            geo?.let { g ->
+                fun pos(n: String) = g.cam(n)?.let { floatArrayOf(it.px.toFloat(), it.py.toFloat(), it.pz.toFloat()) }
+                FactoryViews.setCameras(pos("front"), pos("rear"), pos("left"), pos("right"))
+            }
             calibrated = JSONObject(calibText).optBoolean("calibrated", false)
         } catch (t: Throwable) {
             Log.e(TAG, "校正讀取失敗：${t.message}", t)
@@ -447,6 +452,7 @@ class AdasPipeline(
                 "front:w" -> VirtualView(g, "front", 0.0, 2.0, FRONT_WIDE_FOV, size)
                 "front:n" -> VirtualView(g, "front", 0.0, 1.0, FRONT_NARROW_FOV, size)
                 SLOT_TL -> VirtualView(g, "front", 0.0, TL_PITCH, TL_FOV, size)
+                "tl:hi" -> VirtualView(g, "front", 0.0, TL_PITCH, TL_HI_FOV, size)
                 else -> null
             }
         } catch (_: Throwable) { null } ?: return null
@@ -565,7 +571,19 @@ class AdasPipeline(
         emaInfer = ema(emaInfer, inf.toFloat())
         val now = SystemClock.elapsedRealtime()
         for (d in dets) if (d.type == ObjTypes.LIGHT) considerTrafficLightVirtual(v, argb, d, now)
+        // 模型這次沒抓到 → 高解析畫面找燈點（遠處燈頭只有幾個像素，模型看不到）
+        val cur = tl
+        if (cur == null || now - cur.at > 400) {
+            val hv = virtualView(g, "tl:hi", TL_HI_SIZE) ?: return
+            val hargb = renderVirtual(hv, "tl:hi")
+            val l = tlBlobs.update(hargb, hv.size) ?: return
+            val ray = hv.rayAt(l.x.toDouble(), l.y.toDouble())
+            tl = TlResult(now, l.state, l.conf * 0.8f, Math.toDegrees(atan2(ray[0], ray[2])).toFloat(),
+                RectF(l.x - 4f, l.y - 4f, l.x + 4f, l.y + 4f))
+        }
     }
+
+    private val tlBlobs = TrafficLightBlobs()
 
     private fun considerTrafficLightVirtual(v: VirtualView, argb: IntArray, d: Detection, now: Long) {
         val r = d.rect

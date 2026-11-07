@@ -198,3 +198,41 @@ class FactoryCameraViewTest {
         org.junit.Assert.assertNull(FactoryViews.cameraView("BV_LEFT"))
     }
 }
+
+class FactoryHazardViewTest {
+    @Test
+    fun hazardScenesGiveTwoSideCameras() {
+        FactoryViews.setCameras(floatArrayOf(0f, 0.3f, 2.8f), floatArrayOf(0f, 0.8f, -2.4f), floatArrayOf(-1.02f, 0.84f, 0.96f), floatArrayOf(1.07f, 0.83f, 0.90f))
+        val (l, r) = FactoryViews.hazardViews("SCENE_49_L1")!!
+        org.junit.Assert.assertEquals(0.325f, l.clipR, 1e-4f)
+        org.junit.Assert.assertEquals(0.675f, r.clipL, 1e-4f)
+        org.junit.Assert.assertNull(FactoryViews.hazardViews("SCENE_5_L0"))
+        // 沿左鏡頭光軸的點 → 投影在偏移後的畫面中心（傾斜不影響中心）
+        val m = PerspectiveMapper(l, 1920, 720)
+        val a = Math.toRadians(-1.6); val e = Math.toRadians(41.7)
+        val t = 1.0
+        val q = m.project((-1.02 + t * kotlin.math.sin(a) * kotlin.math.cos(e)).toFloat(), (0.84 - t * kotlin.math.sin(e)).toFloat(),
+            (0.96 + t * kotlin.math.cos(a) * kotlin.math.cos(e)).toFloat())!!
+        val W = 0.325f * 1920f; val H = 0.87f * 720f
+        org.junit.Assert.assertEquals(W / 2f + 0.754f * W / 2f, q[0], 1f)
+        org.junit.Assert.assertEquals(H / 2f - 0.243f * H / 2f, q[1], 1f)
+    }
+
+    @Test
+    fun rolledViewRoundTrips() {
+        FactoryViews.setCameras(null, null, floatArrayOf(-1.02f, 0.84f, 0.96f), floatArrayOf(1.07f, 0.83f, 0.90f))
+        val (_, r) = FactoryViews.hazardViews("SCENE_49_L0")!!
+        val m = PerspectiveMapper(r, 1920, 720)
+        val q = m.project(2.2f, 0f, 2.5f)!!
+        val g = m.unprojectToGround(q[0], q[1])!!
+        org.junit.Assert.assertEquals(2.2f, g[0], 0.02f); org.junit.Assert.assertEquals(2.5f, g[1], 0.02f)
+    }
+
+    @Test
+    fun centerTopMovesToMiddlePane() {
+        val g = AnnotationMapper.Params(0f, 0f, 0.348f, 0.868f, 0.177f, 0.434f, 0.097f, false)
+        val c = FactoryViews.centerTop(g)
+        org.junit.Assert.assertEquals(0.5f + 0.177f - 0.174f, c.cx, 1e-4f)
+        org.junit.Assert.assertEquals(0.325f, c.clipL, 1e-4f)
+    }
+}
