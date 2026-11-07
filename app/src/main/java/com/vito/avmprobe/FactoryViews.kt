@@ -72,9 +72,13 @@ object FactoryViews {
             sideCam(r, floatArrayOf(0.675f, 0f, 1f, 0.87f), 16.0f, 44.1f, 6.2f, 63.0f, -0.472f, -0.122f)
     }
 
-    /** 俯視圖在中間那格（寬 32.5%～67.5%）：比例尺跟平常一樣，中心移到那格中央。 */
+    /**
+     * 俯視圖在中間那格（寬 32.5%～67.5%）。用實車雙閃截圖驗證過的固定值（停車格白線對齊），
+     * 不從全域俯視對位換算：全域對位會被別的畫面的自動對位結果蓋掉（實車有一次在開機動畫畫面對出
+     * 中心在最右邊、比例尺小一半的值），換算過來所有東西都偏掉。[g] 只拿來沿用左右翻轉設定。
+     */
     fun centerTop(g: AnnotationMapper.Params): AnnotationMapper.Params =
-        g.copy(clipL = 0.325f, clipR = 0.675f, cx = g.cx - (g.clipL + g.clipR) / 2f + 0.5f)
+        AnnotationMapper.Params(0.325f, 0f, 0.675f, 0.87f, 0.503f, 0.434f, 0.097f, g.flip)
 
     /** 鏡頭位置 [c] 往 yaw（+ = 往右）、往下 pitch 度看，畫面傾斜 roll、中心偏移 → 投影參數。 */
     private fun sideCam(c: FloatArray, clip: FloatArray, yaw: Float, pitch: Float, roll: Float, fov: Float, cxo: Float, cyo: Float): PerspectiveMapper.Params {

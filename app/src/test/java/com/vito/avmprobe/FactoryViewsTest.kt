@@ -230,9 +230,11 @@ class FactoryHazardViewTest {
 
     @Test
     fun centerTopMovesToMiddlePane() {
-        val g = AnnotationMapper.Params(0f, 0f, 0.348f, 0.868f, 0.177f, 0.434f, 0.097f, false)
-        val c = FactoryViews.centerTop(g)
-        org.junit.Assert.assertEquals(0.5f + 0.177f - 0.174f, c.cx, 1e-4f)
+        // 全域對位被蓋成怪值（實車：開機動畫畫面對出來的）也不影響中間那格
+        val bad = AnnotationMapper.Params(0.9375f, 0f, 1f, 1f, 0.9953f, 0.4792f, 0.0569f, false)
+        val c = FactoryViews.centerTop(bad)
+        org.junit.Assert.assertEquals(0.503f, c.cx, 1e-4f)
+        org.junit.Assert.assertEquals(0.097f, c.scale, 1e-4f)
         org.junit.Assert.assertEquals(0.325f, c.clipL, 1e-4f)
     }
 }
