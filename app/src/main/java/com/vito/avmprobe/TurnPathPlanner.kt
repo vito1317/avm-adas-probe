@@ -94,6 +94,18 @@ object TurnPathPlanner {
         return arc(sign(k), 1.0 / abs(k), geo, estimated = false)
     }
 
+    /**
+     * 方向盤讀值跟車速搭不搭得起來：照這個角度轉，側向加速度超過 [MAX_LAT_ACC]（一般駕駛不會超過 3～4 m/s²）
+     * 就是讀值有問題。車速不知道時只擋超過打到底的角度。
+     */
+    fun plausibleSteer(steerDeg: Float, speedKmh: Float?, geo: VehicleGeometry = VehicleGeometry()): Boolean {
+        if (abs(steerDeg) > geo.maxSteerDeg * 1.1) return false
+        val v = (speedKmh ?: return true) / 3.6
+        val wheel = Math.toRadians((abs(steerDeg) / geo.steerRatio).coerceAtMost(geo.maxWheelDeg))
+        return v * v * tan(wheel) / geo.wheelbase <= MAX_LAT_ACC
+    }
+    const val MAX_LAT_ACC = 4.0
+
     /** 預估用的路口轉彎半徑（後軸中心）：台灣靠右行駛，右轉是小彎、左轉要繞過對向車道是大彎。 */
     const val EST_RIGHT_R = 6.5
     const val EST_LEFT_R = 10.0

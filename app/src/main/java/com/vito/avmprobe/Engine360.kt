@@ -169,8 +169,7 @@ object Engine360 {
         prefs.setViewProfile(key, ViewProfile(topParams, keep3d))
         prefs.setViewCalMode(key, "auto")
         // 全域俯視對位只收正常版面（俯視圖在左邊那格、比例尺合理）的結果，別的畫面對出來的不要蓋掉
-        topParams?.takeIf { it.clipL < 0.05f && it.clipR in 0.28f..0.42f && it.scale in 0.08f..0.12f && it.cx in 0.12f..0.24f }
-            ?.let { prefs.annotParams = it }
+        topParams?.takeIf { AppPrefs.normalTopLayout(it) }?.let { prefs.annotParams = it }
         try { log(EgoSprite.save(ctx, scr, topParams)) } catch (t: Throwable) { log("存車模圖案失敗：$t") }
         view?.get()?.invalidateProfiles()
         val dt = (SystemClock.elapsedRealtime() - t0) / 1000f
@@ -346,7 +345,7 @@ object Engine360 {
             prefs.migrateBad3dOnce()
             // 之前別的畫面的自動對位蓋掉的全域俯視對位（實車：中心跑到畫面最右邊）→ 回到預設
             prefs.annotParams.let { t ->
-                if (!(t.clipL < 0.05f && t.clipR in 0.28f..0.42f && t.scale in 0.08f..0.12f && t.cx in 0.12f..0.24f)) {
+                if (AppPrefs.garbageTop(t)) {
                     prefs.annotParams = AnnotationMapper.Params.DEFAULT; log("全域俯視對位不合理，已重設為預設值")
                 }
             }

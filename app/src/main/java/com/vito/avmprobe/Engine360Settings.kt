@@ -174,7 +174,9 @@ object Engine360Settings {
             prof = np
             prefs.setViewProfile(key, np)
             prefs.setViewCalMode(key, "manual")   // 手動調過：自動對位不會再蓋掉
-            np.top?.let { prefs.annotParams = it }   // 最新的俯視圖對位也當作新視角的預設
+            // 最新的俯視圖對位也當作新視角的預設——只收正常版面（俯視圖在左邊那格）的；
+            // 雙閃三格等其他版面調的只存那個視角，不然下次啟動會被當成不合理而重設（看起來像每次都要重新校準）
+            np.top?.takeIf { AppPrefs.normalTopLayout(it) }?.let { prefs.annotParams = it }
             av.invalidateProfiles()
         }
 

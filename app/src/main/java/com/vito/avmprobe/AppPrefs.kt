@@ -14,6 +14,12 @@ class AppPrefs(context: Context) {
         context.getSharedPreferences("avm_probe", Context.MODE_PRIVATE)
 
     companion object {
+        /** 正常版面的俯視對位（俯視圖在左邊那格）：自動／手動對位只有這種才當全域預設。 */
+        fun normalTopLayout(t: AnnotationMapper.Params) =
+            t.clipL < 0.05f && t.clipR in 0.28f..0.42f && t.scale in 0.07f..0.13f && t.cx in 0.10f..0.26f
+
+        /** 明顯錯誤的全域俯視對位（實車：別的畫面自動對位對出中心在最右邊、比例尺小一半）。 */
+        fun garbageTop(t: AnnotationMapper.Params) = t.cx > 0.45f || t.cx < 0f || t.scale < 0.05f || t.scale > 0.16f
         /** 列出 assets 裡所有 model_*.tflite（顯示名稱, 檔名）：一般 COCO 模型小的在前，車種細分放最後。 */
         fun models(context: Context): List<Pair<String, String>> =
             (context.assets.list("")?.toList() ?: emptyList())

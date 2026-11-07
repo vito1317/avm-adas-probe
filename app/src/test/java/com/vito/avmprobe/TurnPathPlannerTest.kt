@@ -287,3 +287,17 @@ class LaneChangeOdometryTest {
         org.junit.Assert.assertEquals("方向盤擺正（零點已扣掉）5 秒後目標不該漂", -3.5, r!!.first, 0.1)
     }
 }
+
+class SteerPlausibilityTest {
+    @org.junit.Test
+    fun stuckLargeSteerAtSpeedIsRejected() {
+        // 實車：34 km/h 在緩彎上讀到 329°
+        org.junit.Assert.assertFalse(TurnPathPlanner.plausibleSteer(329f, 34f))
+        // 路口慢慢轉彎：10 km/h、340° 合理
+        org.junit.Assert.assertTrue(TurnPathPlanner.plausibleSteer(340f, 10f))
+        // 高速小修正
+        org.junit.Assert.assertTrue(TurnPathPlanner.plausibleSteer(15f, 90f))
+        org.junit.Assert.assertTrue(TurnPathPlanner.plausibleSteer(200f, null))
+        org.junit.Assert.assertFalse(TurnPathPlanner.plausibleSteer(900f, null))
+    }
+}

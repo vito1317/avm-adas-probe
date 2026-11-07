@@ -830,7 +830,9 @@ class AdasPipeline(
             p.put("obs", oa)
         }
         // 轉彎：方向盤轉過門檻照實際角度；還沒轉、慢速打燈 → 照前方道路彎度（或路口典型半徑）預估
-        val turnPlan = TurnPathPlanner.plan(vs.turn, vs.steerDeg, vs.speedKmh)
+        // 方向盤讀值不合理（實車：34 km/h 在緩彎上讀到 329°，一分鐘前後都差不多，像卡住）→ 當作沒有
+        val steer = vs.steerDeg?.takeIf { TurnPathPlanner.plausibleSteer(it, vs.speedKmh) }
+        val turnPlan = TurnPathPlanner.plan(vs.turn, steer, vs.speedKmh)
             ?: TurnPathPlanner.estimate(vs.turn, vs.speedKmh, roadCurvatureAhead(now))
         if (turnPlan == null) turnHit = false
         // 變道預測：打方向燈、方向盤還沒轉到要轉彎 → 從目前車道畫到那一側車道。
@@ -844,8 +846,8 @@ class AdasPipeline(
         // 車道線鎖不到時的備援：車速＋方向盤推算橫移（每幀都要算，打燈前用來估方向盤零點）
         val odoDt = if (odoAt == 0L) 0.0 else (now - odoAt).coerceIn(0, 300) / 1000.0
         odoAt = now
-        if (vs.turn != 'L' && vs.turn != 'R') lcOdo.learnZero(vs.speedKmh, vs.steerDeg, odoDt)
-        val odo = lcOdo.update(now, vs.turn, vs.speedKmh, vs.steerDeg, laneWNow)
+        if (vs.turn != 'L' && vs.turn != 'R') lcOdo.learnZero(vs.speedKmh, steer, odoDt)
+        val odo = lcOdo.update(now, vs.turn, vs.speedKmh, steer, laneWNow)
         val odoDone = lcTarget == null && lcOdo.done
         if (turnPlan == null && !slowTurn && lcTarget != 0f && !odoDone && (vs.turn == 'L' || vs.turn == 'R')) {
             val dir = if (vs.turn == 'L') -1 else 1
