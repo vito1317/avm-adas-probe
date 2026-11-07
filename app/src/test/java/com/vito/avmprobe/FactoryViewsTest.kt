@@ -163,3 +163,38 @@ class FactoryFixViewTest {
         org.junit.Assert.assertNull(m[56])                      // 鏡頭畫面不是繞車鏡頭
     }
 }
+
+class FactoryCameraViewTest {
+    @Test
+    fun frontCameraViewMatchesFittedModel() {
+        val cam = floatArrayOf(0.02f, 0.298f, 2.778f)
+        val p = FactoryViews.cameraParams(cam, rear = false)
+        val m = PerspectiveMapper(p, 1920, 720)
+        // 鏡頭正前方 3 m 的地面點：在水平線下 atan(0.298/3) = 5.67°，畫面俯角 17.17° → 在中心上方 11.5°
+        val q = m.project(0.02f, 0f, 2.778f + 3f)!!
+        val H = 0.87f * 720f; val W = 0.652f * 1920f
+        val f = (H / 2f) / kotlin.math.tan(Math.toRadians(97.31 / 2)).toFloat()
+        val ang = Math.toRadians(17.17 - Math.toDegrees(kotlin.math.atan(0.298 / 3.0)))
+        org.junit.Assert.assertEquals(H / 2f - 0.092f * H / 2f - f * kotlin.math.tan(ang).toFloat(), q[1], 1.0f)
+        org.junit.Assert.assertEquals(0.348f * 1920f + W / 2f, q[0], 1.0f)
+    }
+
+    @Test
+    fun rearCameraIsMirroredAndLooksBack() {
+        val p = FactoryViews.cameraParams(floatArrayOf(0.02f, 0.82f, -2.38f), rear = true)
+        val m = PerspectiveMapper(p, 1920, 720)
+        val cx = (0.348f + 1f) / 2f * 1920f
+        // 車後右邊（x > 0）的點：鏡像畫面裡在右邊（跟照後鏡／倒車畫面一樣）
+        val q = m.project(1.5f, 0f, -6f)!!
+        org.junit.Assert.assertTrue(q[0] > cx)
+        org.junit.Assert.assertNull("車前方的點看不到", m.project(0f, 0f, 5f))
+    }
+
+    @Test
+    fun bvNameSelectsCamera() {
+        FactoryViews.setCameras(floatArrayOf(0f, 0.3f, 2.8f), floatArrayOf(0f, 0.8f, -2.4f))
+        org.junit.Assert.assertNotNull(FactoryViews.cameraView("BV_FRONT"))
+        org.junit.Assert.assertTrue(FactoryViews.cameraView("BV_BACK")!!.mirror)
+        org.junit.Assert.assertNull(FactoryViews.cameraView("BV_LEFT"))
+    }
+}

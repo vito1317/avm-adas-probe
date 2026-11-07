@@ -514,7 +514,7 @@ object Engine360 {
     private val autoSaved = HashMap<String, MutableList<Float?>>()
 
     private fun maybeAutoCaptureUnsupported(key: String) {
-        if (!key.startsWith("SCENE_") || FactoryViews.forKey(key) != null) return
+        if (!key.startsWith("SCENE_") || key.startsWith("SCENE_-") || FactoryViews.forKey(key, lastBvName) != null) return
         if (FactoryViews.scenes.isEmpty()) return            // 原廠設定還沒讀到，不知道支不支援
         main.postDelayed({ autoCaptureTick(key) }, 2000)
     }

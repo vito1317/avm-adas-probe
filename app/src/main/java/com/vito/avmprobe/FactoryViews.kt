@@ -38,7 +38,43 @@ object FactoryViews {
 
     private fun sceneOf(key: String) = Regex("^SCENE_(\\d+)").find(key)?.groupValues?.get(1)?.toIntOrNull()
 
-    fun forKey(key: String): PerspectiveMapper.Params? = sceneOf(key)?.let { scenes[it] }
+    fun forKey(key: String, bvName: String = ""): PerspectiveMapper.Params? =
+        sceneOf(key)?.let { scenes[it] } ?: cameraView(bvName)
+
+    // ───── 鏡頭展開畫面（第一人稱）：右邊那格直接顯示前／後鏡頭去畸變的影像 ─────
+    // 原廠是 SingleViewParam（從鏡頭位置看出去），參數語意（XBias、BottomAlign…）讀不懂，
+    // 所以用實車的原始魚眼影格重現原廠畫面、比對找出的值（2026-11-07，相關係數 0.79／0.77）：
+    //   前：正前方、俯角 17.2°、垂直 FOV 97.3°、中心往上 0.092 半高
+    //   後：正後方、俯角 17.6°、垂直 FOV 91.2°、中心往下 0.02 半高、左右翻轉
+    // 場景編號分不出前後（兩個都出現過場景 7），用原廠的 BV 狀態名稱（BV_FRONT／BV_BACK）分。
+
+    @Volatile private var camFront: FloatArray? = null
+    @Volatile private var camRear: FloatArray? = null
+
+    fun setCameras(front: FloatArray?, rear: FloatArray?) { camFront = front; camRear = rear }
+
+    fun cameraView(bvName: String): PerspectiveMapper.Params? {
+        val n = bvName.uppercase()
+        val rear = n == "BV_BACK" || n == "BV_REAR" || n == "BV_MW_REAR"
+        val front = n == "BV_FRONT" || n == "BV_MW_FRONT"
+        if (!rear && !front) return null
+        val c = (if (rear) camRear else camFront) ?: return null
+        return cameraParams(c, rear)
+    }
+
+    /** 鏡頭位置 [c]（我們的座標，m）→ 鏡頭展開畫面的投影參數。 */
+    fun cameraParams(c: FloatArray, rear: Boolean): PerspectiveMapper.Params {
+        val el = if (rear) 17.55f else 17.17f
+        val d = 5f
+        val e = Math.toRadians(el.toDouble())
+        val dirZ = (if (rear) -1.0 else 1.0) * kotlin.math.cos(e)
+        return PerspectiveMapper.Params(
+            clipL = 0.348f, clipT = 0f, clipR = 1f, clipB = 0.87f,
+            azDeg = if (rear) 180f else 0f, elDeg = el, dist = d, fovDeg = if (rear) 91.25f else 97.31f,
+            tx = c[0], tz = (c[2] + d * dirZ).toFloat(), ty = (c[1] - d * kotlin.math.sin(e)).toFloat(),
+            mirror = rear, cyOff = if (rear) 0.02f else -0.092f
+        )
+    }
 
     /** 這個場景確定沒有俯視圖（全 3D 模式）。 */
     fun noTopFor(key: String): Boolean = sceneOf(key)?.let { it in noTop } ?: false

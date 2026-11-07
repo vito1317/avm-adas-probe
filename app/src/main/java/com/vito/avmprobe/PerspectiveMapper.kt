@@ -29,7 +29,9 @@ class PerspectiveMapper(val p: Params, val screenW: Int, val screenH: Int) {
         /** 看向的點離地多高（m）：整個畫面上下移。 */
         val ty: Float = 0f,
         /** 原廠畫面左右翻轉（高速打方向燈的往後看視角，像照後鏡）。 */
-        val mirror: Boolean = false
+        val mirror: Boolean = false,
+        /** 投影中心偏離格子正中央多少（半寬／半高的比例，+ = 右／下）。鏡頭展開畫面用。 */
+        val cxOff: Float = 0f, val cyOff: Float = 0f
     ) {
         /** 左右鏡像（右燈視角的預設值 = 左燈視角的鏡像）。 */
         fun mirrored() = copy(azDeg = -azDeg, tx = -tx)
@@ -61,8 +63,8 @@ class PerspectiveMapper(val p: Params, val screenW: Int, val screenH: Int) {
     init {
         val l = p.clipL * screenW; val r = p.clipR * screenW
         val t = p.clipT * screenH; val b = p.clipB * screenH
-        ox = (l + r) / 2f
-        oy = (t + b) / 2f
+        ox = (l + r) / 2f + p.cxOff * (r - l) / 2f
+        oy = (t + b) / 2f + p.cyOff * (b - t) / 2f
         focal = ((b - t) / 2f) / tan(Math.toRadians(p.fovDeg / 2.0)).toFloat()
 
         val az = Math.toRadians(p.azDeg.toDouble()); val el = Math.toRadians(p.elDeg.toDouble())

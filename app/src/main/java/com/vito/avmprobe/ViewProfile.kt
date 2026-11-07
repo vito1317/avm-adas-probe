@@ -22,7 +22,8 @@ data class ViewProfile(val top: AnnotationMapper.Params?, val p3: PerspectiveMap
                 .put("r", p.clipR.toDouble()).put("b", p.clipB.toDouble())
                 .put("az", p.azDeg.toDouble()).put("el", p.elDeg.toDouble()).put("d", p.dist.toDouble())
                 .put("fov", p.fovDeg.toDouble()).put("tx", p.tx.toDouble()).put("tz", p.tz.toDouble())
-                .put("ty", p.ty.toDouble()).put("mi", p.mirror))
+                .put("ty", p.ty.toDouble()).put("mi", p.mirror)
+                .put("cxo", p.cxOff.toDouble()).put("cyo", p.cyOff.toDouble()))
         }
     }
 
@@ -43,7 +44,8 @@ data class ViewProfile(val top: AnnotationMapper.Params?, val p3: PerspectiveMap
                     azDeg = it.optDouble("az").toFloat(), elDeg = it.optDouble("el").toFloat(),
                     dist = it.optDouble("d").toFloat(), fovDeg = it.optDouble("fov").toFloat(),
                     tx = it.optDouble("tx").toFloat(), tz = it.optDouble("tz").toFloat(),
-                    ty = it.optDouble("ty", 0.0).toFloat(), mirror = it.optBoolean("mi", false)
+                    ty = it.optDouble("ty", 0.0).toFloat(), mirror = it.optBoolean("mi", false),
+                    cxOff = it.optDouble("cxo", 0.0).toFloat(), cyOff = it.optDouble("cyo", 0.0).toFloat()
                 )
             }
             return ViewProfile(t, p)
@@ -56,7 +58,7 @@ data class ViewProfile(val top: AnnotationMapper.Params?, val p3: PerspectiveMap
         fun defaultFor(key: String, globalTop: AnnotationMapper.Params, bvName: String = ""): ViewProfile {
             // 視角名稱是場景編號（SCENE_x_Ly）時看不出左右 → 用原廠同時回報的 BV 名稱（BV_LEFT／BV_RIGHT）
             val k = key.uppercase() + " " + bvName.uppercase()
-            val p3 = FactoryViews.forKey(key.uppercase()) ?: when {
+            val p3 = FactoryViews.forKey(key.uppercase(), bvName) ?: when {
                 "LEFT" in k -> PerspectiveMapper.Params.DEFAULT_LEFT
                 "RIGHT" in k -> PerspectiveMapper.Params.DEFAULT_RIGHT
                 k == TURN_L -> PerspectiveMapper.Params.DEFAULT_LEFT

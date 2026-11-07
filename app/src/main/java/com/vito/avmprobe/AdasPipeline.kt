@@ -140,6 +140,8 @@ class AdasPipeline(
         try {
             calibText = ctx.assets.open("avm_calib.json").bufferedReader().readText()
             geo = AvmGeometry.fromJson(calibText)
+            geo?.let { g -> FactoryViews.setCameras(g.cam("front")?.let { floatArrayOf(it.px.toFloat(), it.py.toFloat(), it.pz.toFloat()) },
+                g.cam("rear")?.let { floatArrayOf(it.px.toFloat(), it.py.toFloat(), it.pz.toFloat()) }) }
             calibrated = JSONObject(calibText).optBoolean("calibrated", false)
         } catch (t: Throwable) {
             Log.e(TAG, "校正讀取失敗：${t.message}", t)
