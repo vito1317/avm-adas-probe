@@ -76,11 +76,11 @@ class HeadUnitSignalAdapter(
                 }
                 Decode.ACT_SPEED -> {
                     val v = intent.getIntExtra(Decode.KEY_STATE, -1)
-                    if (v >= 0) s.reportSpeed(v.toFloat())
+                    if (v >= 0 && !FactoryVehicle.speedFresh()) s.reportSpeed(v.toFloat())
                 }
                 // 這台車機自己的車速廣播：鍵名未知，從 extras 裡認
                 Decode.ACT_TS_SPEED, Decode.ACT_TS_MCU -> {
-                    Decode.speedFrom(intent.extras)?.let { s.reportSpeed(it) }
+                    if (!FactoryVehicle.speedFresh()) Decode.speedFrom(intent.extras)?.let { s.reportSpeed(it) }
                 }
                 // 方向燈聯動：位元遮罩，跟 AIDL 的 GetLeft/Right/Emergency 同一套編碼
                 Decode.ACT_LRREVERSE -> {
@@ -179,7 +179,8 @@ class HeadUnitSignalAdapter(
             val hazard = c.GetEmergency()
             s.reportTurn(Decode.turnOf(Decode.turnBits(left, right, hazard)))
 
-            s.reportSpeed(c.GetSpeed().toFloat())
+            // 原廠 360 讀得到車速時以原廠的為準（這台車機的 GetSpeed 一直回 0，會把真的車速蓋掉）
+            if (!FactoryVehicle.speedFresh()) s.reportSpeed(c.GetSpeed().toFloat())
 
             val eps = c.getLineEps()
             s.reportSteerRaw(Decode.steerDeg(eps))

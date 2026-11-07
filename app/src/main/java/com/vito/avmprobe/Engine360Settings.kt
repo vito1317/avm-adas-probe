@@ -40,6 +40,11 @@ object Engine360Settings {
             text = FrameShareHub.status()
             textSize = 11f; typeface = Typeface.MONOSPACE
         })
+        col.addView(TextView(act).apply {
+            textSize = 12f
+            val v = VehicleBus.signals.snapshot()
+            text = "車輛訊號：" + FactoryVehicle.status + "\n目前使用的車速：" + (v.speedKmh?.let { "%.0f km/h".format(it) } ?: "沒有")
+        })
         if (prefs.lastCrash.isNotEmpty()) {
             col.addView(TextView(act).apply {
                 text = "上次閃退（完整內容在「下載/avm-adas/crash_*.txt」）：\n" + prefs.lastCrash

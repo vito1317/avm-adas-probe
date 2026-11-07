@@ -340,6 +340,7 @@ object Engine360 {
             val app = ctx.applicationContext ?: ctx
             val prefs = AppPrefs(app)
             prefs.migrateBad3dOnce()
+            FactoryVehicle.start(app)
             Thread({ FactoryViews.load(app); log(FactoryViews.status); main.post { view?.get()?.invalidateProfiles() } }, "factory-views").start()
             // 合併版：偏離車道、變道、路邊紅黃線都要車道偵測，沒選過就預設開（標準版 App 預設是關）
             if (!prefs.groundModeSet) prefs.groundMode = AppPrefs.GROUND_VIRTUAL
