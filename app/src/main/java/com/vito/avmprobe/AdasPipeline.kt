@@ -766,7 +766,6 @@ class AdasPipeline(
         val mode = prefs.groundMode
         ground.post {
             try {
-                try { VisualSpeed.update(buf, bw, bh, mpp, cx, cy) } catch (_: Throwable) {}
                 cones = coneDet.detect(buf, bw, bh, mpp, cx, cy, excl); conesAt = now
                 slots = slotTrack.update(slotDet.detect(buf, bw, bh, mpp, cx, cy, listOf(ego) + wheelZones(), vehicles), now); slotsAt = now
                 if (mode == AppPrefs.GROUND_VIRTUAL) {

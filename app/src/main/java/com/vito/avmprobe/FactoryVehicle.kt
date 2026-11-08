@@ -113,23 +113,19 @@ object FactoryVehicle {
         val now = SystemClock.elapsedRealtime()
         val gps = if (now - gpsAt < 3000) gpsKmh else -1f
         // 原廠有正的車速就用原廠的；原廠沒有或是 0 但 GPS 說在動 → 用 GPS；都沒有就照原廠的 0
-        val vis = VisualSpeed.kmh()
         val use = when {
-            // 俯視圖量得到（約 45 km/h 以下）就用它：不靠 GPS，停著時就是 0
-            vis != null -> vis
             kmh > 0.5f && kmh < 320f -> kmh
             gps >= 0f && (kmh < 0f || gps > 5f) -> gps
             kmh >= 0f && kmh < 320f -> kmh
             else -> -1f
         }
         // 停著時原廠會報 2～3 km/h 的雜訊（實車）：4 km/h 以下當 0，除非 GPS 也說在動
-        // （鏡頭量的不用：停車場慢慢倒車那 2 km/h 是真的）
-        val useClean = if (vis == null && use in 0f..4f && !(gps > 4f)) 0f else use
+        val useClean = if (use in 0f..4f && !(gps > 4f)) 0f else use
         if (useClean >= 0f) {
             lastValidAt = now
             VehicleBus.signals.reportSpeed(useClean)
         }
-        status = "鏡頭量車速 ${vis?.let { "%.0f km/h".format(it) } ?: "—"}；原廠車速 ${if (kmh >= 0f) "%.0f km/h".format(kmh) else "—"}；GPS ${if (gps >= 0f) "%.0f km/h".format(gps) else "—"}；方向燈 ${if (left == true) "左" else ""}${if (right == true) "右" else ""}${if (left != true && right != true) "無" else ""}；方向盤 ${wheel?.let { "%.1f".format(it) } ?: "—"}；檔位碼 ${gear ?: "—"}"
+        status = "原廠車速 ${if (kmh >= 0f) "%.0f km/h".format(kmh) else "—"}；GPS ${if (gps >= 0f) "%.0f km/h".format(gps) else "—"}；方向燈 ${if (left == true) "左" else ""}${if (right == true) "右" else ""}${if (left != true && right != true) "無" else ""}；方向盤 ${wheel?.let { "%.1f".format(it) } ?: "—"}；檔位碼 ${gear ?: "—"}"
         if (now - lastLog > 30_000) { lastLog = now; Engine360.log(status) }
     }
 }
