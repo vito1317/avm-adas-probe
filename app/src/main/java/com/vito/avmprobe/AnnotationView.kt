@@ -457,7 +457,9 @@ class AnnotationView(context: Context) : View(context) {
         val dir = lc.optInt("dir", 1).toFloat()
         val w = lc.optDouble("w", 3.5).toFloat()
         val a = dir * w / 2f; val b = dir * w * 1.5f
-        return listOf(floatArrayOf(a, -4f), floatArrayOf(a, 25f), floatArrayOf(b, 25f), floatArrayOf(b, -4f))
+        // 彎道上：目標車道也照彎度彎（邊切細再彎才是平滑的弧）
+        val k = if (lc.has("k")) lc.optDouble("k") else 0.0
+        return CurveBend.bend(CurveBend.densify(a, -4f, 25f) + CurveBend.densify(b, 25f, -4f), k)
     }
 
     /**

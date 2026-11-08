@@ -879,10 +879,13 @@ class AdasPipeline(
             val w = st?.laneW ?: LaneChangeAssist.LANE_W
             val len = ((vs.speedKmh ?: 30f) / 3.6f * 3f).coerceIn(10f, 30f)
             // 鎖定到要跨過的車道線 → 終點跟著目標車道中央走（變道過程中線會跟著移、到了就收掉）
-            val path = lcTarget?.let { lca.lanePath(it.toDouble(), 0.0, len.toDouble()) }
+            val path0 = lcTarget?.let { lca.lanePath(it.toDouble(), 0.0, len.toDouble()) }
                 ?: odo?.let { (tx, phi) -> lca.lanePath(tx, phi, len.toDouble()) }
                 ?: st?.path?.takeIf { now - tracksAt < OBJ_TTL_MS && it.size >= 2 }
                 ?: lca.lanePath(dir * w.toDouble(), 0.0, len.toDouble())
+            // 在彎道上：照目前量到的彎度把路徑彎過去（不然是一條直的斜線，切出彎道外）
+            val curveK = MotionCurvature.curvature(vs.speedKmh)
+            val path = CurveBend.bend(path0, curveK)
             // 打燈那一側有車（相鄰車道／盲點，不只是快速接近的危險等級）→ 暫緩變道
             val sideLv = if (st != null && now - tracksAt < OBJ_TTL_MS) (if (dir < 0) st.L else st.R) else 0
             val danger = sideLv >= 1
@@ -893,6 +896,7 @@ class AdasPipeline(
             noLaneChange = ban != null
             val pts = JSONArray(); for (q in path) pts.put(JSONArray().put(r2(q[0])).put(r2(q[1])))
             p.put("lc", JSONObject().put("pts", pts).put("dir", dir).put("w", r2(w)).put("car", sideLv)
+                .apply { curveK?.takeIf { kotlin.math.abs(it) >= CurveBend.MIN_K }?.let { put("k", (it * 1e5).toLong() / 1e5) } }
                 .put("ok", !danger && ban == null && (st?.pathOk ?: true))
                 .apply { ban?.let { put("ban", LaneChangeRule.label(it)) } })
         } else {
