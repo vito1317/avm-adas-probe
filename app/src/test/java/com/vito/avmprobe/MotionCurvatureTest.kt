@@ -19,12 +19,12 @@ class MotionCurvatureTest {
     }
 
     @Test
-    fun gpsBearingFallback() {
+    fun gpsBearingIsIgnored() {
+        // 使用者：車上的 GPS 超級不準 → 彎度不用 GPS 行進方向
         val c = MotionCurvature.Core()
-        // 每秒往右轉 10°，車速 54 km/h（15 m/s）→ k = 0.1745 / 15
         var t = 0L; var b = 350.0
         repeat(10) { c.onBearing(t, b); t += 1000; b = (b + 10) % 360 }
-        assertEquals(Math.toRadians(10.0) / 15.0, c.curvature(t - 1000, 54f)!!, 0.002)
+        org.junit.Assert.assertNull(c.curvature(t - 1000, 54f))
     }
 
     @Test

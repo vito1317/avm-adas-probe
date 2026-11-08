@@ -766,6 +766,7 @@ class AdasPipeline(
         val mode = prefs.groundMode
         ground.post {
             try {
+                try { VisualSpeed.update(buf, bw, bh, mpp, cx, cy) } catch (_: Throwable) {}
                 cones = coneDet.detect(buf, bw, bh, mpp, cx, cy, excl); conesAt = now
                 slots = slotTrack.update(slotDet.detect(buf, bw, bh, mpp, cx, cy, listOf(ego) + wheelZones(), vehicles), now); slotsAt = now
                 if (mode == AppPrefs.GROUND_VIRTUAL) {
@@ -873,7 +874,7 @@ class AdasPipeline(
         if (vs.turn != 'L' && vs.turn != 'R') lcOdo.learnZero(vs.speedKmh, steer, odoDt)
         // 道路彎度：沒打燈時慢慢平均（約 2 秒），打燈就鎖住——變道動作本身也會讓車頭轉向，不鎖的話
         // 一變道量到的「彎度」就被變道動作混進去，預測線亂彎（實車：彎道上變道軌跡很怪）
-        val kNow = MotionCurvature.curvature(vs.speedKmh)
+        val kNow = steerCurvature() ?: MotionCurvature.curvature(vs.speedKmh)
         val signaling = vs.turn == 'L' || vs.turn == 'R'
         if (!signaling) { if (kNow != null) roadK = if (roadK.isNaN()) kNow else roadK + (kNow - roadK) * (odoDt / 2.0).coerceIn(0.0, 1.0) }
         val kLocked = roadK.takeIf { !it.isNaN() }
@@ -951,9 +952,19 @@ class AdasPipeline(
      * 否則用俯視圖車道線（只看得到車旁幾公尺，彎道多半看起來是直的）。
      */
     private fun roadCurvature(now: Long, speedKmh: Float?): Double? {
+        // 方向盤（原廠 CAN，很準）有在轉：照方向盤算彎度
+        steerCurvature()?.let { return it }
         val km = MotionCurvature.curvature(speedKmh)
         if (km != null && abs(km) >= TurnPathPlanner.ROAD_K_MIN) return km
         return roadCurvatureAhead(now) ?: km
+    }
+
+    /** 原廠 CAN 方向盤（前輪角）算出的彎度（1/m，+ = 右）；沒有或幾乎擺正回 null。 */
+    private fun steerCurvature(): Double? {
+        if (!FactoryVehicle.steerFresh()) return null
+        val w = FactoryVehicle.wheel ?: return null
+        if (kotlin.math.abs(w) < 0.5f) return null
+        return kotlin.math.tan(Math.toRadians(w.toDouble())) / VehicleGeometry().wheelbase
     }
 
     private fun roadCurvatureAhead(now: Long): Double? {

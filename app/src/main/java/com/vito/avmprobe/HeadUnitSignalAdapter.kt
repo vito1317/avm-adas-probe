@@ -183,7 +183,8 @@ class HeadUnitSignalAdapter(
             if (!FactoryVehicle.speedFresh()) s.reportSpeed(c.GetSpeed().toFloat())
 
             val eps = c.getLineEps()
-            s.reportSteerRaw(Decode.steerDeg(eps))
+            // 原廠 360 有從 CAN 讀到方向盤（它的輔助線很準）時以原廠的為準；車機這個介面的讀值不可靠（實車卡在 329°）
+            if (!FactoryVehicle.steerFresh()) s.reportSteerRaw(Decode.steerDeg(eps))
 
             // IsCameraMode 可能是「倒車畫面開著」而不是排檔 R，待實車確認
             val cam = c.IsCameraMode()

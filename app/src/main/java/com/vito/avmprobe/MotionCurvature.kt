@@ -58,10 +58,10 @@ object MotionCurvature {
             lastBearing = deg; lastBearingAt = now
         }
 
+        // GPS 不用（使用者：車上的 GPS 超級不準）：只用陀螺儀與前方畫面
         fun yawRateRight(now: Long): Double? = when {
             now - yawAt < 500 -> -yaw
             now - visualAt < 800 -> visualRate
-            now - bearingAt < 2500 -> bearingRate
             else -> null
         }
 
@@ -71,7 +71,6 @@ object MotionCurvature {
             if (v < 2.5) return null
             if (now - yawAt < 500) return -yaw / v          // 逆時針（往左）為正 → 換成往右為正
             if (now - visualAt < 800) return visualRate / v
-            if (now - bearingAt < 2500) return bearingRate / v
             return null
         }
     }
@@ -101,7 +100,7 @@ object MotionCurvature {
                 sm.registerListener(l, acc, SensorManager.SENSOR_DELAY_GAME)
                 sm.registerListener(l, gyro, SensorManager.SENSOR_DELAY_GAME)
                 source = "陀螺儀"
-            } else source = "GPS 行進方向（沒有陀螺儀）"
+            } else source = "前方畫面（沒有陀螺儀）"
             Engine360.log("道路彎度來源：$source")
         } catch (t: Throwable) { Engine360.log("陀螺儀不能用：$t") }
     }
@@ -120,7 +119,7 @@ object MotionCurvature {
     /** 前方畫面量到的轉向角速度（[VisualYaw]）。沒有陀螺儀時用它，比 GPS 即時、不會亂跳。 */
     fun onVisual(rateRight: Double) {
         synchronized(core) { core.onVisual(SystemClock.elapsedRealtime(), rateRight) }
-        if (source.startsWith("GPS")) source = "前方畫面（沒有陀螺儀）"
+        if (!source.startsWith("陀螺儀")) source = "前方畫面（沒有陀螺儀）"
     }
 
 }

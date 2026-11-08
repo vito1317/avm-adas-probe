@@ -16,9 +16,19 @@ object FactoryVehicle {
     @Volatile var status: String = "還沒讀"
         private set
     @Volatile private var lastValidAt = 0L
-    /** 原廠的方向盤角度（診斷、自動存檔用；單位與正負待實車確認）。 */
+    /**
+     * 原廠的前輪角度（度，+ = 右轉）：原廠從 CAN 讀方向盤、換成前輪角（±40°，BaseAvmCanBusCallback：值 × 40/720），
+     * 存在 VehicleState.wheelDegree，原廠的動態輔助線就是用它畫的（實車：很準）。
+     * 正負：原廠 mod_module.lua 裡正值的轉彎圓心在右邊 → + = 右轉。
+     */
     @Volatile var wheel: Float? = null
         private set
+    /** 原廠的前輪角動過（不是一直 0）：有接 CAN，之後方向盤以原廠的為準。 */
+    @Volatile private var wheelLive = false
+    @Volatile private var wheelAt = 0L
+
+    /** 最近 1 秒內有原廠的方向盤角度、而且確定有接 CAN。 */
+    fun steerFresh(): Boolean = wheelLive && SystemClock.elapsedRealtime() - wheelAt < 1000
     @Volatile private var running = false
 
     /** 最近 2 秒內從原廠讀到有效車速（車機那邊的車速就不要再蓋過去）。 */
@@ -91,23 +101,35 @@ object FactoryVehicle {
         val right = f("rightSignalState") as? Boolean
         val wheel = f("wheelDegree") as? Float
         this.wheel = wheel
+        if (wheel != null) {
+            if (kotlin.math.abs(wheel) > 0.3f) wheelLive = true
+            if (wheelLive) {
+                wheelAt = SystemClock.elapsedRealtime()
+                // 換成方向盤角度（前輪角 × 轉向比），跟車身訊號其他地方同一個約定（+ = 右）
+                VehicleBus.signals.reportSteer(wheel * VehicleGeometry().steerRatio.toFloat())
+            }
+        }
         val gear = f("gearState") as? Int
         val now = SystemClock.elapsedRealtime()
         val gps = if (now - gpsAt < 3000) gpsKmh else -1f
         // 原廠有正的車速就用原廠的；原廠沒有或是 0 但 GPS 說在動 → 用 GPS；都沒有就照原廠的 0
+        val vis = VisualSpeed.kmh()
         val use = when {
+            // 俯視圖量得到（約 45 km/h 以下）就用它：不靠 GPS，停著時就是 0
+            vis != null -> vis
             kmh > 0.5f && kmh < 320f -> kmh
             gps >= 0f && (kmh < 0f || gps > 5f) -> gps
             kmh >= 0f && kmh < 320f -> kmh
             else -> -1f
         }
         // 停著時原廠會報 2～3 km/h 的雜訊（實車）：4 km/h 以下當 0，除非 GPS 也說在動
-        val useClean = if (use in 0f..4f && !(gps > 4f)) 0f else use
+        // （鏡頭量的不用：停車場慢慢倒車那 2 km/h 是真的）
+        val useClean = if (vis == null && use in 0f..4f && !(gps > 4f)) 0f else use
         if (useClean >= 0f) {
             lastValidAt = now
             VehicleBus.signals.reportSpeed(useClean)
         }
-        status = "原廠車速 ${if (kmh >= 0f) "%.0f km/h".format(kmh) else "—"}；GPS ${if (gps >= 0f) "%.0f km/h".format(gps) else "—"}；方向燈 ${if (left == true) "左" else ""}${if (right == true) "右" else ""}${if (left != true && right != true) "無" else ""}；方向盤 ${wheel?.let { "%.1f".format(it) } ?: "—"}；檔位碼 ${gear ?: "—"}"
+        status = "鏡頭量車速 ${vis?.let { "%.0f km/h".format(it) } ?: "—"}；原廠車速 ${if (kmh >= 0f) "%.0f km/h".format(kmh) else "—"}；GPS ${if (gps >= 0f) "%.0f km/h".format(gps) else "—"}；方向燈 ${if (left == true) "左" else ""}${if (right == true) "右" else ""}${if (left != true && right != true) "無" else ""}；方向盤 ${wheel?.let { "%.1f".format(it) } ?: "—"}；檔位碼 ${gear ?: "—"}"
         if (now - lastLog > 30_000) { lastLog = now; Engine360.log(status) }
     }
 }
