@@ -58,6 +58,13 @@ object MotionCurvature {
             lastBearing = deg; lastBearingAt = now
         }
 
+        fun yawRateRight(now: Long): Double? = when {
+            now - yawAt < 500 -> -yaw
+            now - visualAt < 800 -> visualRate
+            now - bearingAt < 2500 -> bearingRate
+            else -> null
+        }
+
         /** 目前的路徑彎度（1/m，+ = 往右）；資料太舊或太慢回 null。 */
         fun curvature(now: Long, speedKmh: Float?): Double? {
             val v = (speedKmh ?: return null) / 3.6
@@ -106,6 +113,9 @@ object MotionCurvature {
     }
 
     fun curvature(speedKmh: Float?): Double? = synchronized(core) { core.curvature(SystemClock.elapsedRealtime(), speedKmh) }
+
+    /** 目前的車頭轉向角速度（rad/s，+ = 往右）；沒有新資料回 null。陀螺儀 → 前方畫面 → GPS。 */
+    fun yawRate(): Double? = synchronized(core) { core.yawRateRight(SystemClock.elapsedRealtime()) }
 
     /** 前方畫面量到的轉向角速度（[VisualYaw]）。沒有陀螺儀時用它，比 GPS 即時、不會亂跳。 */
     fun onVisual(rateRight: Double) {

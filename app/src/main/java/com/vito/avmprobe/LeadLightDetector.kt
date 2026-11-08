@@ -38,7 +38,7 @@ class LeadLightDetector {
         cx = ncx; cy = ncy
 
         val w = r - l; val h = b - t
-        val y0 = (t + h * 0.25f).toInt().coerceIn(0, size - 1); val y1 = (t + h * 0.75f).toInt().coerceIn(y0 + 1, size)
+        val y0 = (t + h * 0.15f).toInt().coerceIn(0, size - 1); val y1 = (t + h * 0.85f).toInt().coerceIn(y0 + 1, size)
         var red = 0; var amb = IntArray(2); var n = 0
         val sideN = IntArray(2)
         for (side in 0..1) {
@@ -49,7 +49,7 @@ class LeadLightDetector {
                 val R = (c shr 16) and 255; val G = (c shr 8) and 255; val B = c and 255
                 n++; sideN[side]++
                 if (R > 170 && R > G * 2 && R > B * 2) red++
-                else if (R > 200 && G in 90..200 && B < 110 && R - G > 40) amb[side]++
+                else if (R > 185 && G in 80..215 && B < 125 && R - G > 30 && G - B > 35) amb[side]++
             }
         }
         if (n == 0) return State(false, false, null)
@@ -63,7 +63,8 @@ class LeadLightDetector {
 
         // 方向燈：琥珀色開關的時間點
         for (side in 0..1) {
-            val on = amb[side].toFloat() / sideN[side].coerceAtLeast(1) > 0.03f
+            // 方向燈在畫面上常常只是一個小黃點（實車）：有幾個像素就算亮，不用佔燈區的一定比例
+            val on = amb[side] >= 2 && amb[side].toFloat() / sideN[side].coerceAtLeast(1) > 0.004f
             if (on != sideOn[side]) {
                 sideOn[side] = on; toggles[side].add(now)
                 if (on) onAt[side].add(now)

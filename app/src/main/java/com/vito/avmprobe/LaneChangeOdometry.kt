@@ -44,16 +44,21 @@ class LaneChangeOdometry(private val geo: VehicleGeometry = VehicleGeometry()) {
      * 打燈中每幀呼叫。回傳 (目標車道中心的橫向位置 targetX, 車道方向角 phi)，給 [LaneChangeAssist.lanePath]；
      * 已經到了目標車道回 null（不用再畫）。沒有車速或方向盤 → null。
      */
-    fun update(now: Long, turn: Char?, speedKmh: Float?, steerDeg: Float?, laneW: Float): Pair<Double, Double>? {
+    fun update(now: Long, turn: Char?, speedKmh: Float?, steerDeg: Float?, laneW: Float, yawRate: Double? = null): Pair<Double, Double>? {
         val d = when (turn) { 'L' -> -1; 'R' -> 1; else -> { reset(); return null } }
         if (d != dir) { reset(); dir = d }
         val dt = if (lastAt == 0L) 0.0 else ((now - lastAt).coerceIn(0, 300)) / 1000.0
         lastAt = now
-        if (speedKmh == null || steerDeg == null) return null
+        if (speedKmh == null || (steerDeg == null && yawRate == null)) return null
         val v = speedKmh / 3.6
-        val st = steerDeg - (if (zero.isNaN()) 0.0 else zero)
-        val wheel = Math.toRadians((st / geo.steerRatio).coerceIn(-geo.maxWheelDeg, geo.maxWheelDeg))
-        th += v * tan(wheel) / geo.wheelbase * dt
+        if (steerDeg != null) {
+            val st = steerDeg - (if (zero.isNaN()) 0.0 else zero)
+            val wheel = Math.toRadians((st / geo.steerRatio).coerceIn(-geo.maxWheelDeg, geo.maxWheelDeg))
+            th += v * tan(wheel) / geo.wheelbase * dt
+        } else {
+            // 方向盤不可靠時：直接用量到的車頭轉向角速度（前方畫面，見 VisualYaw；rad/s，+ = 往右）
+            th += yawRate!! * dt
+        }
         y += v * sin(th) * dt
         val remain = d * laneW - y                       // 車道座標裡離目標中心還有多遠（+ = 右）
         if (remain * d < ARRIVED_M) { done = true; return null }

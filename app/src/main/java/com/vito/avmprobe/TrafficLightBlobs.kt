@@ -15,12 +15,16 @@ class TrafficLightBlobs {
     data class Light(val state: String, val x: Float, val y: Float, val r: Float, val conf: Float)
 
     companion object {
-        const val V_MIN = 190          // 亮度
-        const val S_MIN = 0.45f        // 飽和度
+        const val V_MIN = 175          // 亮度
+        const val S_MIN = 0.38f        // 飽和度（遠處的燈頭只有幾個像素、被模糊掉，飽和度會掉）
         const val MIN_AREA = 3
         const val MAX_AREA = 400
         const val RING_DARK = 110      // 外圈平均亮度要低於這個（暗的燈箱）
-        const val TOP_FRAC = 0.75f     // 只看畫面上面這麼多（路面、車尾燈在下面）
+        /**
+         * 只看畫面上面這麼多：紅綠燈掛約 5 m 高，在地平線上方好幾度；前車煞車燈不到 1 m 高、貼著地平線。
+         * 找燈點的畫面往上看 14°、視角 34°，0.8 ≈ 地平線上方 4°。
+         */
+        const val TOP_FRAC = 0.80f
         const val TRACK_PX = 12f
     }
 
@@ -91,8 +95,11 @@ class TrafficLightBlobs {
             }
             if (cnt == 0) continue
             val ring = sum.toFloat() / cnt
-            if (ring > RING_DARK) continue
-            val conf = ((RING_DARK - ring) / RING_DARK).coerceIn(0f, 1f) * 0.6f + 0.4f
+            // 燈箱不一定看得到（實車：畫面上只是一個紅點或綠點）→ 不再要求外圈暗，暗的話信心度加分；
+            // 沒有燈箱時只收小的、圓的點（招牌、大片反光比較大）
+            val dark = ring <= RING_DARK
+            if (!dark && (n > 60 || n < 0.6f * bw * bh)) continue
+            val conf = if (dark) ((RING_DARK - ring) / RING_DARK).coerceIn(0f, 1f) * 0.5f + 0.5f else 0.45f
             out.add(Light(when (k) { 'r' -> "red"; 'y' -> "yellow"; else -> "green" }, cx, cy, rad, conf))
         }
         return out

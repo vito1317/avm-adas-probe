@@ -56,3 +56,24 @@ class RoadsideSpaceFinderTest {
         assertTrue("先往前開到起點再倒車", p.stopAheadM > 0f && p.reverseFrom > 0)
     }
 }
+
+class RoadsideAnchorTest {
+    @org.junit.Test
+    fun spotStaysGluedToParkedCarsWhenSpeedIsWrong() {
+        val f = RoadsideSpaceFinder()
+        val parked = listOf(0f, 5.5f, 18.5f, 24f)
+        var trueS = 0.0; var t = 0L
+        var spot: RoadsideSpaceFinder.Spot? = null
+        // 實際 10 km/h，但回報的車速只有 6 km/h（GPS 不準）
+        while (trueS < 26.0) {
+            val objs = parked.map { it - trueS.toFloat() }.filter { it > -5f && it < 6f }.map { RoadsideSpaceFinder.Obj("car", 2.6f, it) }
+            spot = f.update(t, 6f, 'H', null, objs, null, false) ?: spot
+            if (trueS + 10 / 3.6 * 0.1 >= 26.0) spot = f.update(t, 6f, 'H', null, objs, null, false)
+            t += 100; trueS += 10 / 3.6 * 0.1
+        }
+        org.junit.Assert.assertNotNull(spot); spot!!
+        // 空隙在 s ≈ 7.9～16.1（兩台車之間），太長只取靠前車那段 → 前端緊貼前車（s = 18.5 − 2.4），換成自車座標
+        val trueFront = 18.5 - 2.4 - trueS
+        org.junit.Assert.assertEquals("空位前端要跟著實際位置（誤差 < 1 m）", trueFront, spot.z1.toDouble(), 1.0)
+    }
+}

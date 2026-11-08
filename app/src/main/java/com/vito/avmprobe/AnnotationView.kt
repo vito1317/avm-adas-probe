@@ -642,7 +642,8 @@ class AnnotationView(context: Context) : View(context) {
                 else "路邊空位：倒車，方向盤先往右、再往左回正") to Color.rgb(40, 140, 240))
         }
         p.optJSONObject("shoulder")?.let { sh ->
-            if (sh.optBoolean("brake")) msgs.add("前方急煞，注意後方來車" to Color.rgb(220, 40, 40))
+            if (sh.optBoolean("on")) msgs.add("已在路肩" to Color.rgb(40, 170, 90))
+            else if (sh.optBoolean("brake")) msgs.add("前方急煞，注意後方來車" to Color.rgb(220, 40, 40))
             else msgs.add("引導至路肩 ▶" to Color.rgb(40, 140, 240))
         }
         p.optJSONObject("ldw")?.let { l ->

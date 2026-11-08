@@ -871,8 +871,18 @@ class AdasPipeline(
         val odoDt = if (odoAt == 0L) 0.0 else (now - odoAt).coerceIn(0, 300) / 1000.0
         odoAt = now
         if (vs.turn != 'L' && vs.turn != 'R') lcOdo.learnZero(vs.speedKmh, steer, odoDt)
-        val odo = lcOdo.update(now, vs.turn, vs.speedKmh, steer, laneWNow)
-        val odoDone = lcTarget == null && lcOdo.done
+        // 道路彎度：沒打燈時慢慢平均（約 2 秒），打燈就鎖住——變道動作本身也會讓車頭轉向，不鎖的話
+        // 一變道量到的「彎度」就被變道動作混進去，預測線亂彎（實車：彎道上變道軌跡很怪）
+        val kNow = MotionCurvature.curvature(vs.speedKmh)
+        val signaling = vs.turn == 'L' || vs.turn == 'R'
+        if (!signaling) { if (kNow != null) roadK = if (roadK.isNaN()) kNow else roadK + (kNow - roadK) * (odoDt / 2.0).coerceIn(0.0, 1.0) }
+        val kLocked = roadK.takeIf { !it.isNaN() }
+        // 推算橫移：扣掉彎道本身造成的轉向（彎度 × 車速），只算變道多出來的
+        val yawRel = if (steer == null) MotionCurvature.yawRate()?.let { it - (kLocked ?: 0.0) * ((vs.speedKmh ?: 0f) / 3.6) } else null
+        val odo = lcOdo.update(now, vs.turn, vs.speedKmh, steer, laneWNow, yawRel)
+        // 壓線判斷：打燈那側的車道線跑到車底下 = 正在變道；跑到另一側 = 變道完成（偵測得到線時以這個為準）
+        val crossDone = lineCross.update(vs.turn, ldwState)
+        val odoDone = crossDone || (lcTarget == null && lcOdo.done)
         if (turnPlan == null && !slowTurn && lcTarget != 0f && !odoDone && (vs.turn == 'L' || vs.turn == 'R')) {
             val dir = if (vs.turn == 'L') -1 else 1
             val st = lcaState
@@ -884,7 +894,7 @@ class AdasPipeline(
                 ?: st?.path?.takeIf { now - tracksAt < OBJ_TTL_MS && it.size >= 2 }
                 ?: lca.lanePath(dir * w.toDouble(), 0.0, len.toDouble())
             // 在彎道上：照目前量到的彎度把路徑彎過去（不然是一條直的斜線，切出彎道外）
-            val curveK = MotionCurvature.curvature(vs.speedKmh)
+            val curveK = kLocked
             val path = CurveBend.bend(path0, curveK)
             // 打燈那一側有車（相鄰車道／盲點，不只是快速接近的危險等級）→ 暫緩變道
             val sideLv = if (st != null && now - tracksAt < OBJ_TTL_MS) (if (dir < 0) st.L else st.R) else 0
@@ -963,6 +973,8 @@ class AdasPipeline(
 
     private val lcTrack = LaneChangeTracker()
     private val lcOdo = LaneChangeOdometry()
+    private val lineCross = LineCrossWatcher()
+    private var roadK = Double.NaN
     private var odoAt = 0L
     private val roadside = RoadsideSpaceFinder()
     private var spdPrev = Float.NaN; private var spdPrevAt = 0L; private var decel = 0f   // 自車減速度（m/s²，EMA）
@@ -997,7 +1009,10 @@ class AdasPipeline(
                 p.put("curb", JSONObject().put("len", r2(spot.len)).put("ahead", r2(pl.stopAheadM)))
             }
         }
-        if (vs.turn == 'H' && v != null && v >= 50f) {
+        // 已經在路肩：左邊緊鄰一條實線（路肩線），右邊沒有別的車道線、或很近就是路緣 → 不用再引導
+        val onShoulder = vs.turn == 'H' && rd != null && RoadsideRules.onShoulder(rd.lines, rd.edgeR)
+        if (onShoulder) p.put("shoulder", JSONObject().put("on", true))
+        if (vs.turn == 'H' && v != null && v >= 50f && !onShoulder) {
             // 前方急煞：正前方的車快速接近（相對速度 < −4 m/s），或自車減速度 > 3 m/s²
             val leadClosing = now - tracksAt < OBJ_TTL_MS && tracks.any { it.confirmed && abs(it.x) < 1.8f && it.z in 3f..60f && it.vz < -4f }
             if (leadClosing || decel > 3f) {

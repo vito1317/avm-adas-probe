@@ -36,12 +36,22 @@ class TrafficLightBlobsTest {
     }
 
     @Test
-    fun brightRedWithoutHousingIsIgnored() {
-        // 招牌、車尾燈：周圍不是暗的燈箱
+    fun bareDotWithoutHousingIsFound() {
+        // 實車：畫面上紅綠燈只是一個紅點，看不到燈箱
         val d = TrafficLightBlobs()
         val img = scene(rgb(255, 40, 30), box = false)
-        repeat(5) { d.update(img, S) }
-        assertNull(d.update(img, S))
+        repeat(3) { d.update(img, S) }
+        assertEquals("red", d.update(img, S)!!.state)
+    }
+
+    @Test
+    fun bigRedPatchWithoutHousingIsIgnored() {
+        // 大片紅色（招牌）、沒有燈箱
+        val d = TrafficLightBlobs()
+        val a = IntArray(S * S) { rgb(170, 190, 210) }
+        for (y in 20..34) for (x in 50..64) a[y * S + x] = rgb(255, 40, 30)
+        repeat(5) { d.update(a, S) }
+        assertNull(d.update(a, S))
     }
 
     @Test

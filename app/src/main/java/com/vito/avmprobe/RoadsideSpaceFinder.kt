@@ -44,10 +44,30 @@ class RoadsideSpaceFinder(private val geo: VehicleGeometry = VehicleGeometry()) 
     private var seen0 = Double.NaN; private var seen1 = Double.NaN
     private var laneX = Double.NaN                  // 路邊停車那一排的橫向位置（EMA）
     private var found: DoubleArray? = null           // [s0, s1, x]
+    /** 空隙前後那兩台停著的車（s 座標，沒有是 NaN）：每幀看到它們就把位置對回去，不只靠車速累積。 */
+    private var anchorRear = Double.NaN
+    private var anchorFront = Double.NaN
     private var foundAt = 0L
     private var hazardAt = 0L
 
-    fun reset() { occ.clear(); seen0 = Double.NaN; seen1 = Double.NaN; laneX = Double.NaN; found = null }
+    fun reset() { occ.clear(); seen0 = Double.NaN; seen1 = Double.NaN; laneX = Double.NaN; found = null; anchorRear = Double.NaN; anchorFront = Double.NaN }
+
+    /**
+     * 用看到的路邊停車校正位置（使用者：移動中車位位置要即時更新）：車速是 GPS 的，延遲又不準，
+     * 光靠累積行駛距離，空位會慢慢跑掉。看到空隙前後那台車 → 量到的位置跟記下的差多少，就把行駛距離修回來。
+     */
+    private fun anchor(objs: List<Obj>) {
+        if (found == null) return
+        for (o in objs) {
+            if (ObjTypes.group(o.t) != "veh" || o.x < SIDE_X_MIN || o.x > SIDE_X_MAX) continue
+            val sm = s + o.z
+            for (a in doubleArrayOf(anchorRear, anchorFront)) {
+                if (a.isNaN()) continue
+                val err = sm - a
+                if (abs(err) < 2.0) s -= 0.5 * err          // 量到的車在 a + err → 我們的 s 多算了 err
+            }
+        }
+    }
 
     /**
      * 每一幀呼叫。[curbX] 右側路緣（沒有傳 null），[redRight] 右側路邊是否是紅線（禁止停車）。
@@ -57,9 +77,13 @@ class RoadsideSpaceFinder(private val geo: VehicleGeometry = VehicleGeometry()) 
         val dt = if (lastAt == 0L) 0.0 else ((now - lastAt).coerceIn(0, 500)) / 1000.0
         lastAt = now
         val v = (speedKmh ?: 0f) / 3.6
-        s += (if (gear == 'R') -v else v) * dt
+        // 行駛距離：看得到路邊停著的車時，直接用它們往後退了多少（停著的車不會動，比 GPS 車速準）；
+        // 看不到才用車速
+        val ds = parkedMotion(objs)
+        s += ds ?: ((if (gear == 'R') -v else v) * dt)
         val hazard = turn == 'H'
         if (hazard) hazardAt = now
+        anchor(objs)
         val f = found
         // 太久沒打雙閃、也沒在用找到的空位 → 清掉
         if (!hazard && (f == null || now - foundAt > KEEP_MS)) { if (now - hazardAt > 5000) reset(); return f?.let { toSpot(it) } }
@@ -90,8 +114,27 @@ class RoadsideSpaceFinder(private val geo: VehicleGeometry = VehicleGeometry()) 
             // 空隙太長就只取靠前那一段（停在前車後面）
             val s1 = gap[1]; val s0 = maxOf(gap[0], s1 - need - 1.0)
             found = doubleArrayOf(s0, s1, x); foundAt = now
+            // 空隙前後的車（佔用區間的端點往外半個車長）
+            anchorRear = occ.lastOrNull { it[1] <= gap[0] + 0.3 }?.let { (it[0] + it[1]) / 2 } ?: Double.NaN
+            anchorFront = occ.firstOrNull { it[0] >= gap[1] - 0.3 }?.let { (it[0] + it[1]) / 2 } ?: Double.NaN
         }
         return found?.let { toSpot(it) }
+    }
+
+    private var prevSide: List<Obj> = emptyList()
+
+    /** 右側停放物這一幀往後退了多少（中位數，m）；配不到回 null。 */
+    private fun parkedMotion(objs: List<Obj>): Double? {
+        val side = objs.filter { (ObjTypes.group(it.t) == "veh" || ObjTypes.group(it.t) == "two") && it.x in SIDE_X_MIN..SIDE_X_MAX }
+        val d = ArrayList<Double>()
+        for (o in side) {
+            val p = prevSide.filter { abs(it.x - o.x) < 0.7f && it.z - o.z in -0.6f..3.0f }.minByOrNull { abs(it.z - o.z) } ?: continue
+            d.add((p.z - o.z).toDouble())
+        }
+        prevSide = side
+        if (d.isEmpty()) return null
+        d.sort()
+        return d[d.size / 2]
     }
 
     private fun toSpot(f: DoubleArray) = Spot(f[2].toFloat(), (f[0] - s).toFloat(), (f[1] - s).toFloat())

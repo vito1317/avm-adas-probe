@@ -95,12 +95,6 @@ class LaneDepartureWarning {
         val sigL = grace && (lastTurn == 'L' || lastTurn == 'H')
         val sigR = grace && (lastTurn == 'R' || lastTurn == 'H')
 
-        if (speedKmh == null || speedKmh < minKmh) {
-            reset()
-            stradSide = null
-            return State(false, false, Float.NaN, Float.NaN)
-        }
-
         var dl = Float.NaN
         var dr = Float.NaN
         var solidL = false
@@ -122,6 +116,13 @@ class LaneDepartureWarning {
                 val d = x0 - EGO_HALF_W
                 if (dr.isNaN() || d < dr) { dr = d; solidR = !ln.dashed }
             }
+        }
+
+        // 車速不夠：不警示，但距離照樣回報（變道進度判斷要用，市區變道也要知道有沒有壓線）
+        if (speedKmh == null || speedKmh < minKmh) {
+            reset()
+            stradSide = null
+            return State(false, false, dl, dr)
         }
 
         val warnL = step(l, dl, nowMs, solidL, sigL)
