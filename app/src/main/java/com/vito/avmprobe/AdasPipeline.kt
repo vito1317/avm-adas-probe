@@ -865,8 +865,7 @@ class AdasPipeline(
         // 前方是直路（沒有轉彎路徑）→ 一律畫變道輔助線（使用者要求：不分車速）
         val slowTurn = false
         val laneWNow = lcaState?.laneW ?: LaneChangeAssist.LANE_W
-        val lcTarget = if (turnPlan == null && !slowTurn) lcTrack.update(now, vs.turn,
-            road?.takeIf { now - roadAt < BEV_TTL_MS }?.lines, laneWNow) else { lcTrack.reset(); null }
+        val lcTargetDeferred = turnPlan == null && !slowTurn
         // 車道線鎖不到時的備援：車速＋方向盤推算橫移（每幀都要算，打燈前用來估方向盤零點）
         val odoDt = if (odoAt == 0L) 0.0 else (now - odoAt).coerceIn(0, 300) / 1000.0
         odoAt = now
@@ -879,7 +878,11 @@ class AdasPipeline(
         val kLocked = roadK.takeIf { !it.isNaN() }
         // 推算橫移：扣掉彎道本身造成的轉向（彎度 × 車速），只算變道多出來的
         val yawRel = if (steer == null) MotionCurvature.yawRate()?.let { it - (kLocked ?: 0.0) * ((vs.speedKmh ?: 0f) / 3.6) } else null
+        val yBefore = lcOdo.y
         val odo = lcOdo.update(now, vs.turn, vs.speedKmh, steer, laneWNow, yawRel)
+        val moved = if (vs.turn == 'L' || vs.turn == 'R') (lcOdo.y - yBefore).toFloat().takeIf { steer != null || yawRel != null } else null
+        val lcTarget = if (lcTargetDeferred) lcTrack.update(now, vs.turn,
+            road?.takeIf { now - roadAt < BEV_TTL_MS }?.lines, laneWNow, moved) else { lcTrack.reset(); null }
         // 壓線判斷：打燈那側的車道線跑到車底下 = 正在變道；跑到另一側 = 變道完成（偵測得到線時以這個為準）
         val crossDone = lineCross.update(vs.turn, ldwState)
         val odoDone = crossDone || (lcTarget == null && lcOdo.done)
@@ -905,7 +908,12 @@ class AdasPipeline(
             val ban = if (rdNow != null && now - roadAt < BEV_TTL_MS) LaneChangeRule.check(rdNow.lines, vs.turn!!) else null
             noLaneChange = ban != null
             val pts = JSONArray(); for (q in path) pts.put(JSONArray().put(r2(q[0])).put(r2(q[1])))
+            // 變道進度給畫面顯示：離目標車道中心多遠、依據是什麼
+            val src = when { lcTarget != null && lcTrack.matched -> "車道線"; lcTarget != null -> "車道線＋推算"
+                steer != null && odo != null -> "方向盤"; odo != null -> "畫面轉向"; else -> "固定" }
+            val remain = lcTarget ?: odo?.first?.toFloat()
             p.put("lc", JSONObject().put("pts", pts).put("dir", dir).put("w", r2(w)).put("car", sideLv)
+                .put("src", src).apply { remain?.let { put("rem", r2(kotlin.math.abs(it))) } }
                 .apply { curveK?.takeIf { kotlin.math.abs(it) >= CurveBend.MIN_K }?.let { put("k", (it * 1e5).toLong() / 1e5) } }
                 .put("ok", !danger && ban == null && (st?.pathOk ?: true))
                 .apply { ban?.let { put("ban", LaneChangeRule.label(it)) } })

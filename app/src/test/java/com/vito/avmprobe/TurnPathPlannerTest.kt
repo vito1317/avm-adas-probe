@@ -301,3 +301,21 @@ class SteerPlausibilityTest {
         org.junit.Assert.assertFalse(TurnPathPlanner.plausibleSteer(900f, null))
     }
 }
+
+class LaneChangeTrackerFusionTest {
+    private fun line(x: Float) = RoadLine('w', true, x, -2f, x, 10f, 0.9f)
+
+    @org.junit.Test
+    fun keepsUpdatingFromOdometryWhenDetectionDropsOut() {
+        val t = LaneChangeTracker()
+        org.junit.Assert.assertEquals(3.5f, t.update(0, 'R', listOf(line(1.75f)), 3.5f, 0f)!!, 0.01f)
+        // 之後 3 秒都偵測不到線，但推算每幀往右移 0.1 m
+        var now = 0L; var target = 0f
+        repeat(10) { now += 100; target = t.update(now, 'R', emptyList(), 3.5f, 0.1f)!! }
+        org.junit.Assert.assertEquals("沒偵測到線也要跟著推算變近", 2.5f, target, 0.05f)
+        // 線又出現了（實際在 0.6，推測在 0.75）→ 往實際位置靠
+        now += 100
+        target = t.update(now, 'R', listOf(line(0.6f)), 3.5f, 0f)!!
+        org.junit.Assert.assertEquals(0.66f + 1.75f, target, 0.05f)
+    }
+}

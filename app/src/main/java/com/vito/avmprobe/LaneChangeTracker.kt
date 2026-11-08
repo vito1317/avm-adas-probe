@@ -20,23 +20,38 @@ class LaneChangeTracker {
     private var dir = 0
     private var lineX = Float.NaN
     private var seenAt = 0L
+    /** 這一幀有沒有真的對到偵測的線（給畫面顯示依據）。 */
+    var matched = false; private set
+    /** 鎖定的那條線現在在哪（m，相對車身；沒鎖回 NaN）。 */
+    val lockedX: Float get() = lineX
 
     fun reset() { dir = 0; lineX = Float.NaN }
 
     /**
      * @return 目標車道中央的橫向位置（m，+ = 右；相對目前車身）；0 = 已經到了；null = 沒鎖定到線（呼叫端用預設車道寬）
      */
-    fun update(now: Long, turn: Char?, lines: List<RoadLine>?, laneW: Float): Float? {
+    /**
+     * [movedRight]：上一幀到這一幀推算的橫移（m，+ = 右；方向盤或畫面轉向推算，沒有傳 null）。
+     * 兩次偵測之間用它推測鎖定的線現在在哪（車往右移，線看起來往左），偵測到線就用實際位置校正——
+     * 車道線偵測時有時無，光靠偵測鎖定會掉、軌跡就卡住（實車：變道了預測線還是一樣）。
+     */
+    fun update(now: Long, turn: Char?, lines: List<RoadLine>?, laneW: Float, movedRight: Float? = null): Float? {
         val d = when (turn) { 'L' -> -1; 'R' -> 1; else -> { reset(); return null } }
         if (d != dir) { reset(); dir = d }
+        matched = false
         val xs = lines.orEmpty().mapNotNull { x0(it) }
         if (lineX.isNaN()) {
             val pick = xs.filter { it * d > 0.3f && it * d < PICK_MAX_M }.minByOrNull { abs(it) } ?: return null
-            lineX = pick; seenAt = now
+            lineX = pick; seenAt = now; matched = true
         } else {
+            if (movedRight != null) lineX -= movedRight          // 推測：車往右，線往左
             val m = xs.minByOrNull { abs(it - lineX) }
-            if (m != null && abs(m - lineX) < MATCH_M) { lineX = m; seenAt = now }
-            else if (now - seenAt > HOLD_MS) { lineX = Float.NaN; return null }
+            if (m != null && abs(m - lineX) < MATCH_M) {
+                // 偵測到：往實際位置靠（有推算時兩者平均一下，避免偵測跳動）
+                lineX = if (movedRight != null) lineX + 0.6f * (m - lineX) else m
+                seenAt = now; matched = true
+            } else if (movedRight == null && now - seenAt > HOLD_MS) { lineX = Float.NaN; return null }
+            else if (now - seenAt > HOLD_MS * 3) { lineX = Float.NaN; return null }   // 推算太久沒校正也不可靠
         }
         val target = lineX + d * laneW / 2f
         return if (target * d < ARRIVED_M) 0f else target

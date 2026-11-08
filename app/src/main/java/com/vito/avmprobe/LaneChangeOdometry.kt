@@ -24,7 +24,8 @@ class LaneChangeOdometry(private val geo: VehicleGeometry = VehicleGeometry()) {
 
     private var zero = Double.NaN
     private var dir = 0
-    private var y = 0.0
+    /** 打燈後推算的橫移（m，+ = 右）。 */
+    var y = 0.0; private set
     private var th = 0.0
     private var lastAt = 0L
 

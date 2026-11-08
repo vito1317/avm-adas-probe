@@ -665,6 +665,8 @@ class AnnotationView(context: Context) : View(context) {
         curbLine(p)?.let { msgs.add(it) }
         p.optJSONObject("lc")?.let { lc ->
             lc.optString("ban").takeIf { it.isNotEmpty() }?.let { msgs.add(0, it to Color.rgb(210, 30, 30)) }
+            if (lc.has("rem") && !lc.has("sh"))
+                msgs.add("變道中：離目標車道中心 %.1f m（%s）".format(lc.optDouble("rem"), lc.optString("src")) to Color.rgb(90, 160, 230))
             if (lc.optInt("car") >= 1) {
                 val left = lc.optInt("dir") < 0
                 msgs.add(0, (if (left) "◀ 左側有車 暫緩變道" else "右側有車 暫緩變道 ▶") to Color.rgb(220, 30, 30))
