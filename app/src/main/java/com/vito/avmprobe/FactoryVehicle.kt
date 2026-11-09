@@ -35,6 +35,10 @@ object FactoryVehicle {
     private var signVotes = 0
     private var prefs: AppPrefs? = null
 
+    /** 原廠的車門狀態（VehicleState.doorState，CAN 來的）：任一門開著。 */
+    @Volatile private var doors: IntArray? = null
+    fun doorOpen(): Boolean = doors?.any { it != 0 } == true
+
     /** 最近 1 秒內有原廠的方向盤角度、而且確定有接 CAN。 */
     fun steerFresh(): Boolean = wheelLive && SystemClock.elapsedRealtime() - wheelAt < 1000
     @Volatile private var running = false
@@ -123,6 +127,7 @@ object FactoryVehicle {
         val kmh = (f("kmPerHour") as? Float) ?: -1f
         val left = f("leftSignalState") as? Boolean
         val right = f("rightSignalState") as? Boolean
+        doors = (f("doorState") as? IntArray)?.copyOf()
         val wheelRaw = f("wheelDegree") as? Float
         learnSign(wheelRaw, kmh)
         val wheel = wheelRaw?.times(steerSign)

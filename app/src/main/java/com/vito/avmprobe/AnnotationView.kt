@@ -631,6 +631,12 @@ class AnnotationView(context: Context) : View(context) {
         p.optJSONObject("cutin")?.let { ci ->
             msgs.add(0, (if (ci.optString("side") == "L") "◀ 左前車打燈要切入" else "右前車打燈要切入 ▶") to Color.rgb(220, 40, 40))
         }
+        p.optJSONArray("aids")?.let { a ->
+            for (k in 0 until a.length()) a.optJSONObject(k)?.let { m ->
+                val col = when (m.optInt("l")) { 2 -> Color.rgb(220, 40, 40); 1 -> Color.rgb(230, 140, 20); else -> Color.rgb(40, 140, 240) }
+                if (m.optInt("l") >= 2) msgs.add(0, m.optString("t") to col) else msgs.add(m.optString("t") to col)
+            }
+        }
         p.optJSONObject("lead")?.let { ld ->
             if (ld.optBoolean("hazard")) msgs.add("前車打雙閃" to Color.rgb(230, 140, 20))
             else ld.optString("turn").takeIf { it == "L" || it == "R" }?.let { msgs.add((if (it == "L") "◀ 前車打左燈" else "前車打右燈 ▶") to Color.rgb(230, 160, 20)) }

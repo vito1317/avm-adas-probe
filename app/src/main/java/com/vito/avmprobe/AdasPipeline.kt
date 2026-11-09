@@ -376,7 +376,7 @@ class AdasPipeline(
             start = st != null && (st.lead || st.green),
             ldw = (ld != null && (ld.any || ld.straddle != null)) || noLaneChange,
             lcaDanger = (lcaFresh && (l!!.L >= 2 || l.R >= 2)) || laneChangeBlocked ||
-                (cutIn != null && now - cutInAt < 1500),
+                (cutIn != null && now - cutInAt < 1500) || aidsDanger,
             turnHit = turnHit,
             collision = AlertSounder.moving(vs.speedKmh, vs.gear) && currentObjects(now).any { it.clr < 0.5f }
         ))
@@ -808,6 +808,7 @@ class AdasPipeline(
         val objs = JSONArray()
         val ego = egoMps(vs)
         val coneOut = ArrayList<WObj>(); val used = HashSet<Int>()
+        val aidObjs = ArrayList<DriverAids.Obj>()
         for (o in currentObjects(now)) {
             if (o.t == "cone") coneOut.add(o)
             var best: Track? = null; var bd = 1.5f
@@ -820,6 +821,7 @@ class AdasPipeline(
             val j = JSONObject().put("t", o.t).put("x", r2(o.x)).put("z", r2(o.z)).put("c", r2(o.c)).put("d", r2(o.clr))
             best?.let { tr ->
                 used.add(tr.id)
+                aidObjs.add(DriverAids.Obj(o.t, o.x, o.z, tr.vx, tr.vz, o.clr))
                 j.put("id", tr.id).put("vx", r2(tr.vx)).put("vz", r2(tr.vz))
                 yaw(tr, ego)?.let { y -> j.put("yaw", r2(y)) }
             }
@@ -861,6 +863,14 @@ class AdasPipeline(
             if (spd(vs)) parkPathJson(slots)?.let { p.put("park", it) }
         }
         roadsideAndShoulder(p, vs, now)
+        // 駕駛輔助警示：倒車兩側來車、開門預警、後方追撞、跟車秒數、休息提醒
+        try {
+            val ld = ldwState
+            val msgs = aids.update(DriverAids.Input(now, vs.speedKmh, vs.gear, aidObjs, FactoryVehicle.doorOpen(),
+                ld != null && (ld.any || ld.straddle != null)))
+            aidsDanger = msgs.any { it.level >= 2 }
+            if (msgs.isNotEmpty()) p.put("aids", JSONArray().apply { for (m in msgs) put(JSONObject().put("k", m.key).put("t", m.text).put("l", m.level)) })
+        } catch (t: Throwable) { Log.w(TAG, "aids", t) }
         cutIn?.takeIf { now - cutInAt < 1500 }?.let { (side, x, z) ->
             p.put("cutin", JSONObject().put("side", side.toString()).put("x", r2(x)).put("z", r2(z)))
         }
@@ -1032,6 +1042,8 @@ class AdasPipeline(
     private val lcTrack = LaneChangeTracker()
     private val lcOdo = LaneChangeOdometry()
     private val lineCross = LineCrossWatcher()
+    private val aids = DriverAids()
+    @Volatile private var aidsDanger = false
     @Volatile private var slotGeo: AvmGeometry? = null
     private var slotLut: IntArray? = null
     private var slotLutKey = 0L
