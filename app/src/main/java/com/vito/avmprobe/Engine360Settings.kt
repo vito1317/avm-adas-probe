@@ -62,6 +62,10 @@ object Engine360Settings {
             text = "CAN 全部欄位（踩煞車、換檔、開燈，看哪個在變）"; isAllCaps = false
             setOnClickListener { showCanFields(act) }
         })
+        col.addView(Button(act).apply {
+            text = "掃描藍牙裝置（找氛圍燈；先把手機 App 斷開）"; isAllCaps = false
+            setOnClickListener { showBleScan(act) }
+        })
         // 閃退足跡：上次啟動 1 分鐘內結束時，當時正在跑哪一段（原生層崩潰也記得到）
         if (Crumbs.report.isNotEmpty() || Crumbs.disabledText().isNotEmpty()) {
             col.addView(TextView(act).apply {
@@ -406,5 +410,49 @@ object Engine360Settings {
         }
         dlg = AlertDialog.Builder(act).setTitle("CAN 全部欄位").setView(sv).setPositiveButton("關閉", null).show()
         h.postDelayed(tick, 100)
+    }
+
+    /**
+     * 掃描附近的藍牙低功耗裝置 15 秒：確認車機的 Android 藍牙能不能用 BLE，並找出氛圍燈控制器的名稱／服務
+     * （常見的 ELK-BLEDOM、Triones、LEDnet 等協定已知，之後可以讓警示跟氛圍燈連動）。只掃描、不連線。
+     */
+    private fun showBleScan(act: Activity) {
+        val tv = TextView(act).apply { textSize = 12f; typeface = Typeface.MONOSPACE; setPadding(24, 16, 24, 16); text = "掃描中…" }
+        val sv = ScrollView(act).apply { addView(tv) }
+        val found = java.util.LinkedHashMap<String, String>()
+        val h = android.os.Handler(android.os.Looper.getMainLooper())
+        var cb: android.bluetooth.le.ScanCallback? = null
+        var scanner: android.bluetooth.le.BluetoothLeScanner? = null
+        fun render(head: String) {
+            tv.text = head + "\n\n" + (if (found.isEmpty()) "（還沒找到）" else found.values.joinToString("\n\n"))
+        }
+        val dlg = AlertDialog.Builder(act).setTitle("藍牙裝置").setView(sv).setPositiveButton("關閉", null).show()
+        try {
+            val ad = android.bluetooth.BluetoothAdapter.getDefaultAdapter()
+            when {
+                ad == null -> { tv.text = "車機的 Android 沒有藍牙介面（藍牙可能是另一顆只管通話的模組）→ 沒辦法控制氛圍燈"; return }
+                !ad.isEnabled -> { tv.text = "車機的 Android 藍牙是關的（狀態 ${ad.state}）。有些車機的藍牙由通話模組管，Android 這邊打不開"; return }
+            }
+            scanner = ad!!.bluetoothLeScanner
+            if (scanner == null) { tv.text = "車機藍牙不支援 BLE 掃描"; return }
+            cb = object : android.bluetooth.le.ScanCallback() {
+                override fun onScanResult(type: Int, r: android.bluetooth.le.ScanResult) {
+                    val d = r.device
+                    val name = try { r.scanRecord?.deviceName ?: d.name } catch (_: Throwable) { null } ?: "（沒有名稱）"
+                    val uuids = r.scanRecord?.serviceUuids?.joinToString { it.uuid.toString().let { u -> if (u.endsWith("-0000-1000-8000-00805f9b34fb")) u.substring(4, 8) else u } } ?: ""
+                    val mfr = r.scanRecord?.manufacturerSpecificData?.let { m -> (0 until m.size()).joinToString { k -> "%04x".format(m.keyAt(k)) } } ?: ""
+                    found[d.address] = "$name\n  ${d.address}  訊號 ${r.rssi} dBm" +
+                        (if (uuids.isNotEmpty()) "\n  服務 $uuids" else "") + (if (mfr.isNotEmpty()) "\n  廠商碼 $mfr" else "")
+                    h.post { render("掃描中…（找到 ${found.size} 個，訊號越大越近）") }
+                }
+                override fun onScanFailed(errorCode: Int) { h.post { tv.text = "BLE 掃描失敗（錯誤碼 $errorCode）" } }
+            }
+            scanner!!.startScan(cb)
+            h.postDelayed({
+                try { scanner?.stopScan(cb) } catch (_: Throwable) {}
+                render("掃描完成：找到 ${found.size} 個（訊號越大越近；請截圖給開發者）")
+            }, 15_000)
+            dlg.setOnDismissListener { try { scanner?.stopScan(cb) } catch (_: Throwable) {} }
+        } catch (t: Throwable) { tv.text = "沒辦法掃描：$t" }
     }
 }
