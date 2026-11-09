@@ -1007,6 +1007,7 @@ class AdasPipeline(
             noLaneChange = false
             laneChangeBlocked = false
         }
+        Crumbs.at(Crumbs.FRAME, "publish+json")
         turnPlan?.let { tp ->
             val outer = JSONArray(); for (q in tp.pts) outer.put(JSONArray().put(r2(q[0])).put(r2(q[1])))
             val inner = JSONArray(); for (q in tp.inner) inner.put(JSONArray().put(r2(q[0])).put(r2(q[1])))
@@ -1030,8 +1031,9 @@ class AdasPipeline(
         val t = tl
         if (t != null && now - t.at < TL_TTL_MS) p.put("tl", JSONObject().put("s", t.s).put("c", r2(t.c)).put("ax", r2(t.ax)))
         lastPayload = p
+        Crumbs.at(Crumbs.FRAME, "sink")
         sink(p)
-        afterFrame?.invoke(this)
+        if (!Crumbs.off("dashcam")) Crumbs.step(Crumbs.FRAME, "dashcam") { afterFrame?.invoke(this) }
     }
 
     private fun spd(vs: VehicleState): Boolean { val s = vs.speedKmh; return s == null || s < 15f }

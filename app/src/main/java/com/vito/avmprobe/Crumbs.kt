@@ -17,18 +17,18 @@ import java.nio.channels.FileChannel
 object Crumbs {
     const val HEALTHY_MS = 60_000L
     private const val SLOT = 96
-    private const val SLOTS = 6
+    private const val SLOTS = 7
     private const val HEAD = 16
 
     // 執行緒欄位
-    const val MAIN = 0; const val FRAME = 1; const val GROUND = 2; const val TTS = 3; const val VEH = 4; const val OTHER = 5
+    const val MAIN = 0; const val FRAME = 1; const val GROUND = 2; const val TTS = 3; const val VEH = 4; const val OTHER = 5; const val DASH = 6
 
     /** 出事可以自動停用的功能（名稱 → 說明）。 */
     val SKIPPABLE = linkedMapOf(
         "tts" to "語音提示（初始化）", "speak" to "語音提示（念）", "slotbev" to "停車格大範圍俯視圖",
         "aids" to "駕駛／停車輔助", "turnopen" to "轉彎轉進空地", "vshift" to "周圍車輛判斷變道",
         "vyaw" to "前方畫面轉向", "cutin" to "切入偵測", "lead" to "前車燈號", "door" to "車門狀態",
-        "evlock" to "事件自動存影片", "parkshot" to "停車位置記錄", "canspeed" to "車機 CAN 車速"
+        "evlock" to "事件自動存影片", "parkshot" to "停車位置記錄", "canspeed" to "車機 CAN 車速", "dashcam" to "行車記錄器"
     )
 
     @Volatile private var buf: MappedByteBuffer? = null
@@ -60,7 +60,7 @@ object Crumbs {
                 if (!name.endsWith(":ok") && at > worstAt) { worstAt = at; worstName = name }
             }
             if (!healthy && worstName != null) {
-                val key = worstName.substringBefore('|')
+                val key = worstName.substringBefore('|').let { if (it.startsWith("dash")) "dashcam" else it }
                 val desc = SKIPPABLE[key]
                 val disabled = desc != null && key !in off
                 if (disabled) { off = off + key; sp.edit().putStringSet("off", off).commit() }
@@ -87,7 +87,7 @@ object Crumbs {
         return at to String(bytes, Charsets.UTF_8)
     }
 
-    private fun slotName(s: Int) = when (s) { MAIN -> "畫面"; FRAME -> "偵測"; GROUND -> "俯視"; TTS -> "語音"; VEH -> "車輛訊號"; else -> "其他" }
+    private fun slotName(s: Int) = when (s) { MAIN -> "畫面"; FRAME -> "偵測"; GROUND -> "俯視"; TTS -> "語音"; VEH -> "車輛訊號"; DASH -> "行車記錄器"; else -> "其他" }
 
     /** 這個執行緒現在跑到 [name]。 */
     fun at(slot: Int, name: String) {

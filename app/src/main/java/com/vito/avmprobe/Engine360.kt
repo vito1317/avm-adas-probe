@@ -446,7 +446,7 @@ object Engine360 {
             stage(4_000, "道路彎度（陀螺儀／GPS）") { MotionCurvature.start(app) }
             stage(5_000, "語音提示") { Speech.enabled = prefs.voiceAlerts; if (!Crumbs.off("tts")) Crumbs.step(Crumbs.MAIN, "tts") { Speech.init(app) } }
             stage(8_000, "偵測（相機畫面＋模型）") { if (FrameShareHub.listener == null) FrameShareHub.listener = { img -> onFrame(app, prefs, img) } }
-            stage(25_000, "行車記錄器") { if (prefs.annotEnabled) Dashcam.start(app, prefs) }
+            stage(25_000, "行車記錄器") { if (prefs.annotEnabled && !Crumbs.off("dashcam")) Dashcam.start(app, prefs) }
         } catch (t: Throwable) {
             Log.e(TAG, "startBackground 失敗（不影響原廠）", t); recordError(ctx, "startBackground", t)
         }

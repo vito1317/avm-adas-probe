@@ -96,9 +96,13 @@ class DashcamRecorder(private val ctx: Context, private val quotaBytes: () -> Lo
         h.post {
             try {
                 val s = input ?: return@post
+                Crumbs.at(Crumbs.DASH, "dash-lock")
                 val c = s.lockHardwareCanvas()
-                try { draw(c) } finally { s.unlockCanvasAndPost(c) }
+                Crumbs.at(Crumbs.DASH, "dash-draw")
+                try { draw(c) } finally { Crumbs.at(Crumbs.DASH, "dash-post"); s.unlockCanvasAndPost(c) }
+                Crumbs.at(Crumbs.DASH, "dash-drain")
                 drain(false)
+                Crumbs.at(Crumbs.DASH, "dash:ok")
                 val sec = (now - segStart) / 1000
                 if (sec != lastSrtSec) { lastSrtSec = sec; writeSrt(sec, subtitle()) }
                 if (now - segStart >= SEG_MS && !pendingRotate) {
