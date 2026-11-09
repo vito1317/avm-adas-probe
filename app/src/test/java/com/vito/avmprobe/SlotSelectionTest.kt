@@ -55,7 +55,7 @@ class SlotSelectionTest {
         s.tap(listOf(slot()), -2.4f, 0f, 0)
         assertNull(s.track(emptyList(), 5_000))
         assertNotNull(s.center)                     // 暫時看不到：還記著
-        s.track(emptyList(), 25_000)
+        s.track(emptyList(), SlotSelection.LOSE_MS + 5_000)
         assertNull(s.center)                        // 太久沒看到：取消
     }
 }

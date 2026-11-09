@@ -269,6 +269,7 @@ class AdasPipeline(
             }
         }
         val now = SystemClock.elapsedRealtime()
+        accumulateEgoMotion(now)
         if (prefs.camBev && !groundBusy) runBev(g, now)
 
         emaProc = ema(emaProc, (SystemClock.elapsedRealtime() - t0).toFloat())
@@ -761,13 +762,31 @@ class AdasPipeline(
             }
         }
         frame.sampleLut(table, bevArgb)
+        // 停車格專用的大範圍俯視圖（左右 9.5 m、前後 9 m，每格 5 cm；像素數跟一般俯視圖差不多）
+        try {
+            val sg = slotGeo ?: AvmGeometry(g.cams, BevSpec(-9.5, 9.5, -9.0, 9.0, 0.05), g.carLength, g.carWidth).also {
+                slotGeo = it; slotTrack.viewX = 9.5f; slotTrack.viewZ = 9f
+            }
+            if (slotLut == null || slotLutKey != key) { slotLut = sg.buildBevLut(frame.width, frame.height); slotLutKey = key }
+            val n = sg.bev.width * sg.bev.height
+            val sb = slotBuf?.takeIf { it.size == n } ?: IntArray(n).also { slotBuf = it }
+            frame.sampleLut(slotLut!!, sb)
+        } catch (t: Throwable) { slotGeo = null; slotBuf = null }
         groundBusy = true
         val buf = bevArgb
         val mode = prefs.groundMode
         ground.post {
             try {
                 cones = coneDet.detect(buf, bw, bh, mpp, cx, cy, excl); conesAt = now
-                slots = slotTrack.update(slotDet.detect(buf, bw, bh, mpp, cx, cy, listOf(ego) + wheelZones(), vehicles), now); slotsAt = now
+                // 停車格：用比較大的俯視圖（看得遠一點），記住跑出畫面的格子並依自車移動推算位置
+                val (mdz, myaw) = takeEgoMotion()
+                slotTrack.egoMotion(mdz, myaw); slotSelection.egoMotion(mdz, myaw)
+                val sb = slotBuf
+                val sg = slotGeo
+                slots = if (sb != null && sg != null)
+                    slotTrack.update(slotDet.detect(sb, sg.bev.width, sg.bev.height, sg.bev.mpp.toFloat(), sg.bev.originX.toFloat(), sg.bev.originY.toFloat(), listOf(ego) + wheelZones(), vehicles), now)
+                else slotTrack.update(slotDet.detect(buf, bw, bh, mpp, cx, cy, listOf(ego) + wheelZones(), vehicles), now)
+                slotsAt = now
                 if (mode == AppPrefs.GROUND_VIRTUAL) {
                     road = roadTrack.update(roadEx.extract(buf, bw, bh, mpp, cx, cy, excl, g.ipmValidMask()), now); roadAt = now
                 }
@@ -1013,6 +1032,32 @@ class AdasPipeline(
     private val lcTrack = LaneChangeTracker()
     private val lcOdo = LaneChangeOdometry()
     private val lineCross = LineCrossWatcher()
+    @Volatile private var slotGeo: AvmGeometry? = null
+    private var slotLut: IntArray? = null
+    private var slotLutKey = 0L
+    @Volatile private var slotBuf: IntArray? = null
+    // 自車移動累計（給停車格記憶用）：每幀加，偵測前取走
+    private val egoLock = Any()
+    private var egoDz = 0f
+    private var egoYaw = 0f
+    private var egoAt = 0L
+
+    /** 每幀：照車速＋方向盤（自行車模型）累計自車移動。倒車檔往後。 */
+    private fun accumulateEgoMotion(now: Long) {
+        val vs = VehicleBus.signals.snapshot()
+        val dt = if (egoAt == 0L) 0f else ((now - egoAt).coerceIn(0, 300)) / 1000f
+        egoAt = now
+        val v = (vs.speedKmh ?: return) / 3.6f * (if (vs.gear == 'R') -1f else 1f)
+        val st = vs.steerDeg?.takeIf { TurnPathPlanner.plausibleSteer(it, vs.speedKmh) } ?: 0f
+        val geo = VehicleGeometry()
+        val wheel = Math.toRadians((st / geo.steerRatio).toDouble().coerceIn(-geo.maxWheelDeg, geo.maxWheelDeg))
+        synchronized(egoLock) {
+            egoDz += v * dt
+            egoYaw += (v * kotlin.math.tan(wheel) / geo.wheelbase * dt).toFloat()
+        }
+    }
+
+    private fun takeEgoMotion(): Pair<Float, Float> = synchronized(egoLock) { (egoDz to egoYaw).also { egoDz = 0f; egoYaw = 0f } }
     private val vehShift = VehicleShiftOdometry()
     private var shiftTracksAt = 0L
     private var fusedY = 0f
@@ -1020,6 +1065,7 @@ class AdasPipeline(
     private var roadK = Double.NaN
     private var odoAt = 0L
     private val roadside = RoadsideSpaceFinder()
+    private var shoulderSince = 0L
     private var spdPrev = Float.NaN; private var spdPrevAt = 0L; private var decel = 0f   // 自車減速度（m/s²，EMA）
 
     /**
@@ -1053,7 +1099,11 @@ class AdasPipeline(
             }
         }
         // 已經在路肩：左邊緊鄰一條實線（路肩線），右邊沒有別的車道線、或很近就是路緣 → 不用再引導
-        val onShoulder = vs.turn == 'H' && rd != null && RoadsideRules.onShoulder(rd.lines, rd.edgeR)
+        // 路肩：慢速（≤ 20 km/h）才算「已在路肩」，而且要連續 1.5 秒（實車：高速行駛中打雙閃也顯示已在路肩，
+        // 是右邊車道線漏抓造成的）
+        val shoulderNow = vs.turn == 'H' && (v ?: 99f) <= 20f && rd != null && RoadsideRules.onShoulder(rd.lines, rd.edgeR)
+        if (!shoulderNow) shoulderSince = 0L else if (shoulderSince == 0L) shoulderSince = now
+        val onShoulder = shoulderNow && now - shoulderSince >= 1500
         if (onShoulder) p.put("shoulder", JSONObject().put("on", true))
         if (vs.turn == 'H' && v != null && v >= 50f && !onShoulder) {
             // 前方急煞：正前方的車快速接近（相對速度 < −4 m/s），或自車減速度 > 3 m/s²

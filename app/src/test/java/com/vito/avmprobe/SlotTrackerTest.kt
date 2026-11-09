@@ -39,3 +39,29 @@ class SlotTrackerTest {
         assertEquals(true, t.update(listOf(slot(2.9f, 5.5f, occ = true)), 900)[0].occupied)    // 連續兩次才改
     }
 }
+
+class SlotMemoryTest {
+    private fun slot(cx: Float, cz: Float) = ParkingSlot(floatArrayOf(cx - 1.2f, cz + 2.5f, cx + 1.2f, cz + 2.5f, cx + 1.2f, cz - 2.5f, cx - 1.2f, cz - 2.5f), 'p', false, 0.9f)
+
+    @org.junit.Test
+    fun slotIsRememberedAfterLeavingViewAndMovesWithCar() {
+        val t = SlotTracker(); t.viewX = 9.5f; t.viewZ = 9f
+        var now = 0L
+        repeat(3) { t.update(listOf(slot(3f, 2f)), now); now += 200 }
+        // 往前開 12 m，格子跑出偵測範圍（z = −10），偵測不到了
+        for (i in 0 until 12) { t.egoMotion(1f, 0f); t.update(emptyList(), now); now += 200 }
+        val out = t.update(emptyList(), now)
+        org.junit.Assert.assertEquals("跑出畫面還要記得", 1, out.size)
+        val cz = (out[0].p[1] + out[0].p[3] + out[0].p[5] + out[0].p[7]) / 4f
+        org.junit.Assert.assertEquals(-10f, cz, 0.3f)
+    }
+
+    @org.junit.Test
+    fun slotStillInViewButNotSeenIsDropped() {
+        val t = SlotTracker(); t.viewX = 9.5f; t.viewZ = 9f
+        var now = 0L
+        repeat(3) { t.update(listOf(slot(3f, 2f)), now); now += 200 }
+        now += SlotTracker.HOLD_MS + 500
+        org.junit.Assert.assertEquals("還在範圍內卻一直沒偵測到 → 刪掉（可能是誤判）", 0, t.update(emptyList(), now).size)
+    }
+}

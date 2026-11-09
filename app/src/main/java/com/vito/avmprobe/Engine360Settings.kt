@@ -138,6 +138,16 @@ object Engine360Settings {
         })
         col.addView(brakeInfo)
 
+        val dashInfo = TextView(act).apply { textSize = 11f }
+        col.addView(Button(act).apply {
+            text = "匯出儀表板 App（找真正的車速來源，給開發者分析）"; isAllCaps = false
+            setOnClickListener {
+                isEnabled = false; text = "匯出中…"
+                Engine360.exportDashboardApps(act) { msg -> isEnabled = true; text = "匯出儀表板 App（再按一次重新匯出）"; dashInfo.text = msg }
+            }
+        })
+        col.addView(dashInfo)
+
         val spriteInfo = TextView(act).apply { textSize = 11f; text = if (EgoSprite.get(act) != null) "行車記錄器正在用原廠車模圖案" else "還沒擷取（自動對位成功時也會自動擷取）" }
         col.addView(Button(act).apply {
             text = "擷取原廠車模給行車記錄器用（停在有俯視圖的畫面再按）"; isAllCaps = false

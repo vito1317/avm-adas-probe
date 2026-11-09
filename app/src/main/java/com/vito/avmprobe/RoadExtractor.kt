@@ -449,6 +449,11 @@ class RoadExtractor {
     private fun crossesEgo(x1: Double, z1: Double, x2: Double, z2: Double): Boolean {
         val ehx = EGO_HX + EGO_MARGIN
         val ehz = EGO_HZ + EGO_MARGIN
+        // 例外：真的被壓在車底下的車道線（跨著線開、變道中）——幾乎跟車身平行（< 14°），
+        // 而且車頭前方、車尾後方都看得到（兩邊都有證據），不是左右兩邊硬接起來的斜線。
+        // 不留的話壓線提醒、變道進度永遠偵測不到「線在車底下」（實車：壓線提醒沒作用）
+        val dxl = abs(x2 - x1); val dzl = abs(z2 - z1)
+        if (dzl > 4.0 * dxl && minOf(z1, z2) < -ehz - 0.5 && maxOf(z1, z2) > ehz + 0.5) return false
         val n = 80
         var inside = 0
         for (q in 0 until n) {

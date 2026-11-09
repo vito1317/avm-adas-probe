@@ -583,6 +583,41 @@ object Engine360 {
         }
     }
 
+    /**
+     * 設定裡「匯出儀表板 App」：車機的儀表板 App 顯示得出車速、轉速，表示車機裡有真正的車速來源（多半是 CAN）。
+     * 把儀表板 App 與車機主程式（com.ts.MainUI，常負責轉送車輛訊號）的安裝檔複製到「下載/avm-adas」，
+     * 給開發者反編譯找出車速從哪裡來（這台車的原廠 360 車速也只是 GPS）。
+     */
+    fun exportDashboardApps(ctx: Context, done: (String) -> Unit) {
+        Thread {
+            val msg = try {
+                val pm = ctx.packageManager
+                val keys = listOf("儀錶", "儀表", "仪表", "dash", "meter", "gauge", "cluster", "instrument", "speed")
+                val apps = pm.getInstalledApplications(0).filter { a ->
+                    val label = try { pm.getApplicationLabel(a).toString() } catch (_: Throwable) { "" }
+                    a.packageName == "com.ts.MainUI" || keys.any { k -> label.contains(k, true) || a.packageName.contains(k, true) }
+                }.filter { !it.packageName.startsWith("com.android") && !it.packageName.startsWith("com.google") }
+                val sb = StringBuilder()
+                var n = 0
+                for (a in apps.take(8)) {
+                    val label = try { pm.getApplicationLabel(a).toString() } catch (_: Throwable) { a.packageName }
+                    val files = listOfNotNull(a.sourceDir) + (a.splitSourceDirs?.toList() ?: emptyList())
+                    for ((i, path) in files.withIndex()) {
+                        try {
+                            val f = java.io.File(path)
+                            val name = "app_${a.packageName}${if (i == 0) "" else "_split$i"}.apk"
+                            MediaSaver.saveFile(ctx, name, "application/vnd.android.package-archive", f)
+                            sb.append("✔ $label（${a.packageName}）${f.length() / 1048576} MB\n"); n++
+                        } catch (t: Throwable) { sb.append("✘ $label：$t\n") }
+                    }
+                }
+                if (n == 0) "找不到儀表板 App" else "已匯出 $n 個到「下載/avm-adas」（app_ 開頭），請傳給開發者：\n$sb"
+            } catch (t: Throwable) { "匯出失敗：$t" }
+            log(msg.lineSequence().first())
+            main.post { done(msg) }
+        }.start()
+    }
+
     /** 設定裡「煞車訊號探測」：背景記錄 15 秒（使用者踩放煞車），[progress]／[done] 在主執行緒回報。 */
     fun probeBrake(ctx: Context, progress: (String) -> Unit, done: (String) -> Unit) {
         Thread {

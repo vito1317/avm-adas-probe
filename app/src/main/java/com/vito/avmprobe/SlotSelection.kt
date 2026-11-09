@@ -10,7 +10,7 @@ import kotlin.math.hypot
 class SlotSelection {
     companion object {
         const val FOLLOW_M = 1.5f
-        const val LOSE_MS = 20_000L
+        const val LOSE_MS = 40_000L
 
         fun center(s: ParkingSlot): FloatArray =
             floatArrayOf((s.p[0] + s.p[2] + s.p[4] + s.p[6]) / 4f, (s.p[1] + s.p[3] + s.p[5] + s.p[7]) / 4f)
@@ -47,6 +47,14 @@ class SlotSelection {
     }
 
     fun clear() { center = null; auto = false }
+
+    /** 自車動了（同 [SlotTracker.egoMotion]）：選的格子中心跟著移，跑出畫面也不會跟丟。 */
+    fun egoMotion(dz: Float, dyaw: Float) {
+        val cur = center ?: return
+        val c = kotlin.math.cos(dyaw); val s = kotlin.math.sin(dyaw)
+        val x = cur[0]; val z = cur[1] - dz
+        center = floatArrayOf(x * c - z * s, x * s + z * c)
+    }
 
     /** 目前的選擇是倒車打燈自動選的（換邊打燈可以改選；使用者點過就不動）。 */
     private var auto = false

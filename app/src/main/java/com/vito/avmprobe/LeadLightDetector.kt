@@ -54,12 +54,14 @@ class LeadLightDetector {
         }
         if (n == 0) return State(false, false, null)
         // 煞車：亮紅比例相對平常值
-        val score = red.toFloat() / n
+        // 煞車燈在畫面上常常只是幾個小紅點（實車：急煞也偵測不到）→ 用亮紅點的「數量」比平常多多少，
+        // 不用佔燈區的比例（以前要 4%，小紅點永遠不夠）
+        val score = red.toFloat()
         if (base.isNaN()) base = score
         if (!braking) {
-            if (score > base * 1.8f + 0.02f && score > 0.04f) braking = true
+            if (score >= base * 1.8f + 3f && score >= 4f) braking = true
             else base += 0.03f * (score - base)
-        } else if (score < base * 1.3f + 0.01f) braking = false
+        } else if (score < base * 1.3f + 1.5f) braking = false
 
         // 方向燈：琥珀色開關的時間點
         for (side in 0..1) {

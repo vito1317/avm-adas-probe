@@ -24,9 +24,35 @@ class SlotTracker {
         const val MATCH_M = 1.0f
         /** 輸出前合併：中心這麼近、方向一樣的兩格當成同一格（不然同一個位置會跳出兩格）。 */
         const val MERGE_M = 1.2f
+        /** 跑出偵測範圍的格子記多久、多遠（實車：找到停車格往前開，格子就消失了）。 */
+        const val MEM_MS = 30_000L
+        const val MEM_M = 25f
     }
 
     private val tracks = ArrayList<Track>()
+
+    /** 偵測看得到的範圍（自車座標，m）：格子跑出去就改用推算記住，不因為「沒看到」被刪掉。 */
+    var viewX = 6f
+    var viewZ = 7f
+
+    /**
+     * 自車動了：往前 [dz] 公尺、車頭往右轉 [dyaw] 弧度 → 記住的格子在自車座標裡反方向移動。
+     * 由車速＋方向盤推算（每次偵測前呼叫一次，給這段時間的累計）。
+     */
+    fun egoMotion(dz: Float, dyaw: Float) {
+        if (dz == 0f && dyaw == 0f) return
+        val c = kotlin.math.cos(dyaw); val s = kotlin.math.sin(dyaw)
+        for (t in tracks) for (k in 0 until 4) {
+            val x = t.p[k * 2]; val z = t.p[k * 2 + 1] - dz
+            t.p[k * 2] = x * c - z * s
+            t.p[k * 2 + 1] = x * s + z * c
+        }
+    }
+
+    private fun inView(p: FloatArray): Boolean {
+        val c = center(p)
+        return abs(c[0]) < viewX - 1f && abs(c[1]) < viewZ - 1.5f
+    }
 
     fun update(slots: List<ParkingSlot>, nowMs: Long): List<ParkingSlot> {
         for (t in tracks) t.hit = false
@@ -57,7 +83,10 @@ class SlotTracker {
         while (it.hasNext()) {
             val t = it.next()
             t.hist = ((t.hist shl 1) or if (t.hit) 1 else 0) and 0x1F
-            if (nowMs - t.seen > HOLD_MS) { it.remove(); continue }
+            // 還在看得到的範圍卻一直沒偵測到 → 照舊 HOLD_MS 後刪；跑出範圍的已出現格子 → 記 MEM_MS、MEM_M
+            val keep = if (t.shown && !inView(t.p)) nowMs - t.seen < MEM_MS && hypot(center(t.p)[0], center(t.p)[1]) < MEM_M
+                else nowMs - t.seen <= HOLD_MS
+            if (!keep) { it.remove(); continue }
             if (Integer.bitCount(t.hist) >= 2) t.shown = true
         }
         // 同一個位置只留一格：最近看到的（同時看到取信心高的）優先，其餘直接併掉
