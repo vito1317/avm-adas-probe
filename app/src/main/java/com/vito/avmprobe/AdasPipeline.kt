@@ -927,6 +927,8 @@ class AdasPipeline(
             // 提醒開雙閃（車機沒辦法自己開）：高速急煞、高速時前車打雙閃
             val leadHaz = leadLight?.takeIf { now - leadLightAt < 1500 }?.hazard == true
             hazardPrompt.update(now, vs.speedKmh, decel, CanVehicle.brake(), vs.turn, leadHaz)?.let { msgs.add(DriverAids.Msg(it.key, it.text, it.level)) }
+            // 停好車問要不要升窗、鎖車（遠端模組）
+            if (!Crumbs.off("cyremote")) CyRemote.checkParked(vs.speedKmh)
             // 車機 CAN 車況提醒：安全帶、手煞車、續航、水溫、電壓、結冰、遠光
             if (CanVehicle.fresh()) for (m in CanVehicle.alerts(CanVehicle.info, vs.speedKmh)) msgs.add(DriverAids.Msg(m.key, m.text, m.level))
             aidsDanger = msgs.any { it.level >= 2 }

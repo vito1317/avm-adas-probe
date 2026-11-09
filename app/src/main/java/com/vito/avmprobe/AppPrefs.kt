@@ -224,6 +224,21 @@ class AppPrefs(context: Context) {
         get() = sp.getBoolean("dashcamOn", true)
         set(v) = sp.edit().putBoolean("dashcamOn", v).apply()
 
+    /** 遠端模組（CY103）藍牙金鑰（32 個十六進位字）與模組位址（見 [CyRemote]）。 */
+    var cyKey: String
+        get() = sp.getString("cyKey", "") ?: ""
+        set(v) = sp.edit().putString("cyKey", v).apply()
+    var cyMac: String
+        get() = sp.getString("cyMac", "") ?: ""
+        set(v) = sp.edit().putString("cyMac", v).apply()
+    var cyName: String
+        get() = sp.getString("cyName", "") ?: ""
+        set(v) = sp.edit().putString("cyName", v).apply()
+    /** 停好車（P 檔＋手煞車）問要不要升窗、鎖車。 */
+    var cyParkPrompt: Boolean
+        get() = sp.getBoolean("cyParkPrompt", true)
+        set(v) = sp.edit().putBoolean("cyParkPrompt", v).apply()
+
     /** 藍牙氛圍燈連動（見 [AmbientLight]）。 */
     var ambientOn: Boolean
         get() = sp.getBoolean("ambientOn", false)

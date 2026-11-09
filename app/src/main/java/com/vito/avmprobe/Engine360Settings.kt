@@ -139,6 +139,51 @@ object Engine360Settings {
             col.addView(b)
         }
 
+        section("遠端模組（亮波紅月 CY103，藍牙；只有鎖車、開鎖、車窗、尾箱、空調，不能遠端發動）")
+        CyRemote.init(act, prefs)
+        val cyInfo = TextView(act).apply { textSize = 12f }
+        fun cyRefresh() {
+            cyInfo.text = "金鑰：" + (if (prefs.cyKey.length == 32) "已輸入（${prefs.cyKey.take(4)}…）" else "還沒輸入") +
+                "\n模組：" + (if (prefs.cyMac.isEmpty()) "還沒選" else "${prefs.cyName}（${prefs.cyMac}）") +
+                "\n狀態：" + CyRemote.status + (CyRemote.log().takeIf { it.isNotEmpty() }?.let { "\n" + it } ?: "")
+        }
+        cyRefresh()
+        col.addView(cyInfo)
+        col.addView(Button(act).apply {
+            text = "輸入藍牙金鑰（32 個字，0～9、A～F）"; isAllCaps = false
+            setOnClickListener {
+                val et = android.widget.EditText(act).apply {
+                    hint = "例：a4d3…（電腦小程式 --key 印出來的 btkey）"; setSingleLine(); typeface = Typeface.MONOSPACE
+                    inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS or android.text.InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
+                }
+                AlertDialog.Builder(act).setTitle("藍牙金鑰").setView(et).setPositiveButton("儲存") { _, _ ->
+                    val k = et.text.toString().trim().replace(" ", "")
+                    if (k.length == 32 && k.all { it.isDigit() || it.lowercaseChar() in 'a'..'f' }) { prefs.cyKey = k.lowercase(); cyRefresh() }
+                    else android.widget.Toast.makeText(act, "格式不對：要剛好 32 個字（0～9、a～f），你輸入了 ${k.length} 個", android.widget.Toast.LENGTH_LONG).show()
+                }.setNegativeButton("取消", null).show()
+            }
+        })
+        col.addView(Button(act).apply {
+            text = "選擇遠端模組（先關掉手機藍牙）"; isAllCaps = false
+            setOnClickListener { pickBle(act, setOf("ffe0", "fff0"), "6600") { mac, name -> prefs.cyMac = mac; prefs.cyName = name; cyRefresh() } }
+        })
+        for (row in listOf(listOf(CyProtocol.Cmd.LOCK, CyProtocol.Cmd.UNLOCK, CyProtocol.Cmd.WINDOW_UP, CyProtocol.Cmd.WINDOW_DOWN),
+                           listOf(CyProtocol.Cmd.TRUNK_OPEN, CyProtocol.Cmd.TRUNK_CLOSE, CyProtocol.Cmd.AC_ON, CyProtocol.Cmd.AC_OFF))) {
+            col.addView(LinearLayout(act).apply {
+                orientation = LinearLayout.HORIZONTAL
+                for (c in row) addView(Button(act).apply {
+                    text = c.label; isAllCaps = false
+                    setOnClickListener {
+                        AlertDialog.Builder(act).setMessage("確定要「${c.label}」？").setPositiveButton("確定") { _, _ ->
+                            CyRemote.send(c)
+                            for (d in listOf(1500L, 4000L, 8000L)) cyInfo.postDelayed({ cyRefresh() }, d)
+                        }.setNegativeButton("取消", null).show()
+                    }
+                })
+            })
+        }
+        check("停好車（P 檔＋手煞車）問要不要升窗、鎖車", { prefs.cyParkPrompt }) { prefs.cyParkPrompt = it }
+
         section("氛圍燈連動（藍牙，AmbientLight 那款）")
         check("啟用：危險紅色閃、偏離橘色、前車起步綠色（警示結束恢復原本顏色）", { prefs.ambientOn }) { v ->
             prefs.ambientOn = v; if (v) AmbientLight.start(act, prefs)
@@ -523,6 +568,40 @@ object Engine360Settings {
             }
             scanner!!.startScan(cb)
             h.postDelayed({ try { scanner?.stopScan(cb) } catch (_: Throwable) {}; if (dlg.isShowing) dlg.setTitle("選擇氛圍燈（★ = 很可能是；找到 ${items.size} 個）") }, 10_000)
+        } catch (t: Throwable) { dlg.setTitle("沒辦法掃描：$t") }
+    }
+
+    /** 掃描 10 秒列出藍牙裝置（廣播 [svc] 服務或名稱含 [nameHint] 的排前面標 ★），點一下選定。 */
+    private fun pickBle(act: Activity, svc: Set<String>, nameHint: String, done: (String, String) -> Unit) {
+        val items = ArrayList<String>()
+        val names = HashMap<String, String>()
+        val adapter = android.widget.ArrayAdapter<String>(act, android.R.layout.simple_list_item_1, ArrayList())
+        val list = android.widget.ListView(act).apply { this.adapter = adapter }
+        val h = android.os.Handler(android.os.Looper.getMainLooper())
+        var scanner: android.bluetooth.le.BluetoothLeScanner? = null
+        var cb: android.bluetooth.le.ScanCallback? = null
+        val dlg = AlertDialog.Builder(act).setTitle("掃描中…").setView(list).setNegativeButton("取消", null).show()
+        list.setOnItemClickListener { _, _, pos, _ -> val mac = items[pos]; dlg.dismiss(); done(mac, names[mac] ?: "") }
+        dlg.setOnDismissListener { try { scanner?.stopScan(cb) } catch (_: Throwable) {} }
+        try {
+            val ad = android.bluetooth.BluetoothAdapter.getDefaultAdapter()
+            if (ad == null || !ad.isEnabled) { dlg.setTitle("車機藍牙不能用"); return }
+            scanner = ad.bluetoothLeScanner ?: run { dlg.setTitle("車機藍牙不支援 BLE"); return }
+            cb = object : android.bluetooth.le.ScanCallback() {
+                override fun onScanResult(type: Int, r: android.bluetooth.le.ScanResult) {
+                    val mac = r.device.address
+                    if (mac in items) return
+                    val name = try { r.scanRecord?.deviceName ?: r.device.name } catch (_: Throwable) { null }
+                    val uu = r.scanRecord?.serviceUuids?.map { it.uuid.toString().substring(4, 8) } ?: emptyList()
+                    val likely = uu.any { it in svc } || (name?.contains(nameHint) == true)
+                    if (!likely && name == null) return
+                    names[mac] = name ?: ""
+                    val label = (if (likely) "★ " else "") + (name ?: "（沒有名稱）") + "\n" + mac + "  訊號 ${r.rssi}" + (if (uu.isNotEmpty()) "  服務 " + uu.joinToString() else "")
+                    h.post { if (likely) { items.add(0, mac); adapter.insert(label, 0) } else { items.add(mac); adapter.add(label) } }
+                }
+            }
+            scanner!!.startScan(cb)
+            h.postDelayed({ try { scanner?.stopScan(cb) } catch (_: Throwable) {}; if (dlg.isShowing) dlg.setTitle("點選（★ = 很可能是；找到 ${items.size} 個）") }, 10_000)
         } catch (t: Throwable) { dlg.setTitle("沒辦法掃描：$t") }
     }
 }

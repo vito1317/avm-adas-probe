@@ -444,6 +444,7 @@ object Engine360 {
             // 記憶體／GPU 撐不住會整個程式消失，連記錄都留不下——實車：ADAS 一啟動就閃退）
             stage(3_000, "讀原廠車速") { FactoryVehicle.start(app); if (!Crumbs.off("canspeed")) CanCarInfo.start(app) }
             stage(4_000, "道路彎度（陀螺儀／GPS）") { MotionCurvature.start(app) }
+            stage(6_500, "遠端模組") { CyRemote.init(app, prefs) }
             stage(6_000, "氛圍燈") { if (!Crumbs.off("ambient")) AmbientLight.start(app, prefs) }
             stage(5_000, "語音提示") { Speech.enabled = prefs.voiceAlerts; if (!Crumbs.off("tts")) Crumbs.step(Crumbs.MAIN, "tts") { Speech.init(app) } }
             stage(8_000, "偵測（相機畫面＋模型）") { if (FrameShareHub.listener == null) FrameShareHub.listener = { img -> onFrame(app, prefs, img) } }
@@ -646,6 +647,21 @@ object Engine360 {
     }
 
     fun pipelineParkedShot(): String? = pipeline?.lastParkedShot
+
+    /** 停好車（見 [CyRemote.checkParked]）：問要不要升窗、鎖車；要按確認才送。 */
+    fun askParkedRemote() {
+        main.post {
+            val act = activity?.get() ?: return@post
+            try {
+                Speech.say("停好了，要升窗鎖車嗎", urgent = false)
+                android.app.AlertDialog.Builder(act).setTitle("停好了")
+                    .setMessage("要用遠端模組升窗並鎖車嗎？")
+                    .setPositiveButton("升窗＋鎖車") { _, _ -> CyRemote.send(CyProtocol.Cmd.WINDOW_UP); CyRemote.send(CyProtocol.Cmd.LOCK) }
+                    .setNeutralButton("只升窗") { _, _ -> CyRemote.send(CyProtocol.Cmd.WINDOW_UP) }
+                    .setNegativeButton("不用", null).show()
+            } catch (t: Throwable) { log("停車提醒失敗：$t") }
+        }
+    }
 
     /** 設定裡「煞車訊號探測」：背景記錄 15 秒（使用者踩放煞車），[progress]／[done] 在主執行緒回報。 */
     fun probeBrake(ctx: Context, progress: (String) -> Unit, done: (String) -> Unit) {
