@@ -279,6 +279,8 @@ class AdasPipeline(
         }
         val now = SystemClock.elapsedRealtime()
         Crumbs.step(Crumbs.FRAME, "ego") { accumulateEgoMotion(now) }
+        // 推論緊貼車身的分隔線只在停著或 R／P 檔時（開動中會湊出假格子）
+        slotDet.allowInfer = vs.gear == 'R' || vs.gear == 'P' || (vs.speedKmh ?: 99f) < 3f
         if (prefs.camBev && !groundBusy) Crumbs.step(Crumbs.FRAME, "bev") { runBev(g, now) }
 
         emaProc = ema(emaProc, (SystemClock.elapsedRealtime() - t0).toFloat())

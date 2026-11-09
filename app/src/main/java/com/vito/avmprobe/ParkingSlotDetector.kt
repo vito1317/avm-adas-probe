@@ -35,6 +35,8 @@ class ParkingSlotDetector {
 
     /** 除錯用：設了就把配對與格子驗證每一步的淘汰原因丟出來（實車漏抓時逐步追）。平常是 null，沒有成本。 */
     var trace: ((String) -> Unit)? = null
+    /** 允許推論被自車蓋住的分隔線（自車真的停在格子裡才合理：停著或 R／P 檔；開動中會湊出假格子）。 */
+    @Volatile var allowInfer = true
 
     private fun tag(a: Int, b: Int): String {
         val la = lines[a]; val lb = lines[b]
@@ -1101,7 +1103,7 @@ class ParkingSlotDetector {
             egoAdj.add(i)
             trace?.invoke("ego 共用線 (%.2f,%.2f) 在自車%s %.2f m 外，延伸到整個車身".format(l.cx, l.cz, if (left) "左" else "右", out))
         }
-        inferHiddenEgoLine(ego)
+        if (allowInfer) inferHiddenEgoLine(ego)
     }
 
     /**
