@@ -103,6 +103,7 @@ class ParkingSlotDetector {
         private val COS_CROSS = cos(CROSS_MIN_DEG * (PI / 180.0))
         private val SIN_PERP = sin(PERP_TOL_DEG * (PI / 180.0))
         private val SIN_12 = sin(12.0 * (PI / 180.0))
+        private val SIN_25 = sin(25.0 * (PI / 180.0))
         private val SIN_MERGE = sin(MERGE_DEG * (PI / 180.0))
         private val COS_T = DoubleArray(180) { cos(it * PI / 180.0) }
         private val SIN_T = DoubleArray(180) { sin(it * PI / 180.0) }
@@ -116,6 +117,8 @@ class ParkingSlotDetector {
         var wT: DoubleArray? = null  // 線寬取樣（每條線算一次）：參數與半高寬
         /** 因為被自車擋住而補上的那段（線參數 t0, t1）；它的兩端不是真的線尾。 */
         var occ: DoubleArray? = null
+        /** 整條是推論補上的（被自車蓋住、看不到任何漆）：檢查線上有沒有漆的測試都跳過。 */
+        var virt = false
         var wW = DoubleArray(0)
         var wN = 0
     }
@@ -1098,6 +1101,45 @@ class ParkingSlotDetector {
             egoAdj.add(i)
             trace?.invoke("ego 共用線 (%.2f,%.2f) 在自車%s %.2f m 外，延伸到整個車身".format(l.cx, l.cz, if (left) "左" else "右", out))
         }
+        inferHiddenEgoLine(ego)
+    }
+
+    /**
+     * 自車停在格子裡，一側的分隔線看得到（[egoAdj]），另一側的分隔線緊貼車身、整條被自車的排除區蓋住
+     * （實車 t9：左線在車身外 5 cm，排除區多留 15 cm 就整條看不到 → 左邊那格空位、自己這格都認不出來）。
+     * 那一側再過去剛好一格寬（[PAIR_WMIN]～[PAIR_WMAX]）有平行線、中間沒有別的線 → 在排除區邊緣補一條虛擬分隔線。
+     */
+    private fun inferHiddenEgoLine(ego: FloatArray) {
+        if (egoAdj.size != 1) return
+        val adj = lines[egoAdj.first()]
+        val adjX = adj.cx + (0.0 - adj.cz) / adj.uz * adj.ux
+        val side = if (adjX < 0) 1.0 else -1.0               // 要補的那一側（跟看得到的那條相反）
+        val edge = if (side < 0) ego[0].toDouble() else ego[2].toDouble()
+        val xv = edge - side * 0.05                          // 排除區邊緣往內 5 cm（車身外緣附近）
+        var far: Line? = null
+        for (l in lines) {
+            if (abs(l.uz) < COS_EGO_PAR) continue
+            if (abs(l.ux * adj.uz - l.uz * adj.ux) > SIN_PAR_FAR) continue
+            val x0 = l.cx + (0.0 - l.cz) / l.uz * l.ux
+            val d = (x0 - xv) * side                          // 在補線位置外側多遠
+            if (d < 0.3) { if (d > -0.3) return; continue }   // 那一側其實有線（或線在車內側）→ 不用補
+            var tMin = Double.MAX_VALUE; var tMax = -Double.MAX_VALUE
+            var k = 0
+            while (k < l.pieces.size) { tMin = min(tMin, l.pieces[k]); tMax = max(tMax, l.pieces[k + 1]); k += 2 }
+            val zA = l.cz + tMin * l.uz; val zB = l.cz + tMax * l.uz
+            if (max(zA, zB) < ego[1] || min(zA, zB) > ego[3]) continue
+            if (d < PAIR_WMIN) return                          // 中間還有一條線：不是空的一格
+            if (d <= PAIR_WMAX && (far == null || d < abs((far.cx + (0.0 - far.cz) / far.uz * far.ux) - xv))) far = l
+        }
+        val f = far ?: return
+        val ux = adj.ux; val uz = adj.uz
+        val t0 = ego[1] / uz; val t1 = ego[3] / uz
+        val v = Line(xv, 0.0, ux, uz, doubleArrayOf(min(t0, t1), max(t0, t1)), f.n)
+        v.occ = v.pieces.copyOf()
+        v.virt = true
+        lines.add(v)
+        egoAdj.add(lines.size - 1)
+        trace?.invoke("補自車%s被擋住的分隔線 x=%.2f（對面那格的線在 (%.2f,%.2f)）".format(if (side < 0) "左" else "右", xv, f.cx, f.cz))
     }
 
     // ---------------------------------------------------------------- 3. 長邊對 → 橫邊 → 格子
@@ -1154,14 +1196,16 @@ class ParkingSlotDetector {
                 val lim = if ((if (pk == 0) a else b) in egoAdj && !nearEgoEnd) CROSS_REACH_EGO else CROSS_REACH
                 if (r - lim > reach - CROSS_REACH) reach = r - lim + CROSS_REACH
             }
-            if (reach > CROSS_REACH) continue
+            if (reach > CROSS_REACH) { tr?.invoke("pair ${tag(a, b)} 橫線 (%.2f,%.2f) 伸不到交點 %.2f".format(cl.cx, cl.cz, reach)); continue }
             val tA = (pA[0] - f.ox) * ux + (pA[1] - f.oz) * uz
             val tB = (pB[0] - f.ox) * ux + (pB[1] - f.oz) * uz
             val inA = minA - 1.0 <= tA && tA <= maxA + 1.0
             val inB = minB - 1.0 <= tB && tB <= maxB + 1.0
             // 至少一條長邊延伸到橫邊附近；另一條可能被車擋住
-            if (!(inA || inB) || tA < minA - LANE_LEN || tA > maxA + LANE_LEN || tB < minB - LANE_LEN || tB > maxB + LANE_LEN) continue
-            crossing(la, lb, f, pA, pB, tA, tB, ci)?.let { crs.add(it) }
+            if (!(inA || inB) || tA < minA - LANE_LEN || tA > maxA + LANE_LEN || tB < minB - LANE_LEN || tB > maxB + LANE_LEN) { tr?.invoke("pair ${tag(a, b)} 橫線 (%.2f,%.2f) 不在長邊範圍 tA=%.2f[%.2f,%.2f] tB=%.2f[%.2f,%.2f]".format(cl.cx, cl.cz, tA, minA, maxA, tB, minB, maxB)); continue }
+            val cr = crossing(la, lb, f, pA, pB, tA, tB, ci)
+            if (cr == null) tr?.invoke("pair ${tag(a, b)} 橫線 (%.2f,%.2f) crossing 不過".format(cl.cx, cl.cz))
+            cr?.let { crs.add(it) }
         }
         crs = ArrayList(crs.sortedWith(compareBy<Crossing>({ it.t }, { it.ci })))
         val ded = ArrayList<Crossing>()
@@ -1203,7 +1247,8 @@ class ParkingSlotDetector {
             if (c1.open && c1.sense < 0) continue
             val lA = c1.tA - c0.tA; val lB = c1.tB - c0.tB
             if (lA < 0.5 || lB < 0.5) continue
-            if (abs(c0.vx * c1.vz - c0.vz * c1.vx) > SIN_12) continue
+            // 有推論補上的線（自車停在格子裡）：後端常是路緣／草地邊，不是畫的線，角度放寬到 25°
+            if (abs(c0.vx * c1.vz - c0.vz * c1.vx) > (if (la.virt || lb.virt) SIN_25 else SIN_12)) continue
             cells.add(Cell(a, b, f, wdt, c0, c1, 1, 0.5 * (lA + lB), false, ""))
         }
         tr?.invoke("pair ${tag(a, b)} 兩端都有橫邊的格子 ${cells.size - nCells0} 個")
@@ -1308,8 +1353,8 @@ class ParkingSlotDetector {
         val rAm = ratioOn(f, la, tA - 0.15, tA - 1.2)
         val rBp = ratioOn(f, lb, tB + 0.15, tB + 1.2)
         val rBm = ratioOn(f, lb, tB - 0.15, tB - 1.2)
-        val okA = rAp >= 0.4 || rAm >= 0.4 || (rAp.isNaN() && rAm.isNaN())
-        val okB = rBp >= 0.4 || rBm >= 0.4 || (rBp.isNaN() && rBm.isNaN())
+        val okA = la.virt || rAp >= 0.4 || rAm >= 0.4 || (rAp.isNaN() && rAm.isNaN())
+        val okB = lb.virt || rBp >= 0.4 || rBm >= 0.4 || (rBp.isNaN() && rBm.isNaN())
         if (!(okA && okB)) return null
         if (wideCross(la, lb, lines[ci], pA, pB)) return null
         val km = if (!cA.isNaN() && !cB.isNaN()) (cA + cB) / 2.0 else if (!cA.isNaN()) cA else if (!cB.isNaN()) cB else 0.0
@@ -1328,8 +1373,10 @@ class ParkingSlotDetector {
         val tA1 = c1?.tA ?: (tA0 + s * c.len)      // 單側格：c.len = 深度（分隔線結束處，否則預設）
         val tB1 = c1?.tB ?: (tB0 + s * c.len)
         val len = 0.5 * (abs(tA1 - tA0) + abs(tB1 - tB0))
-        val perp = c0.perp && (c1 == null || c1.perp)
-        val ang = !c0.perp && (c1 == null || !c1.perp)
+        // 有推論補上的線：一端是垂直畫線、另一端是路緣（斜）也當垂直格
+        val virtPair = lines[c.a].virt || lines[c.b].virt
+        val perp = (c0.perp && (c1 == null || c1.perp)) || (virtPair && (c0.perp || c1?.perp == true))
+        val ang = !perp && !c0.perp && (c1 == null || !c1.perp)
         val nOpen = (if (c0.open) 1 else 0) + (if (c1 != null && c1.open) 1 else 0)
         val kinds = StringBuilder()
         if (c.one) {

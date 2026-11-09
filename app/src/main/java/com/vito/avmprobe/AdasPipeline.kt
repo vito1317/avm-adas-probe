@@ -357,8 +357,9 @@ class AdasPipeline(
         )
         val t = tl
         val tlFresh = t != null && now - t.at < TL_TTL_MS
+        // 倒車時自車往後退，前車看起來像往前開走 → 誤報「前車已起步」（實車）。R 檔時不跑，車速當成在動讓它歸零
         startState = startAssist.update(
-            now, vs.speedKmh,
+            now, if (vs.gear == 'R') 99f else vs.speedKmh,
             currentObjects(now).map { StartAssist.Obj(it.t, it.x, it.z) },
             if (tlFresh) t!!.s else null, if (tlFresh) t!!.c else 0f
         )
@@ -803,9 +804,21 @@ class AdasPipeline(
                 Crumbs.at(Crumbs.GROUND, "slots")
                 val sb = slotBuf.takeIf { !Crumbs.off("slotbev") }
                 val sg = slotGeo
-                slots = if (sb != null && sg != null)
-                    slotTrack.update(slotDet.detect(sb, sg.bev.width, sg.bev.height, sg.bev.mpp.toFloat(), sg.bev.originX.toFloat(), sg.bev.originY.toFloat(), listOf(ego) + wheelZones(), vehicles), now)
-                else slotTrack.update(slotDet.detect(buf, bw, bh, mpp, cx, cy, listOf(ego) + wheelZones(), vehicles), now)
+                // 近的用一般俯視圖（解析度高、在鏡頭清楚的範圍，準）；大範圍俯視圖只補一般俯視圖範圍外的格子
+                //（實車：全部改用大範圍的之後準確率變差——每格 5 cm、又用到魚眼邊緣模糊的地方）
+                val near = slotDet.detect(buf, bw, bh, mpp, cx, cy, listOf(ego) + wheelZones(), vehicles)
+                val far = if (sb != null && sg != null) {
+                    val nb = g.bev
+                    slotDet.detect(sb, sg.bev.width, sg.bev.height, sg.bev.mpp.toFloat(), sg.bev.originX.toFloat(), sg.bev.originY.toFloat(), listOf(ego) + wheelZones(), vehicles)
+                        .filter { f ->
+                            val fx = (f.p[0] + f.p[2] + f.p[4] + f.p[6]) / 4f; val fz = (f.p[1] + f.p[3] + f.p[5] + f.p[7]) / 4f
+                            val outside = fx < nb.xMin + 1.0 || fx > nb.xMax - 1.0 || fz < nb.zMin + 1.0 || fz > nb.zMax - 1.0
+                            outside && near.none { n ->
+                                hypot((n.p[0] + n.p[2] + n.p[4] + n.p[6]) / 4f - fx, (n.p[1] + n.p[3] + n.p[5] + n.p[7]) / 4f - fz) < 1.5f
+                            }
+                        }
+                } else emptyList()
+                slots = slotTrack.update(near + far, now)
                 slotsAt = now
                 Crumbs.at(Crumbs.GROUND, "road")
                 if (mode == AppPrefs.GROUND_VIRTUAL) {
