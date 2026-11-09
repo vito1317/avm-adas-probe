@@ -496,15 +496,19 @@ object Engine360Settings {
         val h = android.os.Handler(android.os.Looper.getMainLooper())
         var cb: android.bluetooth.le.ScanCallback? = null
         var scanner: android.bluetooth.le.BluetoothLeScanner? = null
+        val diag = try { BleDiag.summary(act) } catch (t: Throwable) { "檢查失敗：$t" }
+        val classic = ArrayList<String>()
         fun render(head: String) {
-            tv.text = head + "\n\n" + (if (found.isEmpty()) "（還沒找到）" else found.values.joinToString("\n\n"))
+            tv.text = head + "\n\n" + diag + "\n\n" + (if (found.isEmpty()) "BLE：（還沒找到）" else found.values.joinToString("\n\n")) +
+                (if (classic.isEmpty()) "\n\n傳統藍牙：（還沒找到）" else "\n\n" + classic.joinToString("\n"))
         }
+        val stopClassic = BleDiag.classicDiscovery(act) { line -> h.post { if (line !in classic) { classic.add(line); render("掃描中…") } } }
         val dlg = AlertDialog.Builder(act).setTitle("藍牙裝置").setView(sv).setPositiveButton("關閉", null).show()
         try {
             val ad = android.bluetooth.BluetoothAdapter.getDefaultAdapter()
             when {
-                ad == null -> { tv.text = "車機的 Android 沒有藍牙介面（藍牙可能是另一顆只管通話的模組）→ 沒辦法控制氛圍燈"; return }
-                !ad.isEnabled -> { tv.text = "車機的 Android 藍牙是關的（狀態 ${ad.state}）。有些車機的藍牙由通話模組管，Android 這邊打不開"; return }
+                ad == null -> { tv.text = "車機的 Android 沒有藍牙介面（藍牙可能是另一顆只管通話的模組）→ 沒辦法控制氛圍燈\n\n$diag"; return }
+                !ad.isEnabled -> { tv.text = "車機的 Android 藍牙是關的（狀態 ${ad.state}）。有些車機的藍牙由通話模組管，Android 這邊打不開\n\n$diag"; return }
             }
             scanner = ad!!.bluetoothLeScanner
             if (scanner == null) { tv.text = "車機藍牙不支援 BLE 掃描"; return }
@@ -520,13 +524,15 @@ object Engine360Settings {
                 }
                 override fun onScanFailed(errorCode: Int) { h.post { tv.text = "BLE 掃描失敗（錯誤碼 $errorCode）" } }
             }
-            scanner!!.startScan(cb)
+            BleDiag.ensureLocation(act); scanner!!.startScan(null, BleDiag.lowLatency(), cb)
             h.postDelayed({
                 try { scanner?.stopScan(cb) } catch (_: Throwable) {}
-                render("掃描完成：找到 ${found.size} 個（訊號越大越近；請截圖給開發者）")
+                stopClassic()
+                render("掃描完成：BLE ${found.size} 個、傳統 ${classic.size} 個（請截圖給開發者）")
             }, 15_000)
-            dlg.setOnDismissListener { try { scanner?.stopScan(cb) } catch (_: Throwable) {} }
-        } catch (t: Throwable) { tv.text = "沒辦法掃描：$t" }
+            dlg.setOnDismissListener { try { scanner?.stopScan(cb) } catch (_: Throwable) {}; stopClassic() }
+            render("掃描中…")
+        } catch (t: Throwable) { tv.text = "沒辦法掃描：$t\n\n$diag" }
     }
 
     /** 掃描 10 秒，列出像氛圍燈的藍牙裝置（廣播 FFE0／AF30／FFF0／FEE7 服務，或有名稱的），點一下選定。 */
@@ -566,7 +572,7 @@ object Engine360Settings {
                     }
                 }
             }
-            scanner!!.startScan(cb)
+            BleDiag.ensureLocation(act); scanner!!.startScan(null, BleDiag.lowLatency(), cb)
             h.postDelayed({ try { scanner?.stopScan(cb) } catch (_: Throwable) {}; if (dlg.isShowing) dlg.setTitle("選擇氛圍燈（★ = 很可能是；找到 ${items.size} 個）") }, 10_000)
         } catch (t: Throwable) { dlg.setTitle("沒辦法掃描：$t") }
     }
@@ -600,7 +606,7 @@ object Engine360Settings {
                     h.post { if (likely) { items.add(0, mac); adapter.insert(label, 0) } else { items.add(mac); adapter.add(label) } }
                 }
             }
-            scanner!!.startScan(cb)
+            BleDiag.ensureLocation(act); scanner!!.startScan(null, BleDiag.lowLatency(), cb)
             h.postDelayed({ try { scanner?.stopScan(cb) } catch (_: Throwable) {}; if (dlg.isShowing) dlg.setTitle("點選（★ = 很可能是；找到 ${items.size} 個）") }, 10_000)
         } catch (t: Throwable) { dlg.setTitle("沒辦法掃描：$t") }
     }
