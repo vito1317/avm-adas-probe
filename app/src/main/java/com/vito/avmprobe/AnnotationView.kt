@@ -284,7 +284,7 @@ class AnnotationView(context: Context) : View(context) {
             val x = o.optDouble("x").toFloat(); val z = o.optDouble("z").toFloat()
             val hl = HALF[t] ?: floatArrayOf(0.5f, 0.5f)
             val h = when (t) { "ped" -> 1.7f; "bus", "truck" -> 3.0f; "van" -> 2.0f; "cone" -> 0.7f; "car" -> 1.5f; else -> 1.4f }
-            val clr = if (o.has("d")) o.optDouble("d").toFloat() else clearance(x, z)
+            val clr = boxGap(o)
             val col = when {
                 clr < CRIT -> Color.rgb(255, 60, 50)
                 clr < WARN -> Color.rgb(255, 150, 40)
@@ -377,7 +377,7 @@ class AnnotationView(context: Context) : View(context) {
             val t = o.optString("t")
             val x = o.optDouble("x").toFloat(); val z = o.optDouble("z").toFloat()
             val hl = HALF[t] ?: floatArrayOf(0.5f, 0.5f)
-            val clr = if (o.has("d")) o.optDouble("d").toFloat() else clearance(x, z)
+            val clr = boxGap(o)
             val col = when {
                 clr < CRIT -> Color.rgb(255, 60, 50)
                 clr < WARN -> Color.rgb(255, 150, 40)
@@ -599,6 +599,20 @@ class AnnotationView(context: Context) : View(context) {
         c.restore()
     }
 
+    /**
+     * 畫出來的那個框到自車外框的距離（m）：數字跟畫面上看到的框一致。
+     * 以前拿中心算（多算對方半個車身，快撞到還顯示 3 m），後來拿偵測估的「最近點」（旁邊車道的車常常估得太近）都不準。
+     * 框會依車頭方向轉，用轉過之後在 x、z 方向的半寬。
+     */
+    private fun boxGap(o: JSONObject): Float {
+        val x = o.optDouble("x").toFloat(); val z = o.optDouble("z").toFloat()
+        val hl = HALF[o.optString("t")] ?: floatArrayOf(0.5f, 0.5f)
+        val yaw = if (o.has("yaw")) o.optDouble("yaw").toFloat() else 0f
+        val c = abs(kotlin.math.cos(yaw)); val s = abs(kotlin.math.sin(yaw))
+        val hx = hl[0] * c + hl[1] * s; val hz = hl[0] * s + hl[1] * c
+        return hypot(max(abs(x) - AnnotationMapper.EGO_HW - hx, 0f), max(abs(z) - AnnotationMapper.EGO_HL - hz, 0f))
+    }
+
     private fun clearance(x: Float, z: Float): Float =
         hypot(max(abs(x) - AnnotationMapper.EGO_HW, 0f), max(abs(z) - AnnotationMapper.EGO_HL, 0f))
 
@@ -631,7 +645,7 @@ class AnnotationView(context: Context) : View(context) {
         var minClr = Float.MAX_VALUE
         p.optJSONArray("objs")?.let { a ->
             for (i in 0 until a.length()) a.optJSONObject(i)?.let {
-                minClr = minOf(minClr, if (it.has("d")) it.optDouble("d").toFloat() else clearance(it.optDouble("x").toFloat(), it.optDouble("z").toFloat()))
+                minClr = minOf(minClr, boxGap(it))
             }
         }
         if (minClr < CRIT) msgs.add("⚠ 距離過近" to Color.rgb(220, 40, 40))
