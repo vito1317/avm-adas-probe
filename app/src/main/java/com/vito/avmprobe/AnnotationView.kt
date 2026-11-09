@@ -284,7 +284,7 @@ class AnnotationView(context: Context) : View(context) {
             val x = o.optDouble("x").toFloat(); val z = o.optDouble("z").toFloat()
             val hl = HALF[t] ?: floatArrayOf(0.5f, 0.5f)
             val h = when (t) { "ped" -> 1.7f; "bus", "truck" -> 3.0f; "van" -> 2.0f; "cone" -> 0.7f; "car" -> 1.5f; else -> 1.4f }
-            val clr = clearance(x, z)
+            val clr = if (o.has("d")) o.optDouble("d").toFloat() else clearance(x, z)
             val col = when {
                 clr < CRIT -> Color.rgb(255, 60, 50)
                 clr < WARN -> Color.rgb(255, 150, 40)
@@ -377,7 +377,7 @@ class AnnotationView(context: Context) : View(context) {
             val t = o.optString("t")
             val x = o.optDouble("x").toFloat(); val z = o.optDouble("z").toFloat()
             val hl = HALF[t] ?: floatArrayOf(0.5f, 0.5f)
-            val clr = clearance(x, z)
+            val clr = if (o.has("d")) o.optDouble("d").toFloat() else clearance(x, z)
             val col = when {
                 clr < CRIT -> Color.rgb(255, 60, 50)
                 clr < WARN -> Color.rgb(255, 150, 40)
@@ -618,7 +618,7 @@ class AnnotationView(context: Context) : View(context) {
         var minClr = Float.MAX_VALUE
         p.optJSONArray("objs")?.let { a ->
             for (i in 0 until a.length()) a.optJSONObject(i)?.let {
-                minClr = minOf(minClr, clearance(it.optDouble("x").toFloat(), it.optDouble("z").toFloat()))
+                minClr = minOf(minClr, if (it.has("d")) it.optDouble("d").toFloat() else clearance(it.optDouble("x").toFloat(), it.optDouble("z").toFloat()))
             }
         }
         if (minClr < CRIT) msgs.add("⚠ 距離過近" to Color.rgb(220, 40, 40))
@@ -666,7 +666,10 @@ class AnnotationView(context: Context) : View(context) {
         p.optJSONObject("lc")?.let { lc ->
             lc.optString("ban").takeIf { it.isNotEmpty() }?.let { msgs.add(0, it to Color.rgb(210, 30, 30)) }
             if (lc.has("rem") && !lc.has("sh"))
-                msgs.add("變道中：離目標車道中心 %.1f m（%s）".format(lc.optDouble("rem"), lc.optString("src")) to Color.rgb(90, 160, 230))
+                msgs.add(("變道中：離目標車道中心 %.1f m（%s）· 已橫移 %.1f m · 方向盤 %s · 車速 %s").format(
+                    lc.optDouble("rem"), lc.optString("src"), lc.optDouble("moved"),
+                    if (lc.isNull("st")) "—" else "%.0f°".format(lc.optDouble("st")),
+                    if (lc.isNull("v")) "—" else "%.0f".format(lc.optDouble("v"))) to Color.rgb(90, 160, 230))
             if (lc.optInt("car") >= 1) {
                 val left = lc.optInt("dir") < 0
                 msgs.add(0, (if (left) "◀ 左側有車 暫緩變道" else "右側有車 暫緩變道 ▶") to Color.rgb(220, 30, 30))

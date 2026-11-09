@@ -229,6 +229,11 @@ class AppPrefs(context: Context) {
         get() = sp.getInt("dashcamQuota", 8)
         set(v) = sp.edit().putInt("dashcamQuota", v).apply()
 
+    /** 原廠方向盤（前輪角）的正負號：+1 = 正值右轉、-1 = 正值左轉（行駛中跟畫面量的轉向比對自動學）。 */
+    var factorySteerSign: Int
+        get() = sp.getInt("facSteerSign", 1)
+        set(v) = sp.edit().putInt("facSteerSign", v).apply()
+
     /** 車道偏移／壓線提醒的最低車速（km/h）。 */
     var ldwMinKmh: Int
         get() = sp.getInt("ldwMinKmh", 55)

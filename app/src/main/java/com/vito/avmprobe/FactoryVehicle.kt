@@ -27,6 +27,14 @@ object FactoryVehicle {
     @Volatile private var wheelLive = false
     @Volatile private var wheelAt = 0L
 
+    /**
+     * 正負號：從原廠腳本推論正值右轉，但原廠程式傳給腳本前可能有反過來（實車：往右變道，推算離目標越來越遠）。
+     * 行駛中拿方向盤跟前方畫面量的車頭轉向（不靠方向盤）比對，一致的次數多就維持、相反的多就翻轉，學到的記住。
+     */
+    @Volatile var steerSign = 1; private set
+    private var signVotes = 0
+    private var prefs: AppPrefs? = null
+
     /** 最近 1 秒內有原廠的方向盤角度、而且確定有接 CAN。 */
     fun steerFresh(): Boolean = wheelLive && SystemClock.elapsedRealtime() - wheelAt < 1000
     @Volatile private var running = false
@@ -44,6 +52,7 @@ object FactoryVehicle {
     fun start(ctx: android.content.Context? = null) {
         if (running) return
         running = true
+        ctx?.let { c -> prefs = AppPrefs(c.applicationContext); steerSign = prefs!!.factorySteerSign.let { if (it == -1) -1 else 1 } }
         ctx?.let { startGps(it) }
         Thread({
             // 原廠剛啟動時不碰它的物件
@@ -86,6 +95,21 @@ object FactoryVehicle {
         } catch (t: Throwable) { Engine360.log("GPS 車速不能用：$t") }
     }
 
+    /** 方向盤（原始值）跟畫面量的車頭轉向比對，決定正負號。 */
+    private fun learnSign(raw: Float?, kmh: Float) {
+        if (raw == null || kmh < 15f || kotlin.math.abs(raw) < 1.0f) return
+        val yaw = MotionCurvature.visualYawRate() ?: return
+        if (kotlin.math.abs(yaw) < 0.03) return
+        signVotes += if ((raw > 0) == (yaw > 0)) 1 else -1
+        signVotes = signVotes.coerceIn(-30, 30)
+        val want = if (signVotes >= 15) 1 else if (signVotes <= -15) -1 else steerSign
+        if (want != steerSign) {
+            steerSign = want
+            prefs?.factorySteerSign = want
+            Engine360.log("原廠方向盤正負號自動改為 ${if (want > 0) "正值右轉" else "正值左轉"}")
+        }
+    }
+
     private var lastLog = 0L
 
     private fun pollOnce() {
@@ -99,7 +123,9 @@ object FactoryVehicle {
         val kmh = (f("kmPerHour") as? Float) ?: -1f
         val left = f("leftSignalState") as? Boolean
         val right = f("rightSignalState") as? Boolean
-        val wheel = f("wheelDegree") as? Float
+        val wheelRaw = f("wheelDegree") as? Float
+        learnSign(wheelRaw, kmh)
+        val wheel = wheelRaw?.times(steerSign)
         this.wheel = wheel
         if (wheel != null) {
             if (kotlin.math.abs(wheel) > 0.3f) wheelLive = true
@@ -125,7 +151,7 @@ object FactoryVehicle {
             lastValidAt = now
             VehicleBus.signals.reportSpeed(useClean)
         }
-        status = "原廠車速 ${if (kmh >= 0f) "%.0f km/h".format(kmh) else "—"}；GPS ${if (gps >= 0f) "%.0f km/h".format(gps) else "—"}；方向燈 ${if (left == true) "左" else ""}${if (right == true) "右" else ""}${if (left != true && right != true) "無" else ""}；方向盤 ${wheel?.let { "%.1f".format(it) } ?: "—"}；檔位碼 ${gear ?: "—"}"
+        status = "原廠車速 ${if (kmh >= 0f) "%.0f km/h".format(kmh) else "—"}；GPS ${if (gps >= 0f) "%.0f km/h".format(gps) else "—"}；方向燈 ${if (left == true) "左" else ""}${if (right == true) "右" else ""}${if (left != true && right != true) "無" else ""}；前輪角 ${wheel?.let { "%.1f°".format(it) } ?: "—"}（${if (steerSign > 0) "正值右轉" else "正值左轉"}）；檔位碼 ${gear ?: "—"}"
         if (now - lastLog > 30_000) { lastLog = now; Engine360.log(status) }
     }
 }

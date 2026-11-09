@@ -796,7 +796,9 @@ class AdasPipeline(
                 if (!tr.confirmed || tr.t != o.t || tr.id in used) continue
                 val d = hypot(tr.x - o.x, tr.z - o.z); if (d < bd) { bd = d; best = tr }
             }
-            val j = JSONObject().put("t", o.t).put("x", r2(o.x)).put("z", r2(o.z)).put("c", r2(o.c))
+            // d：最靠近自車那一點到自車外框的淨距（偵測時算的，見 finishWorld）。x／z 是物件中心，
+            // 拿中心算距離會多算對方半個車身（實車：快撞到了還顯示 3 m，位置標註是對的）
+            val j = JSONObject().put("t", o.t).put("x", r2(o.x)).put("z", r2(o.z)).put("c", r2(o.c)).put("d", r2(o.clr))
             best?.let { tr ->
                 used.add(tr.id)
                 j.put("id", tr.id).put("vx", r2(tr.vx)).put("vz", r2(tr.vz))
@@ -914,6 +916,8 @@ class AdasPipeline(
             val remain = lcTarget ?: odo?.first?.toFloat()
             p.put("lc", JSONObject().put("pts", pts).put("dir", dir).put("w", r2(w)).put("car", sideLv)
                 .put("src", src).apply { remain?.let { put("rem", r2(kotlin.math.abs(it))) } }
+                .put("moved", r2(lcOdo.y.toFloat())).put("st", steer?.let { r2(it) } ?: JSONObject.NULL)
+                .put("v", vs.speedKmh?.let { r2(it) } ?: JSONObject.NULL)
                 .apply { curveK?.takeIf { kotlin.math.abs(it) >= CurveBend.MIN_K }?.let { put("k", (it * 1e5).toLong() / 1e5) } }
                 .put("ok", !danger && ban == null && (st?.pathOk ?: true))
                 .apply { ban?.let { put("ban", LaneChangeRule.label(it)) } })

@@ -58,6 +58,8 @@ object MotionCurvature {
             lastBearing = deg; lastBearingAt = now
         }
 
+        fun visualOnly(now: Long): Double? = if (now - visualAt < 800) visualRate else null
+
         // GPS 不用（使用者：車上的 GPS 超級不準）：只用陀螺儀與前方畫面
         fun yawRateRight(now: Long): Double? = when {
             now - yawAt < 500 -> -yaw
@@ -112,6 +114,9 @@ object MotionCurvature {
     }
 
     fun curvature(speedKmh: Float?): Double? = synchronized(core) { core.curvature(SystemClock.elapsedRealtime(), speedKmh) }
+
+    /** 只看前方畫面量的轉向（不靠方向盤、不靠陀螺儀）：拿來校正原廠方向盤的正負號。 */
+    fun visualYawRate(): Double? = synchronized(core) { core.visualOnly(SystemClock.elapsedRealtime()) }
 
     /** 目前的車頭轉向角速度（rad/s，+ = 往右）；沒有新資料回 null。陀螺儀 → 前方畫面 → GPS。 */
     fun yawRate(): Double? = synchronized(core) { core.yawRateRight(SystemClock.elapsedRealtime()) }
