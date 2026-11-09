@@ -160,7 +160,11 @@ object Dashcam {
         sb.append(if (spd != null) "%.0f km/h".format(spd) else "-- km/h")
         when (veh?.optString("turn")) { "L" -> sb.append("  左轉燈"); "R" -> sb.append("  右轉燈"); "H" -> sb.append("  雙黃燈") }
         if (veh?.optString("gear") == "R") sb.append("  倒車")
-        if (braking) sb.append("  煞車(推估)")
+        if (braking) sb.append(if (brakeReal) "  煞車" else "  煞車(推估)")
+        CanVehicle.info.takeIf { CanVehicle.fresh() }?.let { i ->
+            i.rpm?.let { sb.append("  ${it}rpm") }; i.gear?.let { if (it != 'R') sb.append("  $it 檔") }
+            if (i.highBeam == true) sb.append("  遠光"); if (i.fogFront == true || i.fogRear == true) sb.append("  霧燈")
+        }
         p?.optJSONArray("objs")?.let { a ->
             var best = Float.MAX_VALUE; var bt = ""
             for (i in 0 until a.length()) a.optJSONObject(i)?.let {
@@ -179,7 +183,12 @@ object Dashcam {
 
     // ───────────────────────── 煞車推估、撞擊 ─────────────────────────
 
+    @Volatile private var brakeReal = false
+
     private fun updateBrake() {
+        // 車機 CAN 有真的煞車訊號就用它
+        CanVehicle.brake()?.let { braking = it; brakeReal = true; return }
+        brakeReal = false
         val v = VehicleBus.signals.snapshot().speedKmh ?: run { braking = false; return }
         val now = SystemClock.elapsedRealtime()
         if (spdN > 0 && spdV[(spdN - 1) % 16] == v / 3.6f && now - spdT[(spdN - 1) % 16] < 300) return

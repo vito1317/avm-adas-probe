@@ -378,11 +378,10 @@ class AdasPipeline(
 
     /** 每輪偵測後判斷要不要響（各種警示剛出現才響、各自冷卻，見 [AlertSounder]）。 */
     private fun beepIfNeeded(now: Long) {
-        if (!prefs.alertSound) return
         val vs = VehicleBus.signals.snapshot()
         val st = startState; val ld = ldwState; val l = lcaState
         val lcaFresh = l != null && now - tracksAt < OBJ_TTL_MS
-        sounder.update(now, AlertSounder.State(
+        val state = AlertSounder.State(
             start = st != null && (st.lead || st.green),
             ldw = (ld != null && (ld.any || ld.straddle != null)) || noLaneChange,
             lcaDanger = (lcaFresh && (l!!.L >= 2 || l.R >= 2)) || laneChangeBlocked ||
@@ -392,7 +391,14 @@ class AdasPipeline(
                 // 只算行進路線上的（前進看前方、倒車看後方），旁邊並排的不叫
                 it.clr < 0.5f && abs(it.x) < AnnotationMapper.EGO_HW + 0.4f && (if (vs.gear == 'R') it.z < 0f else it.z > 0f)
             }
-        ))
+        )
+        // 氛圍燈連動：危險紅閃（那一側有車只亮那側）、偏離橘、起步綠
+        if (!Crumbs.off("ambient")) try {
+            val side = if (lcaFresh && l!!.L >= 2) 'L' else if (lcaFresh && l!!.R >= 2) 'R' else cutIn?.takeIf { now - cutInAt < 1500 }?.first
+            AmbientLight.onAlerts(state.lcaDanger || state.turnHit || state.collision, side, state.ldw, state.start)
+        } catch (t: Throwable) { Log.w(TAG, "ambient", t) }
+        if (!prefs.alertSound) return
+        sounder.update(now, state)
     }
 
     /** 用媒體音量（車機的通知音量常常是關的）。 */
@@ -918,6 +924,8 @@ class AdasPipeline(
                 (if (now - obstaclesAt < OBS_TTL_MS) obstacles.map { ParkingAids.Thing(it.x, it.z, it.w / 2f) } else emptyList())
             parkAids.narrowGap(things, vs.speedKmh, vs.gear)?.let { msgs.add(DriverAids.Msg(it.key, it.text, it.level)) }
             if (parkAids.shouldSnapshot(now, vs.speedKmh, vs.gear) && !Crumbs.off("parkshot")) { Crumbs.at(Crumbs.FRAME, "parkshot"); saveParkedSnapshot() }
+            // 車機 CAN 車況提醒：安全帶、手煞車、續航、水溫、電壓、結冰、遠光
+            if (CanVehicle.fresh()) for (m in CanVehicle.alerts(CanVehicle.info, vs.speedKmh)) msgs.add(DriverAids.Msg(m.key, m.text, m.level))
             aidsDanger = msgs.any { it.level >= 2 }
             // 事件自動存影片：危險警示、太近、急減速 → 鎖定行車記錄器這段和上一段（一分鐘內最多一次）
             val collide = aidObjs.any { it.clr < 0.5f } && (vs.speedKmh ?: 0f) > 5f

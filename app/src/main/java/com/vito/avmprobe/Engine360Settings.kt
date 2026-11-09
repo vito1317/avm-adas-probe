@@ -44,7 +44,7 @@ object Engine360Settings {
         col.addView(TextView(act).apply {
             textSize = 12f
             val v = VehicleBus.signals.snapshot()
-            text = "車輛訊號：" + FactoryVehicle.status + "\n車機 CAN：" + CanCarInfo.status + "\n目前使用的車速：" + (v.speedKmh?.let { "%.0f km/h".format(it) } ?: "沒有") +
+            text = "車輛訊號：" + FactoryVehicle.status + "\n車機 CAN：" + CanCarInfo.status + "\n車況：" + CanVehicle.summary() + "\n目前使用的車速：" + (v.speedKmh?.let { "%.0f km/h".format(it) } ?: "沒有") +
                 "\n道路彎度來源：" + MotionCurvature.source + (MotionCurvature.curvature(v.speedKmh)?.let { k ->
                     if (kotlin.math.abs(k) < 1e-3) "（直行）" else "（目前%s彎，半徑約 %.0f m）".format(if (k > 0) "右" else "左", 1 / kotlin.math.abs(k)) } ?: "")
         })
@@ -138,6 +138,34 @@ object Engine360Settings {
             refresh()
             col.addView(b)
         }
+
+        section("氛圍燈連動（藍牙，AmbientLight 那款）")
+        check("啟用：危險紅色閃、偏離橘色、前車起步綠色（警示結束恢復原本顏色）", { prefs.ambientOn }) { v ->
+            prefs.ambientOn = v; if (v) AmbientLight.start(act, prefs)
+        }
+        val ambStatus = TextView(act).apply { textSize = 12f; text = "氛圍燈：" + (if (prefs.ambientMac.isEmpty()) "還沒選" else prefs.ambientName + "（" + prefs.ambientMac + "）") + "\n狀態：" + AmbientLight.status }
+        col.addView(ambStatus)
+        col.addView(Button(act).apply {
+            text = "選擇氛圍燈（先把手機 App 斷開）"; isAllCaps = false
+            setOnClickListener { pickAmbient(act, prefs) { ambStatus.text = "氛圍燈：${prefs.ambientName}（${prefs.ambientMac}）\n狀態：" + AmbientLight.status } }
+        })
+        val zoneNames = arrayOf("不分側（全部一起亮）", "第 1 組在左邊", "第 2 組在左邊")
+        col.addView(Button(act).apply {
+            text = "左右側：" + zoneNames[prefs.ambientLeftZone]; isAllCaps = false
+            setOnClickListener { prefs.ambientLeftZone = (prefs.ambientLeftZone + 1) % 3; text = "左右側：" + zoneNames[prefs.ambientLeftZone] }
+        })
+        col.addView(LinearLayout(act).apply {
+            orientation = LinearLayout.HORIZONTAL
+            fun b(t: String, f: () -> Unit) = addView(Button(act).apply { text = t; isAllCaps = false; setOnClickListener { f(); ambStatus.postDelayed({ ambStatus.text = "狀態：" + AmbientLight.status }, 500) } })
+            b("測試全部（紅）") { AmbientLight.test(AmbientProtocol.ZONE_ALL, AmbientRules.RED) }
+            b("測試第 1 組（藍）") { AmbientLight.test(AmbientProtocol.ZONE_1, 0x0040FF) }
+            b("測試第 2 組（綠）") { AmbientLight.test(AmbientProtocol.ZONE_2, AmbientRules.GREEN) }
+        })
+        col.addView(Button(act).apply {
+            var paused = false
+            text = "暫時斷開（讓手機 App 調燈）"; isAllCaps = false
+            setOnClickListener { paused = !paused; AmbientLight.pause(paused); text = if (paused) "重新連上氛圍燈" else "暫時斷開（讓手機 App 調燈）" }
+        })
 
         section("行車記錄器（發動就循環錄影：合成 360 畫面＋辨識結果＋車速／方向燈／煞車）")
         col.addView(TextView(act).apply {
@@ -454,5 +482,47 @@ object Engine360Settings {
             }, 15_000)
             dlg.setOnDismissListener { try { scanner?.stopScan(cb) } catch (_: Throwable) {} }
         } catch (t: Throwable) { tv.text = "沒辦法掃描：$t" }
+    }
+
+    /** 掃描 10 秒，列出像氛圍燈的藍牙裝置（廣播 FFE0／AF30／FFF0／FEE7 服務，或有名稱的），點一下選定。 */
+    private fun pickAmbient(act: Activity, prefs: AppPrefs, done: () -> Unit) {
+        val known = setOf("ffe0", "af30", "fff0", "fee7")
+        val items = ArrayList<Pair<String, String>>()   // 位址, 顯示
+        val names = HashMap<String, String>()
+        val adapter = android.widget.ArrayAdapter<String>(act, android.R.layout.simple_list_item_1, ArrayList())
+        val list = android.widget.ListView(act).apply { this.adapter = adapter }
+        val h = android.os.Handler(android.os.Looper.getMainLooper())
+        var scanner: android.bluetooth.le.BluetoothLeScanner? = null
+        var cb: android.bluetooth.le.ScanCallback? = null
+        val dlg = AlertDialog.Builder(act).setTitle("選擇氛圍燈（掃描中…）").setView(list).setNegativeButton("取消", null).show()
+        list.setOnItemClickListener { _, _, pos, _ ->
+            val (mac, _) = items[pos]
+            prefs.ambientMac = mac; prefs.ambientName = names[mac] ?: ""; prefs.ambientOn = true
+            AmbientLight.start(act, prefs); AmbientLight.reconnect()
+            dlg.dismiss(); done()
+        }
+        dlg.setOnDismissListener { try { scanner?.stopScan(cb) } catch (_: Throwable) {} }
+        try {
+            val ad = android.bluetooth.BluetoothAdapter.getDefaultAdapter()
+            if (ad == null || !ad.isEnabled) { dlg.setTitle("車機藍牙不能用"); return }
+            scanner = ad.bluetoothLeScanner ?: run { dlg.setTitle("車機藍牙不支援 BLE"); return }
+            cb = object : android.bluetooth.le.ScanCallback() {
+                override fun onScanResult(type: Int, r: android.bluetooth.le.ScanResult) {
+                    val mac = r.device.address
+                    if (items.any { it.first == mac }) return
+                    val name = try { r.scanRecord?.deviceName ?: r.device.name } catch (_: Throwable) { null }
+                    val svc = r.scanRecord?.serviceUuids?.map { it.uuid.toString().substring(4, 8) } ?: emptyList()
+                    val likely = svc.any { it in known }
+                    if (!likely && name == null) return
+                    names[mac] = name ?: ""
+                    val label = (if (likely) "★ " else "") + (name ?: "（沒有名稱）") + "\n" + mac + "  訊號 ${r.rssi}"
+                    h.post {
+                        if (likely) { items.add(0, mac to label); adapter.insert(label, 0) } else { items.add(mac to label); adapter.add(label) }
+                    }
+                }
+            }
+            scanner!!.startScan(cb)
+            h.postDelayed({ try { scanner?.stopScan(cb) } catch (_: Throwable) {}; if (dlg.isShowing) dlg.setTitle("選擇氛圍燈（★ = 很可能是；找到 ${items.size} 個）") }, 10_000)
+        } catch (t: Throwable) { dlg.setTitle("沒辦法掃描：$t") }
     }
 }

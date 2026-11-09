@@ -444,6 +444,7 @@ object Engine360 {
             // 記憶體／GPU 撐不住會整個程式消失，連記錄都留不下——實車：ADAS 一啟動就閃退）
             stage(3_000, "讀原廠車速") { FactoryVehicle.start(app); if (!Crumbs.off("canspeed")) CanCarInfo.start(app) }
             stage(4_000, "道路彎度（陀螺儀／GPS）") { MotionCurvature.start(app) }
+            stage(6_000, "氛圍燈") { if (!Crumbs.off("ambient")) AmbientLight.start(app, prefs) }
             stage(5_000, "語音提示") { Speech.enabled = prefs.voiceAlerts; if (!Crumbs.off("tts")) Crumbs.step(Crumbs.MAIN, "tts") { Speech.init(app) } }
             stage(8_000, "偵測（相機畫面＋模型）") { if (FrameShareHub.listener == null) FrameShareHub.listener = { img -> onFrame(app, prefs, img) } }
             stage(25_000, "行車記錄器") { if (prefs.annotEnabled && !Crumbs.off("dashcam")) Dashcam.start(app, prefs) }

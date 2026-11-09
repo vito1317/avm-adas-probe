@@ -72,7 +72,7 @@ class HeadUnitSignalAdapter(
             when (action) {
                 Decode.ACT_REVERSE -> {
                     val v = intent.getIntExtra(Decode.KEY_STATE, -1)
-                    if (v >= 0) s.reportGear(if (v != 0) 'R' else null)
+                    if (v >= 0 && !CanVehicle.gearFresh()) s.reportGear(if (v != 0) 'R' else null)
                 }
                 Decode.ACT_SPEED -> {
                     val v = intent.getIntExtra(Decode.KEY_STATE, -1)
@@ -188,7 +188,7 @@ class HeadUnitSignalAdapter(
 
             // IsCameraMode 可能是「倒車畫面開著」而不是排檔 R，待實車確認
             val cam = c.IsCameraMode()
-            s.reportGear(if (cam != 0) 'R' else null)
+            if (!CanVehicle.gearFresh()) s.reportGear(if (cam != 0) 'R' else null)
 
             val fr = c.GetCarFrRadar()
             val lr = runCatching { c.GetCarLrRadar() }.getOrNull()

@@ -224,6 +224,21 @@ class AppPrefs(context: Context) {
         get() = sp.getBoolean("dashcamOn", true)
         set(v) = sp.edit().putBoolean("dashcamOn", v).apply()
 
+    /** 藍牙氛圍燈連動（見 [AmbientLight]）。 */
+    var ambientOn: Boolean
+        get() = sp.getBoolean("ambientOn", false)
+        set(v) = sp.edit().putBoolean("ambientOn", v).apply()
+    var ambientMac: String
+        get() = sp.getString("ambientMac", "") ?: ""
+        set(v) = sp.edit().putString("ambientMac", v).apply()
+    var ambientName: String
+        get() = sp.getString("ambientName", "") ?: ""
+        set(v) = sp.edit().putString("ambientName", v).apply()
+    /** 哪一組燈在左邊：0 = 不分側（全部一起）、1 = 第 1 組、2 = 第 2 組。 */
+    var ambientLeftZone: Int
+        get() = sp.getInt("ambientLeftZone", 0)
+        set(v) = sp.edit().putInt("ambientLeftZone", v).apply()
+
     /** 行車記錄器最多用多少空間（GB），超過刪最舊的。 */
     var dashcamQuotaGb: Int
         get() = sp.getInt("dashcamQuota", 8)

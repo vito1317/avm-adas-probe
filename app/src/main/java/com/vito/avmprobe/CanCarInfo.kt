@@ -102,6 +102,7 @@ object CanCarInfo {
             if (arr == null || arr.size < 4) { status = "回傳格式不對"; return fail() }
             fails = 0
             last = arr.copyOf()
+            try { CanVehicle.onArray(arr) } catch (_: Throwable) {}
             val spd = arr[2]; val r = arr[3]
             if (spd !in 0..300) return true
             speedKmh = spd; rpm = r; lastAt = SystemClock.elapsedRealtime()
