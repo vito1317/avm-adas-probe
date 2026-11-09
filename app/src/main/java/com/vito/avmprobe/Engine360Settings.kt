@@ -61,7 +61,7 @@ object Engine360Settings {
         // 閃退足跡：上次啟動 1 分鐘內結束時，當時正在跑哪一段（原生層崩潰也記得到）
         if (Crumbs.report.isNotEmpty() || Crumbs.disabledText().isNotEmpty()) {
             col.addView(TextView(act).apply {
-                text = "閃退足跡（截圖傳給開發者）：\n" + Crumbs.report +
+                text = "閃退足跡（目前版本 ${Crumbs.BUILD}；截圖傳給開發者）：\n" + Crumbs.report +
                     (if (Crumbs.disabledText().isNotEmpty()) "\n目前自動停用：" + Crumbs.disabledText() else "")
                 textSize = 11f; typeface = Typeface.MONOSPACE; setTextColor(Color.rgb(255, 170, 80))
             })

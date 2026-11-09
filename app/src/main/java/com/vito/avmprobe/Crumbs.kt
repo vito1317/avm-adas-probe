@@ -16,6 +16,8 @@ import java.nio.channels.FileChannel
  */
 object Crumbs {
     const val HEALTHY_MS = 60_000L
+    /** 足跡裡標明是哪一版（跟發佈的版號一致）。 */
+    const val BUILD = "m-v59"
     private const val SLOT = 96
     private const val SLOTS = 7
     private const val HEAD = 16
@@ -64,7 +66,8 @@ object Crumbs {
                 val desc = SKIPPABLE[key]
                 val disabled = desc != null && key !in off
                 if (disabled) { off = off + key; sp.edit().putStringSet("off", off).commit() }
-                report = "上次 ADAS 啟動 1 分鐘內就結束，當時正在跑：$worstName" +
+                val ts = java.text.SimpleDateFormat("MM/dd HH:mm", java.util.Locale.US).format(java.util.Date())
+                report = "【$ts 記錄，$BUILD】上次 ADAS 啟動 1 分鐘內就結束，當時正在跑：$worstName" +
                     (if (desc != null) "（$desc）" else "") +
                     (if (disabled) "\n→ 已自動停用「$desc」，看這次還會不會閃退" else "") +
                     "\n各執行緒最後一步：\n" + lines.joinToString("\n")
