@@ -64,6 +64,10 @@ object Engine360Settings {
             prefs.annotEnabled = it; prefs.annotBoots = 0; prefs.annotCrashes = 0
         }
         check("提示音", { prefs.alertSound }) { prefs.alertSound = it }
+        check("語音提示（念出警示，例如「左後來車」「壓線行駛」）", { prefs.voiceAlerts }) { prefs.voiceAlerts = it; Speech.enabled = it }
+        Engine360.pipelineParkedShot()?.let { f ->
+            col.addView(TextView(act).apply { textSize = 12f; text = "最近的停車位置照片：下載/avm-adas/$f" })
+        }
         col.addView(Button(act).apply {
             isAllCaps = false
             fun label() { text = "提示音聲道：${AlertTone.CHANNELS[prefs.alertChannel.coerceIn(0, 3)]}（按一下切換；沒播音樂也聽得到的選這個）" }

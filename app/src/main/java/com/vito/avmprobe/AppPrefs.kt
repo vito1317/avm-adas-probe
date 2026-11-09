@@ -234,6 +234,11 @@ class AppPrefs(context: Context) {
         get() = sp.getInt("facSteerSign", 1)
         set(v) = sp.edit().putInt("facSteerSign", v).apply()
 
+    /** 語音提示（念出警示）。 */
+    var voiceAlerts: Boolean
+        get() = sp.getBoolean("voiceAlerts", true)
+        set(v) = sp.edit().putBoolean("voiceAlerts", v).apply()
+
     /** 車道偏移／壓線提醒的最低車速（km/h）。 */
     var ldwMinKmh: Int
         get() = sp.getInt("ldwMinKmh", 55)

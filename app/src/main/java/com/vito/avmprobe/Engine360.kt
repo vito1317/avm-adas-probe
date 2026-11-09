@@ -443,6 +443,7 @@ object Engine360 {
             // 記憶體／GPU 撐不住會整個程式消失，連記錄都留不下——實車：ADAS 一啟動就閃退）
             stage(3_000, "讀原廠車速") { FactoryVehicle.start(app) }
             stage(4_000, "道路彎度（陀螺儀／GPS）") { MotionCurvature.start(app) }
+            stage(5_000, "語音提示") { Speech.enabled = prefs.voiceAlerts; Speech.init(app) }
             stage(8_000, "偵測（相機畫面＋模型）") { if (FrameShareHub.listener == null) FrameShareHub.listener = { img -> onFrame(app, prefs, img) } }
             stage(25_000, "行車記錄器") { if (prefs.annotEnabled) Dashcam.start(app, prefs) }
         } catch (t: Throwable) {
@@ -617,6 +618,8 @@ object Engine360 {
             main.post { done(msg) }
         }.start()
     }
+
+    fun pipelineParkedShot(): String? = pipeline?.lastParkedShot
 
     /** 設定裡「煞車訊號探測」：背景記錄 15 秒（使用者踩放煞車），[progress]／[done] 在主執行緒回報。 */
     fun probeBrake(ctx: Context, progress: (String) -> Unit, done: (String) -> Unit) {

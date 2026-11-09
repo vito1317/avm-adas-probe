@@ -609,12 +609,25 @@ class AnnotationView(context: Context) : View(context) {
      */
     fun paintRecording(c: Canvas, cw: Int, ch: Int, top: AnnotationMapper.Params, p: JSONObject?) {
         drawTop(c, AnnotationMapper(top, cw, ch), p)
-        drawHud(c, p, cw)
+        recordingOnly = true
+        try { drawHud(c, p, cw) } finally { recordingOnly = false }
     }
+
+    /** 畫行車記錄器畫面時不念（同一則警示畫面上已經念過）。 */
+    @Volatile private var recordingOnly = false
 
     private fun drawHud(c: Canvas, p: JSONObject?, cw: Int = width) {
         if (p == null) return
-        val msgs = ArrayList<Pair<String, Int>>()
+        val msgs = object : ArrayList<Pair<String, Int>>() {
+            // 橘色、紅色的警示念出來（藍色的資訊、進度不念）
+            override fun add(element: Pair<String, Int>): Boolean { speak(element); return super.add(element) }
+            override fun add(index: Int, element: Pair<String, Int>) { speak(element); super.add(index, element) }
+            private fun speak(e: Pair<String, Int>) {
+                val col = e.second
+                val r = Color.red(col); val g = Color.green(col); val b = Color.blue(col)
+                if (r > 180 && r > b + 60 && !recordingOnly) Speech.say(e.first, urgent = g < 80)
+            }
+        }
         var minClr = Float.MAX_VALUE
         p.optJSONArray("objs")?.let { a ->
             for (i in 0 until a.length()) a.optJSONObject(i)?.let {

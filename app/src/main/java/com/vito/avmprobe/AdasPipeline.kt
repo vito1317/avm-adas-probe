@@ -866,9 +866,28 @@ class AdasPipeline(
         // 駕駛輔助警示：倒車兩側來車、開門預警、後方追撞、跟車秒數、休息提醒
         try {
             val ld = ldwState
-            val msgs = aids.update(DriverAids.Input(now, vs.speedKmh, vs.gear, aidObjs, FactoryVehicle.doorOpen(),
-                ld != null && (ld.any || ld.straddle != null)))
+            val msgs = ArrayList(aids.update(DriverAids.Input(now, vs.speedKmh, vs.gear, aidObjs, FactoryVehicle.doorOpen(),
+                ld != null && (ld.any || ld.straddle != null))))
+            // 停車輔助：方向盤指示（照停車路徑）、停正、窄路、停車位置記錄
+            p.optJSONObject("park")?.let { pk ->
+                val arr = pk.optJSONArray("pts")
+                if (arr != null) {
+                    val pts = (0 until arr.length()).map { k -> arr.getJSONArray(k).let { q -> floatArrayOf(q.getDouble(0).toFloat(), q.getDouble(1).toFloat()) } }
+                    parkAids.steering(pts, pk.optInt("rev"), vs.gear, vs.steerDeg, pk.optDouble("r", 5.0).toFloat())
+                        ?.let { msgs.add(DriverAids.Msg(it.key, it.text, it.level)) }
+                }
+            }
+            if (now - slotsAt < BEV_TTL_MS) parkAids.alignment(slots, vs.speedKmh)?.let { msgs.add(DriverAids.Msg(it.key, it.text, it.level)) }
+            val things = aidObjs.map { ParkingAids.Thing(it.x, it.z, ObjTypes.radius(it.t)) } +
+                (if (now - obstaclesAt < OBS_TTL_MS) obstacles.map { ParkingAids.Thing(it.x, it.z, it.w / 2f) } else emptyList())
+            parkAids.narrowGap(things, vs.speedKmh, vs.gear)?.let { msgs.add(DriverAids.Msg(it.key, it.text, it.level)) }
+            if (parkAids.shouldSnapshot(now, vs.speedKmh, vs.gear)) saveParkedSnapshot()
             aidsDanger = msgs.any { it.level >= 2 }
+            // 事件自動存影片：危險警示、太近、急減速 → 鎖定行車記錄器這段和上一段（一分鐘內最多一次）
+            val collide = aidObjs.any { it.clr < 0.5f } && (vs.speedKmh ?: 0f) > 5f
+            if ((aidsDanger || collide || decel > 4f) && now - lastEventLock > 60_000L && Dashcam.recorder?.running == true) {
+                lastEventLock = now; Dashcam.lock(); Engine360.log("事件：自動鎖定這段行車記錄影片")
+            }
             if (msgs.isNotEmpty()) p.put("aids", JSONArray().apply { for (m in msgs) put(JSONObject().put("k", m.key).put("t", m.text).put("l", m.level)) })
         } catch (t: Throwable) { Log.w(TAG, "aids", t) }
         cutIn?.takeIf { now - cutInAt < 1500 }?.let { (side, x, z) ->
@@ -1043,6 +1062,25 @@ class AdasPipeline(
     private val lcOdo = LaneChangeOdometry()
     private val lineCross = LineCrossWatcher()
     private val aids = DriverAids()
+    private val parkAids = ParkingAids()
+    private var lastEventLock = 0L
+
+    /** 停好車：存一張俯視圖到「下載/avm-adas」（parked_時間.png），看得到格號、柱子，之後找得到車。 */
+    private fun saveParkedSnapshot() {
+        val buf = bevArgb.copyOf(); val g = geo ?: return
+        Thread {
+            try {
+                val bmp = Bitmap.createBitmap(buf, g.bev.width, g.bev.height, Bitmap.Config.ARGB_8888)
+                val bos = java.io.ByteArrayOutputStream(); bmp.compress(Bitmap.CompressFormat.PNG, 100, bos)
+                val ts = java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.US).format(java.util.Date())
+                MediaSaver.save(ctx, "parked_$ts.png", "image/png", bos.toByteArray())
+                lastParkedShot = "parked_$ts.png"
+                Engine360.log("已存停車位置：parked_$ts.png")
+            } catch (t: Throwable) { Log.w(TAG, "停車位置存檔失敗", t) }
+        }.start()
+    }
+
+    @Volatile var lastParkedShot: String? = null; private set
     @Volatile private var aidsDanger = false
     @Volatile private var slotGeo: AvmGeometry? = null
     private var slotLut: IntArray? = null
