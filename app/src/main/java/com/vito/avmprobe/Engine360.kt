@@ -593,7 +593,9 @@ object Engine360 {
         Thread {
             val msg = try {
                 val pm = ctx.packageManager
-                val keys = listOf("儀錶", "儀表", "仪表", "dash", "meter", "gauge", "cluster", "instrument", "speed")
+                // 使用者：儀表板的程式叫「行車電腦」
+                val keys = listOf("行車電腦", "行车电脑", "電腦", "儀錶", "儀表", "仪表", "dash", "meter", "gauge", "cluster",
+                    "instrument", "speed", "trip", "obd", "carinfo", "car_info", "computer")
                 val apps = pm.getInstalledApplications(0).filter { a ->
                     val label = try { pm.getApplicationLabel(a).toString() } catch (_: Throwable) { "" }
                     a.packageName == "com.ts.MainUI" || keys.any { k -> label.contains(k, true) || a.packageName.contains(k, true) }

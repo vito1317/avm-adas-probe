@@ -48,6 +48,16 @@ object Engine360Settings {
                 "\n道路彎度來源：" + MotionCurvature.source + (MotionCurvature.curvature(v.speedKmh)?.let { k ->
                     if (kotlin.math.abs(k) < 1e-3) "（直行）" else "（目前%s彎，半徑約 %.0f m）".format(if (k > 0) "右" else "左", 1 / kotlin.math.abs(k)) } ?: "")
         })
+        // 找真正的車速來源：放最上面（使用者在下面找不到）
+        val dashInfo = TextView(act).apply { textSize = 11f }
+        col.addView(Button(act).apply {
+            text = "匯出行車電腦 App（找真正的車速來源，傳給開發者）"; isAllCaps = false
+            setOnClickListener {
+                isEnabled = false; text = "匯出中…"
+                Engine360.exportDashboardApps(act) { msg -> isEnabled = true; text = "匯出行車電腦 App（再按一次重新匯出）"; dashInfo.text = msg }
+            }
+        })
+        col.addView(dashInfo)
         if (prefs.lastCrash.isNotEmpty()) {
             col.addView(TextView(act).apply {
                 text = "上次閃退（完整內容在「下載/avm-adas/crash_*.txt」）：\n" + prefs.lastCrash
@@ -142,15 +152,6 @@ object Engine360Settings {
         })
         col.addView(brakeInfo)
 
-        val dashInfo = TextView(act).apply { textSize = 11f }
-        col.addView(Button(act).apply {
-            text = "匯出儀表板 App（找真正的車速來源，給開發者分析）"; isAllCaps = false
-            setOnClickListener {
-                isEnabled = false; text = "匯出中…"
-                Engine360.exportDashboardApps(act) { msg -> isEnabled = true; text = "匯出儀表板 App（再按一次重新匯出）"; dashInfo.text = msg }
-            }
-        })
-        col.addView(dashInfo)
 
         val spriteInfo = TextView(act).apply { textSize = 11f; text = if (EgoSprite.get(act) != null) "行車記錄器正在用原廠車模圖案" else "還沒擷取（自動對位成功時也會自動擷取）" }
         col.addView(Button(act).apply {
