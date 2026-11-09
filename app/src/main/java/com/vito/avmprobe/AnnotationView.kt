@@ -662,7 +662,14 @@ class AnnotationView(context: Context) : View(context) {
             private fun speak(e: Pair<String, Int>) {
                 val col = e.second
                 val r = Color.red(col); val g = Color.green(col); val b = Color.blue(col)
-                if (r > 180 && r > b + 60 && !recordingOnly) Speech.say(e.first, urgent = g < 80)
+                if (recordingOnly || r <= 180 || r <= b + 60) return
+                // 只念紅色（危險）；橘色只念安全帶。停著（沒打 R）只念開門預警（實車：太吵）
+                val red = g < 80
+                if (!red && "安全帶" !in e.first) return
+                val vs = VehicleBus.signals.snapshot()
+                val still = vs.gear != 'R' && (vs.speedKmh ?: 0f) < 3f
+                if (still && "開門" !in e.first) return
+                Speech.say(e.first, urgent = red)
             }
         }
         // 碰撞預警／距離過近：只算真的可能撞到的——在行進路線上（前進看前方、倒車看後方），
@@ -716,7 +723,9 @@ class AnnotationView(context: Context) : View(context) {
                 msgs.add((if (side == "L") "◀ $t" else "$t ▶") to (if (solid) Color.rgb(210, 30, 30) else Color.rgb(230, 140, 20)))
             }
         }
-        p.optJSONObject("lca")?.let { l ->
+        // 盲點／後方來車只在開車（≥ 15 km/h）或打方向燈時顯示（實車：停在格子裡一直「右後來車」）
+        val lcaOn = (vsNow.speedKmh ?: 0f) >= 15f || vsNow.turn == 'L' || vsNow.turn == 'R'
+        p.optJSONObject("lca")?.takeIf { lcaOn }?.let { l ->
             if (l.optInt("L") >= 2) msgs.add("◀ 左後來車" to Color.rgb(220, 40, 40))
             else if (l.optInt("L") == 1) msgs.add("◀ 左側有車" to Color.rgb(230, 140, 20))
             if (l.optInt("R") >= 2) msgs.add("右後來車 ▶" to Color.rgb(220, 40, 40))

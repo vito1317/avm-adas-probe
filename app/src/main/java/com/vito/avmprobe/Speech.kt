@@ -16,6 +16,7 @@ object Speech {
     @Volatile private var ready = false
     private val spoken = HashMap<String, Long>()
     @Volatile var enabled = true
+    private var lastAny = 0L
 
     fun init(ctx: Context) {
         if (tts != null) return
@@ -43,11 +44,14 @@ object Speech {
         if (clean.isEmpty()) return
         val now = SystemClock.elapsedRealtime()
         synchronized(spoken) {
+            // 任兩句之間至少隔 4 秒（實車：太吵）
+            if (now - lastAny < 4000L) return
             val last = spoken[clean]
             // 距離過近這類持續的狀態念一次就好，30 秒內不重複
             val gap = if ("距離" in clean || "碰撞" in clean || "跟車" in clean || "停正" in clean || "窄" in clean) 30_000L else REPEAT_MS
             if (last != null && now - last < gap) return
             spoken[clean] = now
+            lastAny = now
             if (spoken.size > 50) spoken.entries.removeIf { now - it.value > 30_000L }
         }
         if (Crumbs.off("speak")) return

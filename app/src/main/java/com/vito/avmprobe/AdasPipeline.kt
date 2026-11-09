@@ -894,7 +894,8 @@ class AdasPipeline(
                 .put("el", rd.edgeL?.let { r2(it) } ?: JSONObject.NULL)
                 .put("er", rd.edgeR?.let { r2(it) } ?: JSONObject.NULL))
         }
-        if (now - slotsAt < BEV_TTL_MS && slots.isNotEmpty()) {
+        // 開車（> 20 km/h）不顯示停車格：旁邊車道的標線會被湊成格子（實車）
+        if (now - slotsAt < BEV_TTL_MS && slots.isNotEmpty() && (vs.speedKmh ?: 0f) <= 20f) {
             // 倒車時打方向燈 → 自動選那一側最近的空格
             val tn = vs.turn
             if (vs.gear == 'R' && (tn == 'L' || tn == 'R')) slotSelection.autoPick(slots, tn, now)
@@ -919,7 +920,8 @@ class AdasPipeline(
                         ?.let { msgs.add(DriverAids.Msg(it.key, it.text, it.level)) }
                 }
             }
-            if (now - slotsAt < BEV_TTL_MS) parkAids.alignment(slots, vs.speedKmh)?.let { msgs.add(DriverAids.Msg(it.key, it.text, it.level)) }
+            // 停正：只在停車過程中（不是 P 檔）顯示，藍色資訊、不念（實車：停在格子裡一直念「停正 左 右」）
+            if (now - slotsAt < BEV_TTL_MS && vs.gear != 'P') parkAids.alignment(slots, vs.speedKmh)?.let { msgs.add(DriverAids.Msg(it.key, it.text, 0)) }
             val things = aidObjs.map { ParkingAids.Thing(it.x, it.z, ObjTypes.radius(it.t)) } +
                 (if (now - obstaclesAt < OBS_TTL_MS) obstacles.map { ParkingAids.Thing(it.x, it.z, it.w / 2f) } else emptyList())
             parkAids.narrowGap(things, vs.speedKmh, vs.gear)?.let { msgs.add(DriverAids.Msg(it.key, it.text, it.level)) }

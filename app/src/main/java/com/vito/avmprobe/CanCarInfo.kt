@@ -72,6 +72,7 @@ object CanCarInfo {
 
     fun start(ctx: Context) {
         if (started) return
+        try { CanVehicle.init(ctx) } catch (_: Throwable) {}
         started = true
         val app = ctx.applicationContext ?: ctx
         try {

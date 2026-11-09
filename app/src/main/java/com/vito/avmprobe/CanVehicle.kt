@@ -23,13 +23,13 @@ object CanVehicle {
     data class Msg(val key: String, val text: String, val level: Int)
 
     /** 純解碼：[seen] 記每個欄位看過的非 0 值（決定能不能用）。 */
-    class Decoder {
-        private val nonZero = BooleanArray(82)
+    class Decoder(private val remembered: Set<Int> = emptySet(), private val onNewField: (Int) -> Unit = {}) {
+        private val nonZero = BooleanArray(82).also { a -> for (i in remembered) if (i in a.indices) a[i] = true }
         private val seenVals = Array(82) { HashSet<Int>() }
 
         fun decode(a: IntArray): Info {
             for (i in 0 until minOf(a.size, 82)) {
-                if (a[i] != 0) nonZero[i] = true
+                if (a[i] != 0 && !nonZero[i]) { nonZero[i] = true; onNewField(i) }
                 if (seenVals[i].size < 8) seenVals[i].add(a[i])
             }
             fun g(i: Int) = if (i < a.size) a[i] else 0
@@ -70,7 +70,23 @@ object CanVehicle {
         return out
     }
 
-    private val decoder = Decoder()
+    private var decoder = Decoder()
+    private var prefs: android.content.SharedPreferences? = null
+
+    /**
+     * 看過有值的欄位永久記住（實車：全程沒繫安全帶，安全帶欄位一直是 0，從來沒被採用 → 不會提醒）。
+     * 繫過一次安全帶、踩過一次煞車，之後每次開車都會用。
+     */
+    fun init(ctx: android.content.Context) {
+        if (prefs != null) return
+        val sp = ctx.applicationContext.getSharedPreferences("can_vehicle", android.content.Context.MODE_PRIVATE)
+        prefs = sp
+        val known = (sp.getString("fields", "") ?: "").split(',').mapNotNull { it.toIntOrNull() }.toSet()
+        decoder = Decoder(known) { i ->
+            val cur = (sp.getString("fields", "") ?: "").split(',').filter { it.isNotEmpty() }.toMutableSet()
+            if (cur.add(i.toString())) sp.edit().putString("fields", cur.joinToString(",")).apply()
+        }
+    }
     @Volatile var info = Info(); private set
     @Volatile private var at = 0L
 
