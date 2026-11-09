@@ -882,19 +882,35 @@ class AdasPipeline(
         val yawRel = if (steer == null) MotionCurvature.yawRate()?.let { it - (kLocked ?: 0.0) * ((vs.speedKmh ?: 0f) / 3.6) } else null
         val yBefore = lcOdo.y
         val odo = lcOdo.update(now, vs.turn, vs.speedKmh, steer, laneWNow, yawRel)
-        val moved = if (vs.turn == 'L' || vs.turn == 'R') (lcOdo.y - yBefore).toFloat().takeIf { steer != null || yawRel != null } else null
+        val steerMoved = if (vs.turn == 'L' || vs.turn == 'R') (lcOdo.y - yBefore).toFloat().takeIf { steer != null || yawRel != null } else null
+        // 周圍的車整批往一邊移 = 自己往另一邊移（扣掉車頭轉向造成的偏移）；看得到車時優先用它
+        var shiftMoved: Float? = null
+        if (tracksAt != shiftTracksAt) {
+            val dtT = if (shiftTracksAt == 0L) 0.0 else (tracksAt - shiftTracksAt) / 1000.0
+            val dTheta = MotionCurvature.visualYawRate()?.let { it * dtT }
+            val tdir = when (vs.turn) { 'L' -> -1; 'R' -> 1; else -> 0 }
+            shiftMoved = vehShift.update(tracks.filter { it.confirmed && ObjTypes.group(it.t) == "veh" }
+                .map { VehicleShiftOdometry.Obj(it.id, it.x, it.z) }, dTheta, tdir)
+            shiftTracksAt = tracksAt
+        }
+        val moved = shiftMoved ?: steerMoved
+        if (vs.turn == 'L' || vs.turn == 'R') { fusedY += moved ?: 0f; if (shiftMoved != null) usedShift = true }
+        else { fusedY = 0f; usedShift = false }
         val lcTarget = if (lcTargetDeferred) lcTrack.update(now, vs.turn,
             road?.takeIf { now - roadAt < BEV_TTL_MS }?.lines, laneWNow, moved) else { lcTrack.reset(); null }
         // 壓線判斷：打燈那側的車道線跑到車底下 = 正在變道；跑到另一側 = 變道完成（偵測得到線時以這個為準）
         val crossDone = lineCross.update(vs.turn, ldwState)
-        val odoDone = crossDone || (lcTarget == null && lcOdo.done)
+        val shiftDone = usedShift && lcTarget == null && run { val d = if (vs.turn == 'L') -1 else 1; (d * laneWNow - fusedY) * d < LaneChangeOdometry.ARRIVED_M }
+        val odoDone = crossDone || shiftDone || (lcTarget == null && !usedShift && lcOdo.done)
         if (turnPlan == null && !slowTurn && lcTarget != 0f && !odoDone && (vs.turn == 'L' || vs.turn == 'R')) {
             val dir = if (vs.turn == 'L') -1 else 1
             val st = lcaState
             val w = st?.laneW ?: LaneChangeAssist.LANE_W
             val len = ((vs.speedKmh ?: 30f) / 3.6f * 3f).coerceIn(10f, 30f)
             // 鎖定到要跨過的車道線 → 終點跟著目標車道中央走（變道過程中線會跟著移、到了就收掉）
+            val fusedRemain = (dir * w - fusedY).takeIf { usedShift }
             val path0 = lcTarget?.let { lca.lanePath(it.toDouble(), 0.0, len.toDouble()) }
+                ?: fusedRemain?.let { lca.lanePath(it.toDouble(), odo?.second ?: 0.0, len.toDouble()) }
                 ?: odo?.let { (tx, phi) -> lca.lanePath(tx, phi, len.toDouble()) }
                 ?: st?.path?.takeIf { now - tracksAt < OBJ_TTL_MS && it.size >= 2 }
                 ?: lca.lanePath(dir * w.toDouble(), 0.0, len.toDouble())
@@ -911,12 +927,13 @@ class AdasPipeline(
             noLaneChange = ban != null
             val pts = JSONArray(); for (q in path) pts.put(JSONArray().put(r2(q[0])).put(r2(q[1])))
             // 變道進度給畫面顯示：離目標車道中心多遠、依據是什麼
-            val src = when { lcTarget != null && lcTrack.matched -> "車道線"; lcTarget != null -> "車道線＋推算"
+            val src = when { lcTarget != null && lcTrack.matched -> "車道線"; lcTarget != null && shiftMoved != null -> "車道線＋周圍車輛"
+                lcTarget != null -> "車道線＋推算"; fusedRemain != null -> "周圍車輛"
                 steer != null && odo != null -> "方向盤"; odo != null -> "畫面轉向"; else -> "固定" }
-            val remain = lcTarget ?: odo?.first?.toFloat()
+            val remain = lcTarget ?: fusedRemain ?: odo?.first?.toFloat()
             p.put("lc", JSONObject().put("pts", pts).put("dir", dir).put("w", r2(w)).put("car", sideLv)
                 .put("src", src).apply { remain?.let { put("rem", r2(kotlin.math.abs(it))) } }
-                .put("moved", r2(lcOdo.y.toFloat())).put("st", steer?.let { r2(it) } ?: JSONObject.NULL)
+                .put("moved", r2(if (usedShift) fusedY else lcOdo.y.toFloat())).put("st", steer?.let { r2(it) } ?: JSONObject.NULL)
                 .put("v", vs.speedKmh?.let { r2(it) } ?: JSONObject.NULL)
                 .apply { curveK?.takeIf { kotlin.math.abs(it) >= CurveBend.MIN_K }?.let { put("k", (it * 1e5).toLong() / 1e5) } }
                 .put("ok", !danger && ban == null && (st?.pathOk ?: true))
@@ -996,6 +1013,10 @@ class AdasPipeline(
     private val lcTrack = LaneChangeTracker()
     private val lcOdo = LaneChangeOdometry()
     private val lineCross = LineCrossWatcher()
+    private val vehShift = VehicleShiftOdometry()
+    private var shiftTracksAt = 0L
+    private var fusedY = 0f
+    private var usedShift = false
     private var roadK = Double.NaN
     private var odoAt = 0L
     private val roadside = RoadsideSpaceFinder()
