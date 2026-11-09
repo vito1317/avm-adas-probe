@@ -62,7 +62,7 @@ object FactoryVehicle {
             // 原廠剛啟動時不碰它的物件
             SystemClock.sleep(10_000)
             while (running) {
-                try { pollOnce() } catch (t: Throwable) { status = "讀取失敗：$t" }
+                try { Crumbs.step(Crumbs.VEH, "facveh") { pollOnce() } } catch (t: Throwable) { status = "讀取失敗：$t" }
                 SystemClock.sleep(POLL_MS)
             }
         }, "factory-vehicle").apply { isDaemon = true }.start()
@@ -127,7 +127,7 @@ object FactoryVehicle {
         val kmh = (f("kmPerHour") as? Float) ?: -1f
         val left = f("leftSignalState") as? Boolean
         val right = f("rightSignalState") as? Boolean
-        doors = (f("doorState") as? IntArray)?.copyOf()
+        if (!Crumbs.off("door")) doors = Crumbs.step(Crumbs.VEH, "door") { (f("doorState") as? IntArray)?.copyOf() }
         val wheelRaw = f("wheelDegree") as? Float
         learnSign(wheelRaw, kmh)
         val wheel = wheelRaw?.times(steerSign)

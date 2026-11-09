@@ -40,7 +40,7 @@ object Engine360 {
     private const val MAX_OUR_CRASHES = 2
     private const val VIEW_TAG = "com.vito.avmprobe.annot"
 
-    private val main = Handler(Looper.getMainLooper())
+    internal val main = Handler(Looper.getMainLooper())
     @Volatile private var view: WeakReference<AnnotationView>? = null
     @Volatile private var pipeline: AdasPipeline? = null
     private var signalsAttached = false
@@ -418,6 +418,7 @@ object Engine360 {
      */
     @JvmStatic
     fun startBackground(ctx: Context) {
+        Crumbs.begin(ctx)
         if (!ready) { whenReady { startBackground(ctx) }; return }
         if (bgStarted) return
         bgStarted = true
@@ -443,7 +444,7 @@ object Engine360 {
             // 記憶體／GPU 撐不住會整個程式消失，連記錄都留不下——實車：ADAS 一啟動就閃退）
             stage(3_000, "讀原廠車速") { FactoryVehicle.start(app) }
             stage(4_000, "道路彎度（陀螺儀／GPS）") { MotionCurvature.start(app) }
-            stage(5_000, "語音提示") { Speech.enabled = prefs.voiceAlerts; Speech.init(app) }
+            stage(5_000, "語音提示") { Speech.enabled = prefs.voiceAlerts; if (!Crumbs.off("tts")) Crumbs.step(Crumbs.MAIN, "tts") { Speech.init(app) } }
             stage(8_000, "偵測（相機畫面＋模型）") { if (FrameShareHub.listener == null) FrameShareHub.listener = { img -> onFrame(app, prefs, img) } }
             stage(25_000, "行車記錄器") { if (prefs.annotEnabled) Dashcam.start(app, prefs) }
         } catch (t: Throwable) {
@@ -569,7 +570,7 @@ object Engine360 {
                 it.afterFrame = { pp -> Dashcam.onFrame(pp, latestPayload) }
                 pipeline = it
             }
-            p.onFrame(img)
+            Crumbs.step(Crumbs.FRAME, "frame") { p.onFrame(img) }
         } catch (t: Throwable) {
             Log.e(TAG, "frame 失敗：${t.message}", t); recordError(ctx, "偵測", t)
         }

@@ -146,6 +146,10 @@ class AnnotationView(context: Context) : View(context) {
     fun currentProfile(): ViewProfile = currentKey().let { k -> profiles.getOrPut(k) { profileFor(k) } }
 
     override fun onDraw(c: Canvas) {
+        Crumbs.step(Crumbs.MAIN, "draw") { drawAll(c) }
+    }
+
+    private fun drawAll(c: Canvas) {
         val p = payload?.takeIf { SystemClock.elapsedRealtime() - payloadAt < STALE_MS }
         val prof = currentProfile()
         val top = prof.top
@@ -648,7 +652,10 @@ class AnnotationView(context: Context) : View(context) {
                 minClr = minOf(minClr, boxGap(it))
             }
         }
-        if (minClr < CRIT) msgs.add("⚠ 距離過近" to Color.rgb(220, 40, 40))
+        // 停著沒動（也沒打 R）時旁邊停的車本來就很近，不提醒（實車：停車場裡一直念「距離過近」）
+        val vsNow = VehicleBus.signals.snapshot()
+        val parkedStill = vsNow.gear != 'R' && (vsNow.speedKmh ?: 0f) < 3f
+        if (minClr < CRIT && !parkedStill) msgs.add("⚠ 距離過近" to Color.rgb(220, 40, 40))
         else if (minClr < WARN) msgs.add("⚠ 碰撞預警" to Color.rgb(230, 120, 20))
         p.optJSONObject("start")?.let { s ->
             if (s.optBoolean("lead")) msgs.add("前車已起步" to Color.rgb(30, 150, 230))

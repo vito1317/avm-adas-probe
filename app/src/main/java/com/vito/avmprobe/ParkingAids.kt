@@ -87,7 +87,8 @@ class ParkingAids(private val geo: VehicleGeometry = VehicleGeometry()) {
     data class Thing(val x: Float, val z: Float, val halfW: Float)
 
     fun narrowGap(things: List<Thing>, speedKmh: Float?, gear: Char?): Msg? {
-        if (gear == 'R' || (speedKmh ?: 0f) > 20f) return null
+        // 停著不動不提醒（停車場兩邊本來就有車）；慢速往前開才看
+        if (gear == 'R' || (speedKmh ?: 0f) > 20f || (speedKmh ?: 0f) < 3f) return null
         var leftEdge = -Float.MAX_VALUE; var rightEdge = Float.MAX_VALUE
         for (t in things) {
             if (t.z < 2.5f || t.z > 10f || abs(t.x) > 4.5f) continue

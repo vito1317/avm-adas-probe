@@ -249,7 +249,7 @@ class AdasPipeline(
     /** 每一幀（在呼叫端的執行緒上跑）：偵測、追蹤、俯視圖，最後把結果交給 [sink]。 */
     fun onFrame(img: Image) {
         val t0 = SystemClock.elapsedRealtime()
-        frame.load(img)
+        Crumbs.step(Crumbs.FRAME, "load") { frame.load(img) }
         val g = geo ?: return
         frames++
         saveRawCb?.let { cb -> saveRawCb = null; cb(saveRaw()) }
@@ -262,6 +262,7 @@ class AdasPipeline(
         val sl = slots()
         if (sl.isNotEmpty()) {
             val s = sl[(slotIdx++) % sl.size]
+            Crumbs.at(Crumbs.FRAME, "det|$s")
             when {
                 s == SLOT_TL -> runTrafficLightVirtual(det, g)
                 s == "front:w" || s == "front:n" -> runFrontVirtual(det, g, s, vs, t0)
@@ -269,13 +270,13 @@ class AdasPipeline(
             }
         }
         val now = SystemClock.elapsedRealtime()
-        accumulateEgoMotion(now)
-        if (prefs.camBev && !groundBusy) runBev(g, now)
+        Crumbs.step(Crumbs.FRAME, "ego") { accumulateEgoMotion(now) }
+        if (prefs.camBev && !groundBusy) Crumbs.step(Crumbs.FRAME, "bev") { runBev(g, now) }
 
         emaProc = ema(emaProc, (SystemClock.elapsedRealtime() - t0).toFloat())
         if (lastFrameAt != 0L) emaFps = ema(emaFps, 1000f / max(1L, t0 - lastFrameAt))
         lastFrameAt = t0
-        pushPayload(g, det, now, vs)
+        Crumbs.step(Crumbs.FRAME, "publish") { pushPayload(g, det, now, vs) }
     }
 
     private fun slots(): List<String> {
@@ -507,12 +508,14 @@ class AdasPipeline(
         camResults[slot] = CamResult(now, objs, emptyList())
         // 前車燈號：用窄角（看得比較大）那一格；正前方（框中心在畫面中間 30%）最近的那台車
         // 車子轉向角速度（遠處景物的橫向平移）→ 道路彎度
-        if (slot == "front:w") try {
+        if (slot == "front:w" && !Crumbs.off("vyaw")) try {
+            Crumbs.at(Crumbs.FRAME, "vyaw")
             visualYaw.update(now, argb, v.size, (v.size / 2.0) / kotlin.math.tan(Math.toRadians(FRONT_WIDE_FOV / 2.0)))
             if (visualYaw.rateAt == now) MotionCurvature.onVisual(visualYaw.rate)
         } catch (t: Throwable) { Log.w(TAG, "visual yaw", t) }
         // 旁邊車道的車打方向燈要切進來：寬角那一格
-        if (slot == "front:w") try {
+        if (slot == "front:w" && !Crumbs.off("cutin")) try {
+            Crumbs.at(Crumbs.FRAME, "cutin")
             val boxes = dets.mapNotNull { d ->
                 if (ObjTypes.group(d.type) != "veh") return@mapNotNull null
                 val w = toWorldVirtual(v, d.rect.centerX().toDouble(), d.rect.bottom.toDouble(), d.type) ?: return@mapNotNull null
@@ -520,13 +523,15 @@ class AdasPipeline(
             }
             cutIn = cutInWatch.update(now, argb, v.size, boxes); cutInAt = now
         } catch (t: Throwable) { Log.w(TAG, "cut-in", t) }
-        if (slot == "front:n") {
+        if (slot == "front:n" && !Crumbs.off("lead")) {
+            Crumbs.at(Crumbs.FRAME, "lead")
             val lead = dets.filter { ObjTypes.group(it.type) == "veh" && it.rect.centerX() in v.size * 0.35f..v.size * 0.65f }
                 .maxByOrNull { it.rect.bottom }
             leadLight = if (lead != null) leadLights.update(now, argb, v.size, lead.rect.left, lead.rect.top, lead.rect.right, lead.rect.bottom)
                 else leadLights.update(now, null, v.size, 0f, 0f, 0f, 0f)
             leadLightAt = now
         }
+        Crumbs.at(Crumbs.FRAME, "det+")
         afterDetections(tDets, vs, now)
     }
 
@@ -763,7 +768,8 @@ class AdasPipeline(
         }
         frame.sampleLut(table, bevArgb)
         // 停車格專用的大範圍俯視圖（左右 9.5 m、前後 9 m，每格 5 cm；像素數跟一般俯視圖差不多）
-        try {
+        if (!Crumbs.off("slotbev")) try {
+            Crumbs.at(Crumbs.FRAME, "slotbev")
             val sg = slotGeo ?: AvmGeometry(g.cams, BevSpec(-9.5, 9.5, -9.0, 9.0, 0.05), g.carLength, g.carWidth).also {
                 slotGeo = it; slotTrack.viewX = 9.5f; slotTrack.viewZ = 9f
             }
@@ -772,21 +778,25 @@ class AdasPipeline(
             val sb = slotBuf?.takeIf { it.size == n } ?: IntArray(n).also { slotBuf = it }
             frame.sampleLut(slotLut!!, sb)
         } catch (t: Throwable) { slotGeo = null; slotBuf = null }
+        Crumbs.at(Crumbs.FRAME, "bev+")
         groundBusy = true
         val buf = bevArgb
         val mode = prefs.groundMode
         ground.post {
             try {
+                Crumbs.at(Crumbs.GROUND, "cones")
                 cones = coneDet.detect(buf, bw, bh, mpp, cx, cy, excl); conesAt = now
                 // 停車格：用比較大的俯視圖（看得遠一點），記住跑出畫面的格子並依自車移動推算位置
                 val (mdz, myaw) = takeEgoMotion()
                 slotTrack.egoMotion(mdz, myaw); slotSelection.egoMotion(mdz, myaw)
-                val sb = slotBuf
+                Crumbs.at(Crumbs.GROUND, "slots")
+                val sb = slotBuf.takeIf { !Crumbs.off("slotbev") }
                 val sg = slotGeo
                 slots = if (sb != null && sg != null)
                     slotTrack.update(slotDet.detect(sb, sg.bev.width, sg.bev.height, sg.bev.mpp.toFloat(), sg.bev.originX.toFloat(), sg.bev.originY.toFloat(), listOf(ego) + wheelZones(), vehicles), now)
                 else slotTrack.update(slotDet.detect(buf, bw, bh, mpp, cx, cy, listOf(ego) + wheelZones(), vehicles), now)
                 slotsAt = now
+                Crumbs.at(Crumbs.GROUND, "road")
                 if (mode == AppPrefs.GROUND_VIRTUAL) {
                     road = roadTrack.update(roadEx.extract(buf, bw, bh, mpp, cx, cy, excl, g.ipmValidMask()), now); roadAt = now
                 }
@@ -800,6 +810,7 @@ class AdasPipeline(
                     groundUrl = "data:image/jpeg;base64," + Base64.encodeToString(jpeg.toByteArray(), Base64.NO_WRAP)
                     groundAt = now
                 }
+                Crumbs.at(Crumbs.GROUND, "ground:ok")
             } catch (t: Throwable) { Log.e(TAG, "俯視辨識失敗：${t.message}") } finally { groundBusy = false }
         }
     }
@@ -864,7 +875,8 @@ class AdasPipeline(
         }
         roadsideAndShoulder(p, vs, now)
         // 駕駛輔助警示：倒車兩側來車、開門預警、後方追撞、跟車秒數、休息提醒
-        try {
+        if (!Crumbs.off("aids")) try {
+            Crumbs.at(Crumbs.FRAME, "aids")
             val ld = ldwState
             val msgs = ArrayList(aids.update(DriverAids.Input(now, vs.speedKmh, vs.gear, aidObjs, FactoryVehicle.doorOpen(),
                 ld != null && (ld.any || ld.straddle != null))))
@@ -881,15 +893,16 @@ class AdasPipeline(
             val things = aidObjs.map { ParkingAids.Thing(it.x, it.z, ObjTypes.radius(it.t)) } +
                 (if (now - obstaclesAt < OBS_TTL_MS) obstacles.map { ParkingAids.Thing(it.x, it.z, it.w / 2f) } else emptyList())
             parkAids.narrowGap(things, vs.speedKmh, vs.gear)?.let { msgs.add(DriverAids.Msg(it.key, it.text, it.level)) }
-            if (parkAids.shouldSnapshot(now, vs.speedKmh, vs.gear)) saveParkedSnapshot()
+            if (parkAids.shouldSnapshot(now, vs.speedKmh, vs.gear) && !Crumbs.off("parkshot")) { Crumbs.at(Crumbs.FRAME, "parkshot"); saveParkedSnapshot() }
             aidsDanger = msgs.any { it.level >= 2 }
             // 事件自動存影片：危險警示、太近、急減速 → 鎖定行車記錄器這段和上一段（一分鐘內最多一次）
             val collide = aidObjs.any { it.clr < 0.5f } && (vs.speedKmh ?: 0f) > 5f
-            if ((aidsDanger || collide || decel > 4f) && now - lastEventLock > 60_000L && Dashcam.recorder?.running == true) {
-                lastEventLock = now; Dashcam.lock(); Engine360.log("事件：自動鎖定這段行車記錄影片")
+            if (!Crumbs.off("evlock") && (aidsDanger || collide || decel > 4f) && now - lastEventLock > 60_000L && Dashcam.recorder?.running == true) {
+                lastEventLock = now; Crumbs.at(Crumbs.FRAME, "evlock"); Dashcam.lock(); Engine360.log("事件：自動鎖定這段行車記錄影片")
             }
             if (msgs.isNotEmpty()) p.put("aids", JSONArray().apply { for (m in msgs) put(JSONObject().put("k", m.key).put("t", m.text).put("l", m.level)) })
         } catch (t: Throwable) { Log.w(TAG, "aids", t) }
+        Crumbs.at(Crumbs.FRAME, "publish+")
         cutIn?.takeIf { now - cutInAt < 1500 }?.let { (side, x, z) ->
             p.put("cutin", JSONObject().put("side", side.toString()).put("x", r2(x)).put("z", r2(z)))
         }
@@ -908,7 +921,8 @@ class AdasPipeline(
         val steer = vs.steerDeg?.takeIf { TurnPathPlanner.plausibleSteer(it, vs.speedKmh) }
         val turnPlan = TurnPathPlanner.plan(vs.turn, steer, vs.speedKmh)
             ?: TurnPathPlanner.estimate(vs.turn, vs.speedKmh, roadCurvature(now, vs.speedKmh))
-            ?: turnIntoOpening(vs, now)
+            ?: (if (Crumbs.off("turnopen")) null else Crumbs.step(Crumbs.FRAME, "turnopen") { turnIntoOpening(vs, now) })
+        Crumbs.at(Crumbs.FRAME, "publish+turn")
         if (turnPlan == null) turnHit = false
         // 變道預測：打方向燈、方向盤還沒轉到要轉彎 → 從目前車道畫到那一側車道。
         // 變道輔助有算出路徑（有車道線、速度夠）就用它的；沒有（慢速被當成可能轉彎、或沒偵測到車道）
@@ -934,7 +948,8 @@ class AdasPipeline(
         val steerMoved = if (vs.turn == 'L' || vs.turn == 'R') (lcOdo.y - yBefore).toFloat().takeIf { steer != null || yawRel != null } else null
         // 周圍的車整批往一邊移 = 自己往另一邊移（扣掉車頭轉向造成的偏移）；看得到車時優先用它
         var shiftMoved: Float? = null
-        if (tracksAt != shiftTracksAt) {
+        if (tracksAt != shiftTracksAt && !Crumbs.off("vshift")) {
+            Crumbs.at(Crumbs.FRAME, "vshift")
             val dtT = if (shiftTracksAt == 0L) 0.0 else (tracksAt - shiftTracksAt) / 1000.0
             val dTheta = MotionCurvature.visualYawRate()?.let { it * dtT }
             val tdir = when (vs.turn) { 'L' -> -1; 'R' -> 1; else -> 0 }
@@ -942,6 +957,7 @@ class AdasPipeline(
                 .map { VehicleShiftOdometry.Obj(it.id, it.x, it.z) }, dTheta, tdir)
             shiftTracksAt = tracksAt
         }
+        Crumbs.at(Crumbs.FRAME, "publish+lc")
         val moved = shiftMoved ?: steerMoved
         if (vs.turn == 'L' || vs.turn == 'R') { fusedY += moved ?: 0f; if (shiftMoved != null) usedShift = true }
         else { fusedY = 0f; usedShift = false }

@@ -58,6 +58,18 @@ object Engine360Settings {
             }
         })
         col.addView(dashInfo)
+        // 閃退足跡：上次啟動 1 分鐘內結束時，當時正在跑哪一段（原生層崩潰也記得到）
+        if (Crumbs.report.isNotEmpty() || Crumbs.disabledText().isNotEmpty()) {
+            col.addView(TextView(act).apply {
+                text = "閃退足跡（截圖傳給開發者）：\n" + Crumbs.report +
+                    (if (Crumbs.disabledText().isNotEmpty()) "\n目前自動停用：" + Crumbs.disabledText() else "")
+                textSize = 11f; typeface = Typeface.MONOSPACE; setTextColor(Color.rgb(255, 170, 80))
+            })
+            col.addView(Button(act).apply {
+                text = "重新開啟被停用的功能"; isAllCaps = false
+                setOnClickListener { Crumbs.enableAll(); text = "已重新開啟（下次啟動生效）" }
+            })
+        }
         if (prefs.lastCrash.isNotEmpty()) {
             col.addView(TextView(act).apply {
                 text = "上次閃退（完整內容在「下載/avm-adas/crash_*.txt」）：\n" + prefs.lastCrash

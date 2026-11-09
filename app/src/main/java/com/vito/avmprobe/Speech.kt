@@ -20,8 +20,9 @@ object Speech {
     fun init(ctx: Context) {
         if (tts != null) return
         tts = TextToSpeech(ctx.applicationContext) { st ->
+            Crumbs.at(Crumbs.TTS, "tts-ready")
             if (st == TextToSpeech.SUCCESS) {
-                val t = tts ?: return@TextToSpeech
+                val t = tts ?: return@TextToSpeech Crumbs.at(Crumbs.TTS, "tts-ready:ok")
                 val r = t.setLanguage(Locale.TAIWAN)
                 if (r == TextToSpeech.LANG_MISSING_DATA || r == TextToSpeech.LANG_NOT_SUPPORTED) t.setLanguage(Locale.CHINESE)
                 try {
@@ -31,6 +32,7 @@ object Speech {
                 ready = true
                 Engine360.log("語音提示可用")
             } else Engine360.log("車機沒有文字轉語音，語音提示不可用")
+            Crumbs.at(Crumbs.TTS, "tts-ready:ok")
         }
     }
 
@@ -42,10 +44,15 @@ object Speech {
         val now = SystemClock.elapsedRealtime()
         synchronized(spoken) {
             val last = spoken[clean]
-            if (last != null && now - last < REPEAT_MS) return
+            // 距離過近這類持續的狀態念一次就好，30 秒內不重複
+            val gap = if ("距離" in clean || "跟車" in clean || "停正" in clean || "窄" in clean) 30_000L else REPEAT_MS
+            if (last != null && now - last < gap) return
             spoken[clean] = now
-            if (spoken.size > 50) spoken.entries.removeIf { now - it.value > REPEAT_MS }
+            if (spoken.size > 50) spoken.entries.removeIf { now - it.value > 30_000L }
         }
+        if (Crumbs.off("speak")) return
+        Crumbs.at(Crumbs.TTS, "speak|$clean")
         try { tts?.speak(clean, if (urgent) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD, null, clean) } catch (_: Throwable) {}
+        Crumbs.at(Crumbs.TTS, "speak:ok")
     }
 }
