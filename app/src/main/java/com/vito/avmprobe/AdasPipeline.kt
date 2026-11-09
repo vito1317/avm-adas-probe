@@ -387,7 +387,10 @@ class AdasPipeline(
             lcaDanger = (lcaFresh && (l!!.L >= 2 || l.R >= 2)) || laneChangeBlocked ||
                 (cutIn != null && now - cutInAt < 1500) || aidsDanger,
             turnHit = turnHit,
-            collision = AlertSounder.moving(vs.speedKmh, vs.gear) && currentObjects(now).any { it.clr < 0.5f }
+            collision = AlertSounder.moving(vs.speedKmh, vs.gear) && currentObjects(now).any {
+                // 只算行進路線上的（前進看前方、倒車看後方），旁邊並排的不叫
+                it.clr < 0.5f && abs(it.x) < AnnotationMapper.EGO_HW + 0.4f && (if (vs.gear == 'R') it.z < 0f else it.z > 0f)
+            }
         ))
     }
 

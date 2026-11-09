@@ -45,7 +45,7 @@ object Speech {
         synchronized(spoken) {
             val last = spoken[clean]
             // 距離過近這類持續的狀態念一次就好，30 秒內不重複
-            val gap = if ("距離" in clean || "跟車" in clean || "停正" in clean || "窄" in clean) 30_000L else REPEAT_MS
+            val gap = if ("距離" in clean || "碰撞" in clean || "跟車" in clean || "停正" in clean || "窄" in clean) 30_000L else REPEAT_MS
             if (last != null && now - last < gap) return
             spoken[clean] = now
             if (spoken.size > 50) spoken.entries.removeIf { now - it.value > 30_000L }

@@ -28,6 +28,7 @@ class AnnotationView(context: Context) : View(context) {
         private const val STALE_MS = 1500L
         private const val WARN = 1.2f
         private const val CRIT = 0.5f
+        private const val TTC_S = 2f
         private const val TURN_HOLD_MS = 2000L
         private val NAMES = mapOf(
             "car" to "轎車", "van" to "箱型車", "truck" to "卡車", "bus" to "公車", "moto" to "機車",
@@ -608,13 +609,31 @@ class AnnotationView(context: Context) : View(context) {
      * 以前拿中心算（多算對方半個車身，快撞到還顯示 3 m），後來拿偵測估的「最近點」（旁邊車道的車常常估得太近）都不準。
      * 框會依車頭方向轉，用轉過之後在 x、z 方向的半寬。
      */
-    private fun boxGap(o: JSONObject): Float {
-        val x = o.optDouble("x").toFloat(); val z = o.optDouble("z").toFloat()
+    private fun boxGap(o: JSONObject): Float = boxGapAt(o, o.optDouble("x").toFloat(), o.optDouble("z").toFloat())
+
+    private fun boxGapAt(o: JSONObject, x: Float, z: Float): Float {
         val hl = HALF[o.optString("t")] ?: floatArrayOf(0.5f, 0.5f)
         val yaw = if (o.has("yaw")) o.optDouble("yaw").toFloat() else 0f
         val c = abs(kotlin.math.cos(yaw)); val s = abs(kotlin.math.sin(yaw))
         val hx = hl[0] * c + hl[1] * s; val hz = hl[0] * s + hl[1] * c
         return hypot(max(abs(x) - AnnotationMapper.EGO_HW - hx, 0f), max(abs(z) - AnnotationMapper.EGO_HL - hz, 0f))
+    }
+
+    /** 這個物件可能撞到：在行進路線上（自車在動），或正朝自車靠近、[TTC_S] 秒內會碰到。 */
+    private fun threatening(o: JSONObject, rev: Boolean, moving: Boolean): Boolean {
+        val x = o.optDouble("x").toFloat(); val z = o.optDouble("z").toFloat()
+        val inLane = abs(x) < AnnotationMapper.EGO_HW + 0.4f
+        if (moving && inLane && (if (rev) z < 0f else z > 0f)) return true
+        if (!o.has("vx")) return false
+        val vx = o.optDouble("vx").toFloat(); val vz = o.optDouble("vz").toFloat()
+        if (hypot(vx, vz) < 0.8f) return false
+        // 照相對速度往後推 [TTC_S] 秒：框真的碰到自車外框才算（擦身而過的路邊停車不算）
+        var t = 0.25f
+        while (t <= TTC_S) {
+            if (boxGapAt(o, x + vx * t, z + vz * t) < 0.15f) return true
+            t += 0.25f
+        }
+        return false
     }
 
     private fun clearance(x: Float, z: Float): Float =
@@ -646,16 +665,18 @@ class AnnotationView(context: Context) : View(context) {
                 if (r > 180 && r > b + 60 && !recordingOnly) Speech.say(e.first, urgent = g < 80)
             }
         }
+        // 碰撞預警／距離過近：只算真的可能撞到的——在行進路線上（前進看前方、倒車看後方），
+        // 或正在朝自車靠近、2 秒內會碰到。旁邊並排的車、停車場兩邊停的車不算（實車：一直叫「碰撞預警」很吵）
+        val vsNow = VehicleBus.signals.snapshot()
+        val rev = vsNow.gear == 'R'
+        val moving = rev || (vsNow.speedKmh ?: 0f) >= 3f
         var minClr = Float.MAX_VALUE
         p.optJSONArray("objs")?.let { a ->
             for (i in 0 until a.length()) a.optJSONObject(i)?.let {
-                minClr = minOf(minClr, boxGap(it))
+                if (threatening(it, rev, moving)) minClr = minOf(minClr, boxGap(it))
             }
         }
-        // 停著沒動（也沒打 R）時旁邊停的車本來就很近，不提醒（實車：停車場裡一直念「距離過近」）
-        val vsNow = VehicleBus.signals.snapshot()
-        val parkedStill = vsNow.gear != 'R' && (vsNow.speedKmh ?: 0f) < 3f
-        if (minClr < CRIT && !parkedStill) msgs.add("⚠ 距離過近" to Color.rgb(220, 40, 40))
+        if (minClr < CRIT) msgs.add("⚠ 距離過近" to Color.rgb(220, 40, 40))
         else if (minClr < WARN) msgs.add("⚠ 碰撞預警" to Color.rgb(230, 120, 20))
         p.optJSONObject("start")?.let { s ->
             if (s.optBoolean("lead")) msgs.add("前車已起步" to Color.rgb(30, 150, 230))
