@@ -247,9 +247,17 @@ class AdasPipeline(
     // ───────────────────────────── 每幀：跟 QuadActivity 同一套管線 ─────────────────────────────
 
     /** 每一幀（在呼叫端的執行緒上跑）：偵測、追蹤、俯視圖，最後把結果交給 [sink]。 */
-    fun onFrame(img: Image) {
+    fun onFrame(img: Image) { loadFrame(img); processFrame() }
+
+    /**
+     * 只把影像複製進來（幾毫秒）。呼叫端複製完就能馬上把 Image 還給相機——
+     * 拿著 Image 跑完整套偵測（第一幀要載模型、建表，好幾秒）會讓原廠相機沒有緩衝可用而整個卡死、閃退（實車：一到 9 秒就閃退）。
+     */
+    fun loadFrame(img: Image) { Crumbs.step(Crumbs.FRAME, "load") { frame.load(img) } }
+
+    /** 對 [loadFrame] 複製進來的那一幀跑偵測（可以在別的執行緒）。 */
+    fun processFrame() {
         val t0 = SystemClock.elapsedRealtime()
-        Crumbs.step(Crumbs.FRAME, "load") { frame.load(img) }
         val g = geo ?: return
         frames++
         saveRawCb?.let { cb -> saveRawCb = null; cb(saveRaw()) }

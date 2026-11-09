@@ -565,16 +565,38 @@ object Engine360 {
         val visible = v != null && v.isAttachedToWindow
         val recording = Dashcam.recorder?.running == true
         if (!prefs.annotEnabled || (!visible && !recording)) return
-        try {
-            val p = pipeline ?: AdasPipeline(ctx, prefs) { j -> latestPayload = j; view?.get()?.update(j) }.also {
-                it.afterFrame = { pp -> Dashcam.onFrame(pp, latestPayload) }
-                pipeline = it
+        // 上一幀還在算 → 這幀丟掉（Image 由呼叫端馬上還給相機）
+        if (frameBusy) return
+        val p = pipeline
+        if (p == null) {
+            // 建管線（載設定、對位、開執行緒）也放到偵測執行緒，不卡相機
+            frameBusy = true
+            frameWorker.post {
+                try {
+                    Crumbs.step(Crumbs.FRAME, "pipeline") {
+                        pipeline = AdasPipeline(ctx, prefs) { j -> latestPayload = j; view?.get()?.update(j) }.also {
+                            it.afterFrame = { pp -> Dashcam.onFrame(pp, latestPayload) }
+                        }
+                    }
+                } catch (t: Throwable) { Log.e(TAG, "建立偵測失敗", t); recordError(ctx, "建立偵測", t) }
+                finally { frameBusy = false }
             }
-            Crumbs.step(Crumbs.FRAME, "frame") { p.onFrame(img) }
-        } catch (t: Throwable) {
-            Log.e(TAG, "frame 失敗：${t.message}", t); recordError(ctx, "偵測", t)
+            return
+        }
+        try {
+            p.loadFrame(img)          // 複製影像（快），回去後 Image 馬上還給相機
+        } catch (t: Throwable) { Log.e(TAG, "frame 失敗：${t.message}", t); recordError(ctx, "複製影像", t); return }
+        frameBusy = true
+        frameWorker.post {
+            try { Crumbs.step(Crumbs.FRAME, "frame") { p.processFrame() } }
+            catch (t: Throwable) { Log.e(TAG, "frame 失敗：${t.message}", t); recordError(ctx, "偵測", t) }
+            finally { frameBusy = false }
         }
     }
+
+    @Volatile private var frameBusy = false
+    /** 偵測執行緒：跟收影像的執行緒分開，偵測再慢都不會拿著相機的緩衝不放。 */
+    private val frameWorker: Handler by lazy { Handler(android.os.HandlerThread("adas-detect").apply { start() }.looper) }
 
     /** 設定裡「匯出原廠車模檔」：背景找 .vmd 與原廠設定檔、匯出到「下載/avm-adas」。[done] 在主執行緒回報結果。 */
     fun exportCarModels(act: Activity, done: (String) -> Unit) {
