@@ -131,6 +131,10 @@ object TurnPathPlanner {
         return arc(sgn, maxOf(ROAD_R_MIN, 1.0 / abs(roadK)), geo, estimated = true)
     }
 
+    /** 指定方向（'L'／'R'）與後軸半徑的預估轉彎路徑（給「轉進空地」挑半徑用）。 */
+    fun arcPath(turn: Char, r: Double, geo: VehicleGeometry = VehicleGeometry()): TurnPath =
+        arc(if (turn == 'R') 1.0 else -1.0, r, geo, estimated = true)
+
     private fun arc(sgn: Double, r: Double, geo: VehicleGeometry, estimated: Boolean): TurnPath {
         // 幾何：後軸中心起點 (0, zra)、朝 +z，轉彎中心在它的正側邊 r 處。
         // 走過弧角 t 之後（θ = sgn·t 是車身轉過的角度）：

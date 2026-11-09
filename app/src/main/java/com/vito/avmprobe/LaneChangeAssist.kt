@@ -252,6 +252,10 @@ class LaneChangeAssist {
             } else m.still = false
             val moving = ego != null && ego > MOVING_V
             if (m.still && moving) continue               // 自車在走、對方靜止（路邊停車）：不理
+            // 對向車：對地速度往後（跟自車反方向）→ 不是後方來車（實車：對向車也會提醒「後方來車」）
+            if (ego != null && moving && vz + ego + exz < -1.5) continue
+            // 車速是 GPS 的（延遲、不準）：對地速度很小的也當成停著的，不只靠上面那個嚴格的靜止判斷
+            if (ego != null && moving && abs(vz + ego) < 2.5 + exz && abs(tr.vx) < 1.0) continue
             val latent = m.still || m.overtaken           // 只在有意圖時（紅燈）才算
 
             val hl = (if (tr.l > 0f) tr.l else TrackManager.size(tr.t)[1]) / 2.0

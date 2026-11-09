@@ -908,6 +908,7 @@ class AdasPipeline(
         val steer = vs.steerDeg?.takeIf { TurnPathPlanner.plausibleSteer(it, vs.speedKmh) }
         val turnPlan = TurnPathPlanner.plan(vs.turn, steer, vs.speedKmh)
             ?: TurnPathPlanner.estimate(vs.turn, vs.speedKmh, roadCurvature(now, vs.speedKmh))
+            ?: turnIntoOpening(vs, now)
         if (turnPlan == null) turnHit = false
         // 變道預測：打方向燈、方向盤還沒轉到要轉彎 → 從目前車道畫到那一側車道。
         // 變道輔助有算出路徑（有車道線、速度夠）就用它的；沒有（慢速被當成可能轉彎、或沒偵測到車道）
@@ -1061,6 +1062,20 @@ class AdasPipeline(
     private val lcTrack = LaneChangeTracker()
     private val lcOdo = LaneChangeOdometry()
     private val lineCross = LineCrossWatcher()
+
+    /** 打燈那側有開口（路口、巷口、入口）→ 轉進去不會碰到東西的預估轉彎路徑（見 [TurnSpacePlanner]）。 */
+    private fun turnIntoOpening(vs: VehicleState, now: Long): TurnPathPlanner.TurnPath? {
+        if (vs.turn != 'L' && vs.turn != 'R') return null
+        val pts = ArrayList<FloatArray>()
+        for (o in currentObjects(now)) { val r = ObjTypes.radius(o.t); pts.addAll(TurnSpacePlanner.pointsOf(o.x, o.z, r, if (ObjTypes.group(o.t) == "veh") r * 2.5f else r)) }
+        if (now - obstaclesAt < OBS_TTL_MS) for (ob in obstacles) pts.addAll(TurnSpacePlanner.pointsOf(ob.x, ob.z, ob.w / 2f, ob.l / 2f))
+        road?.takeIf { now - roadAt < BEV_TTL_MS }?.let { rd ->
+            for (l in rd.lines) if (l.kind == 'r') pts.addAll(TurnSpacePlanner.pointsOfLine(l.x1, l.z1, l.x2, l.z2))
+            rd.edgeL?.let { pts.addAll(TurnSpacePlanner.pointsOfLine(it, -2f, it, 6f)) }
+            rd.edgeR?.let { pts.addAll(TurnSpacePlanner.pointsOfLine(it, -2f, it, 6f)) }
+        }
+        return TurnSpacePlanner.plan(vs.turn, vs.speedKmh, pts)
+    }
     private val aids = DriverAids()
     private val parkAids = ParkingAids()
     private var lastEventLock = 0L
