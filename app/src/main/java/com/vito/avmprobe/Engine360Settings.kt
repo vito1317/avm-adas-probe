@@ -58,6 +58,10 @@ object Engine360Settings {
             }
         })
         col.addView(dashInfo)
+        col.addView(Button(act).apply {
+            text = "CAN 全部欄位（踩煞車、換檔、開燈，看哪個在變）"; isAllCaps = false
+            setOnClickListener { showCanFields(act) }
+        })
         // 閃退足跡：上次啟動 1 分鐘內結束時，當時正在跑哪一段（原生層崩潰也記得到）
         if (Crumbs.report.isNotEmpty() || Crumbs.disabledText().isNotEmpty()) {
             col.addView(TextView(act).apply {
@@ -369,5 +373,38 @@ object Engine360Settings {
                 val dm = act.resources.displayMetrics
                 w.setLayout((dm.widthPixels * 0.45f).toInt(), (dm.heightPixels * 0.92f).toInt())
             }
+    }
+
+    /** 車機 CAN（CarInfoService.requestCarBaseInfo）每個欄位即時顯示；打開後有變過的標 ★，記最小／最大值。 */
+    private fun showCanFields(act: Activity) {
+        val tv = TextView(act).apply { textSize = 12f; typeface = Typeface.MONOSPACE; setPadding(24, 16, 24, 16) }
+        val sv = ScrollView(act).apply { addView(tv) }
+        val first = HashMap<Int, Int>(); val lo = HashMap<Int, Int>(); val hi = HashMap<Int, Int>()
+        val h = android.os.Handler(android.os.Looper.getMainLooper())
+        var dlg: AlertDialog? = null
+        val tick = object : Runnable {
+            override fun run() {
+                val a = CanCarInfo.last
+                val sb = StringBuilder("車機 CAN：" + CanCarInfo.status + "\n★ = 打開後有變過（最小～最大）\n\n")
+                if (a == null) sb.append("還沒讀到資料（車機沒有 CarInfoService，或還在連線）")
+                else for (i in a.indices) {
+                    val v = a[i]
+                    first.putIfAbsent(i, v)
+                    lo[i] = minOf(lo[i] ?: v, v); hi[i] = maxOf(hi[i] ?: v, v)
+                    val changed = lo[i] != hi[i]
+                    val name = CanCarInfo.NAMES[i] ?: continue
+                    if (v == 0 && !changed) continue
+                    sb.append(if (changed) "★ " else "  ").append("[%2d] %-24s %d".format(i, name, v))
+                    if (changed) sb.append("（${lo[i]}～${hi[i]}）")
+                    sb.append('\n')
+                }
+                val zero = a?.indices?.count { i -> CanCarInfo.NAMES.containsKey(i) && a[i] == 0 && lo[i] == hi[i] } ?: 0
+                if (a != null) sb.append("\n另有 $zero 個欄位一直是 0（這台車的 CAN 盒可能沒給）")
+                tv.text = sb
+                if (dlg?.isShowing != false) h.postDelayed(this, 300)
+            }
+        }
+        dlg = AlertDialog.Builder(act).setTitle("CAN 全部欄位").setView(sv).setPositiveButton("關閉", null).show()
+        h.postDelayed(tick, 100)
     }
 }

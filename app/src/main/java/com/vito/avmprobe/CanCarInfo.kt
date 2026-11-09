@@ -35,6 +35,26 @@ object CanCarInfo {
     @Volatile var speedKmh: Int = -1; private set
     @Volatile var rpm: Int = -1; private set
     @Volatile var status: String = "未啟動"; private set
+    /** 最近一次 requestCarBaseInfo 的整個陣列（設定裡「CAN 全部欄位」看哪些有值）。 */
+    @Volatile var last: IntArray? = null; private set
+
+    /** requestCarBaseInfo 各欄位（反編譯 CarInfoService 對照 Can.mCarMsg），沒列的索引是 0。 */
+    val NAMES: Map<Int, String> = linkedMapOf(
+        0 to "Avalid 資料有效", 1 to "SpeedDw 車速單位", 2 to "Speed 車速", 3 to "Rpm 轉速", 4 to "WaterTemp 水溫",
+        5 to "TpmsDw 胎壓單位", 6 to "Tpms 左前胎壓", 7 to "Tpms 右前胎壓", 8 to "Tpms 左後胎壓", 9 to "Tpms 右後胎壓",
+        10 to "OilDw 油耗單位", 11 to "AveOil 平均油耗", 12 to "InstantOil 瞬間油耗", 13 to "EndurOil 續航里程",
+        14 to "Distance 總里程", 15 to "BatV 電瓶電壓", 16 to "DistanceDw 里程單位", 17 to "TurnLeft 左方向燈",
+        18 to "TurnRight 右方向燈", 19 to "DriveSafe 駕駛安全帶", 20 to "HighBeam 遠光燈", 21 to "LowBeam 近光燈",
+        22 to "FootBrake 腳煞車", 23 to "HandBrake 手煞車", 24 to "Stalls 檔位", 25 to "Ill 大燈開關", 26 to "WarnLed 雙閃",
+        27 to "FrontFogLed 前霧燈", 28 to "RearFogLed 後霧燈", 29 to "Jqmwz 節氣門位置", 30 to "Syyl 剩餘油量",
+        31 to "Lqywd 冷卻液溫度", 32 to "Jyyl 機油壓力", 33 to "Dqyl 大氣壓力", 34 to "Syyw 剩餘油位", 35 to "Zcbz 駐車標誌",
+        36 to "PassengerSafe 副駕安全帶", 37 to "Bsqyw 變速箱油溫", 38 to "RearOpen 後車廂", 39 to "AveSpeed 平均車速",
+        40 to "DriveDis1 行駛距離1", 41 to "DriveDis2 行駛距離2", 59 to "WidthLight 示寬燈", 60 to "WiperSpeed 雨刷速度",
+        67 to "OutTemp 車外溫度", 68 to "OilTemp 機油溫度", 69 to "DoorLock 門鎖", 70 to "ChargeSta 充電狀態",
+        71 to "WarnSta 警示狀態", 72 to "ACC 電門", 73 to "Fdjqdhsj 引擎啟動後時間", 74 to "Jqwd 進氣溫度",
+        75 to "Ymtbxdwz 油門踏板位置", 76 to "Maintenance 保養里程", 77 to "Soc 電量", 78 to "DriveMode 駕駛模式",
+        79 to "RlSafetyBelt 左後安全帶", 80 to "RmSafetyBelt 中後安全帶", 81 to "RrSafetyBelt 右後安全帶"
+    )
     private var fails = 0
     private var handler: Handler? = null
 
@@ -81,6 +101,7 @@ object CanCarInfo {
             Crumbs.at(Crumbs.OTHER, "canspeed:ok")
             if (arr == null || arr.size < 4) { status = "回傳格式不對"; return fail() }
             fails = 0
+            last = arr.copyOf()
             val spd = arr[2]; val r = arr[3]
             if (spd !in 0..300) return true
             speedKmh = spd; rpm = r; lastAt = SystemClock.elapsedRealtime()
