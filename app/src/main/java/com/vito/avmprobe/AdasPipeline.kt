@@ -279,8 +279,11 @@ class AdasPipeline(
         }
         val now = SystemClock.elapsedRealtime()
         Crumbs.step(Crumbs.FRAME, "ego") { accumulateEgoMotion(now) }
-        // 推論緊貼車身的分隔線只在停著或 R／P 檔時（開動中會湊出假格子）
-        slotDet.allowInfer = vs.gear == 'R' || vs.gear == 'P' || (vs.speedKmh ?: 99f) < 3f
+        // 在馬路上（90 秒內開過 30 km/h 以上、沒打 R）＝停等紅綠燈也算：不找停車格（實車：停紅燈時旁邊車道被當成格子）
+        if ((vs.speedKmh ?: 0f) > 30f) lastFastAt = now
+        onRoad = vs.gear != 'R' && vs.gear != 'P' && lastFastAt > 0L && now - lastFastAt < 90_000L
+        // 推論緊貼車身的分隔線只在停車時（R／P 檔，或慢速且不在馬路上）
+        slotDet.allowInfer = vs.gear == 'R' || vs.gear == 'P' || (!onRoad && (vs.speedKmh ?: 99f) < 3f)
         if (prefs.camBev && !groundBusy) Crumbs.step(Crumbs.FRAME, "bev") { runBev(g, now) }
 
         emaProc = ema(emaProc, (SystemClock.elapsedRealtime() - t0).toFloat())
@@ -897,7 +900,7 @@ class AdasPipeline(
                 .put("er", rd.edgeR?.let { r2(it) } ?: JSONObject.NULL))
         }
         // 開車（> 20 km/h）不顯示停車格：旁邊車道的標線會被湊成格子（實車）
-        if (now - slotsAt < BEV_TTL_MS && slots.isNotEmpty() && (vs.speedKmh ?: 0f) <= 20f) {
+        if (now - slotsAt < BEV_TTL_MS && slots.isNotEmpty() && (vs.speedKmh ?: 0f) <= 20f && !onRoad) {
             // 倒車時打方向燈 → 自動選那一側最近的空格
             val tn = vs.turn
             if (vs.gear == 'R' && (tn == 'L' || tn == 'R')) slotSelection.autoPick(slots, tn, now)
@@ -1137,6 +1140,8 @@ class AdasPipeline(
     }
     private val aids = DriverAids()
     private val hazardPrompt = HazardPrompt()
+    @Volatile private var lastFastAt = 0L
+    @Volatile private var onRoad = false
     private val parkAids = ParkingAids()
     private var lastEventLock = 0L
 
