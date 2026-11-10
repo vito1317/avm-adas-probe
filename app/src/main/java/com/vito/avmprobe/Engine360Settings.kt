@@ -185,6 +185,34 @@ object Engine360Settings {
         }
         check("停好車（P 檔＋手煞車）問要不要升窗、鎖車", { prefs.cyParkPrompt }) { prefs.cyParkPrompt = it }
 
+        section("後擋 LED 看板（iPixel；先用 iPixel App 把要顯示的字存進看板，這裡選每個情境播第幾則）")
+        check("啟用：急煞／雙閃、倒車、跟車太近、路邊停車時切換看板", { prefs.rdOn }) { v -> prefs.rdOn = v; if (v) RearDisplay.start(act, prefs) }
+        val rdInfo = TextView(act).apply { textSize = 12f }
+        fun rdRefresh() { rdInfo.text = "看板：" + (if (prefs.rdMac.isEmpty()) "還沒選" else "${prefs.rdName}（${prefs.rdMac}）") + "\n狀態：" + RearDisplay.status }
+        rdRefresh(); col.addView(rdInfo)
+        col.addView(Button(act).apply {
+            text = "選擇看板（先把手機 iPixel App 斷開）"; isAllCaps = false
+            setOnClickListener { pickBle(act, setOf("00fa", "fee9", "ae00"), "LED") { mac, name -> prefs.rdMac = mac; prefs.rdName = name; prefs.rdOn = true; RearDisplay.start(act, prefs); RearDisplay.reconnect(); rdRefresh() } }
+        })
+        for ((label, get, set) in listOf<Triple<String, () -> Int, (Int) -> Unit>>(
+            Triple("急煞／雙閃", { prefs.rdSlotBrake }, { v -> prefs.rdSlotBrake = v }),
+            Triple("倒車", { prefs.rdSlotReverse }, { v -> prefs.rdSlotReverse = v }),
+            Triple("跟車太近", { prefs.rdSlotFollow }, { v -> prefs.rdSlotFollow = v }),
+            Triple("路邊停車", { prefs.rdSlotPark }, { v -> prefs.rdSlotPark = v }),
+            Triple("平常（警示結束回到）", { prefs.rdSlotIdle }, { v -> prefs.rdSlotIdle = v }))) {
+            col.addView(LinearLayout(act).apply {
+                orientation = LinearLayout.HORIZONTAL
+                fun txt() = "$label：" + (if (get() <= 0) "不切換" else "第 ${get()} 則")
+                val b = Button(act).apply { text = txt(); isAllCaps = false }
+                b.setOnClickListener {
+                    val et = android.widget.EditText(act).apply { inputType = android.text.InputType.TYPE_CLASS_NUMBER; hint = "看板裡第幾則（0 = 不切換）"; setText(get().toString()) }
+                    AlertDialog.Builder(act).setTitle(label).setView(et).setPositiveButton("儲存") { _, _ -> set(et.text.toString().toIntOrNull()?.coerceIn(0, 99) ?: 0); b.text = txt() }.setNegativeButton("取消", null).show()
+                }
+                addView(b)
+                addView(Button(act).apply { text = "試播"; isAllCaps = false; setOnClickListener { if (get() > 0) RearDisplay.test(get()); rdInfo.postDelayed({ rdRefresh() }, 800) } })
+            })
+        }
+
         section("氛圍燈連動（藍牙，AmbientLight 那款）")
         check("啟用：危險紅色閃、偏離橘色、前車起步綠色（警示結束恢復原本顏色）", { prefs.ambientOn }) { v ->
             prefs.ambientOn = v; if (v) AmbientLight.start(act, prefs)

@@ -408,6 +408,16 @@ class AdasPipeline(
             }
             AmbientLight.onAlerts(state.lcaDanger || state.turnHit || state.collision, side, state.ldw, state.start)
         } catch (t: Throwable) { Log.w(TAG, "ambient", t) }
+        // 後擋看板：急煞／雙閃、倒車、跟車太近、路邊停車各切到看板裡存好的那一則
+        if (!Crumbs.off("reardisp")) try {
+            val v = vs.speedKmh ?: 0f
+            RearDisplay.onState(
+                hazardOrBrake = vs.turn == 'H' || "hazbrake" in aidKeys || (v > 30f && decel > 4f),
+                reverse = vs.gear == 'R',
+                tooClose = "headway" in aidKeys,
+                parking = vs.turn == 'H' && v <= 25f
+            )
+        } catch (t: Throwable) { Log.w(TAG, "rear display", t) }
         if (!prefs.alertSound) return
         sounder.update(now, state)
     }
@@ -945,6 +955,7 @@ class AdasPipeline(
             // 車機 CAN 車況提醒：安全帶、手煞車、續航、水溫、電壓、結冰、遠光
             if (CanVehicle.fresh()) for (m in CanVehicle.alerts(CanVehicle.info, vs.speedKmh)) msgs.add(DriverAids.Msg(m.key, m.text, m.level))
             aidsDanger = msgs.any { it.level >= 2 }
+            aidKeys = msgs.map { it.key }.toSet()
             // 事件自動存影片：危險警示、太近、急減速 → 鎖定行車記錄器這段和上一段（一分鐘內最多一次）
             val collide = aidObjs.any { it.clr < 0.5f } && (vs.speedKmh ?: 0f) > 5f
             if (!Crumbs.off("evlock") && (aidsDanger || collide || decel > 4f) && now - lastEventLock > 60_000L && Dashcam.recorder?.running == true) {
@@ -1147,6 +1158,7 @@ class AdasPipeline(
     private val aids = DriverAids()
     private val hazardPrompt = HazardPrompt()
     @Volatile private var lastFastAt = 0L
+    @Volatile private var aidKeys: Set<String> = emptySet()
     @Volatile private var onRoad = false
     private val parkAids = ParkingAids()
     private var lastEventLock = 0L

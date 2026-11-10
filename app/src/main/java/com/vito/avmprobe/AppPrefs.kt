@@ -239,6 +239,32 @@ class AppPrefs(context: Context) {
         get() = sp.getBoolean("cyParkPrompt", true)
         set(v) = sp.edit().putBoolean("cyParkPrompt", v).apply()
 
+    /** 後擋 LED 看板（iPixel，見 [RearDisplay]）：每個情境要播看板裡的第幾則（0 = 不切換）。 */
+    var rdOn: Boolean
+        get() = sp.getBoolean("rdOn", false)
+        set(v) = sp.edit().putBoolean("rdOn", v).apply()
+    var rdMac: String
+        get() = sp.getString("rdMac", "") ?: ""
+        set(v) = sp.edit().putString("rdMac", v).apply()
+    var rdName: String
+        get() = sp.getString("rdName", "") ?: ""
+        set(v) = sp.edit().putString("rdName", v).apply()
+    var rdSlotBrake: Int
+        get() = sp.getInt("rdSlotBrake", 0)
+        set(v) = sp.edit().putInt("rdSlotBrake", v).apply()
+    var rdSlotReverse: Int
+        get() = sp.getInt("rdSlotReverse", 0)
+        set(v) = sp.edit().putInt("rdSlotReverse", v).apply()
+    var rdSlotFollow: Int
+        get() = sp.getInt("rdSlotFollow", 0)
+        set(v) = sp.edit().putInt("rdSlotFollow", v).apply()
+    var rdSlotPark: Int
+        get() = sp.getInt("rdSlotPark", 0)
+        set(v) = sp.edit().putInt("rdSlotPark", v).apply()
+    var rdSlotIdle: Int
+        get() = sp.getInt("rdSlotIdle", 0)
+        set(v) = sp.edit().putInt("rdSlotIdle", v).apply()
+
     /** 藍牙氛圍燈連動（見 [AmbientLight]）。 */
     var ambientOn: Boolean
         get() = sp.getBoolean("ambientOn", false)
