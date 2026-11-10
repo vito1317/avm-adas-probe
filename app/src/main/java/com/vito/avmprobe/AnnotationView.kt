@@ -231,7 +231,9 @@ class AnnotationView(context: Context) : View(context) {
     private fun drawSlots3d(c: Canvas, m: PerspectiveMapper, a: JSONArray) {
         for (i in 0 until a.length()) {
             val s = a.optJSONObject(i) ?: continue
-            if (s.optInt("o") == 1) continue
+            // 只畫空車位（有車的格子原廠影像上就看得到）；自車停的那格例外：標「目前車格」
+            val own = s.optInt("own") == 1
+            if (s.optInt("o") == 1 && !own) continue
             val q = s.optJSONArray("p") ?: continue
             if (q.length() < 8) continue
             val corners = (0 until 4).map { k -> floatArrayOf(q.optDouble(k * 2).toFloat(), q.optDouble(k * 2 + 1).toFloat()) }
@@ -242,7 +244,7 @@ class AnnotationView(context: Context) : View(context) {
                 for (t in 0 until 6) { val f = t / 6f; dense.add(floatArrayOf(a0[0] + (a1[0] - a0[0]) * f, a0[1] + (a1[1] - a0[1]) * f)) }
             }
             val sel = s.optInt("sel") == 1
-            val col = if (sel) Color.rgb(60, 150, 255) else Color.rgb(80, 230, 120)
+            val col = if (sel) Color.rgb(60, 150, 255) else if (own) Color.rgb(40, 225, 255) else Color.rgb(80, 230, 120)
             val pts = m.projectGroundPolygon(dense)
             if (pts.size < 3) continue
             path.reset()
@@ -416,7 +418,9 @@ class AnnotationView(context: Context) : View(context) {
         for (i in 0 until a.length()) {
             val s = a.optJSONObject(i) ?: continue
             // 只畫空車位：有車的格子在原廠影像上本來就看得到，畫紅框只會一閃一閃地添亂
-            if (s.optInt("o") == 1) continue
+            // 只畫空車位（有車的格子原廠影像上就看得到）；自車停的那格例外：標「目前車格」
+            val own = s.optInt("own") == 1
+            if (s.optInt("o") == 1 && !own) continue
             val q = s.optJSONArray("p") ?: continue
             if (q.length() < 8) continue
             path.reset()
@@ -426,7 +430,7 @@ class AnnotationView(context: Context) : View(context) {
             }
             path.close()
             val sel = s.optInt("sel") == 1
-            val col = if (sel) Color.rgb(60, 150, 255) else if (s.optInt("o") == 1) Color.rgb(255, 90, 70) else Color.rgb(80, 230, 120)
+            val col = if (sel) Color.rgb(60, 150, 255) else if (own) Color.rgb(40, 225, 255) else if (s.optInt("o") == 1) Color.rgb(255, 90, 70) else Color.rgb(80, 230, 120)
             fill.color = col; fill.alpha = if (sel) 80 else 45
             c.drawPath(path, fill)
             stroke.color = col
@@ -434,10 +438,10 @@ class AnnotationView(context: Context) : View(context) {
             if (sel) stroke.strokeWidth = 5f * dp
             c.drawPath(path, stroke)
             stroke.strokeWidth = old
-            if (sel) {
+            if (sel || own) {
                 var cx = 0f; var cy = 0f
                 for (k in 0 until 4) { cx += m.sx(q.optDouble(k * 2).toFloat(), q.optDouble(k * 2 + 1).toFloat()); cy += m.sy(q.optDouble(k * 2).toFloat(), q.optDouble(k * 2 + 1).toFloat()) }
-                val t = "停這格"
+                val t = if (sel) "停這格" else "目前車格"
                 c.drawText(t, cx / 4 - text.measureText(t) / 2, cy / 4, text)
             }
         }

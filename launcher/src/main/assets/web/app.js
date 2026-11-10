@@ -203,6 +203,7 @@
     var d = st.doors || {}, names = { fl: '左前門', fr: '右前門', rl: '左後門', rr: '右後門', trunk: '後車廂', hood: '引擎蓋' };
     Object.keys(names).forEach(function (k) { if (d[k]) c += chip(names[k] + '開', spd > 3 ? 'bad' : 'warn'); });
     if (st.brake) c += chip('煞車', 'on');
+    if (st.adas && st.adas.lot) c += chip('停車場', 'on');
     if (!st.can) c += chip('沒有車機 CAN 資料', 'warn');
     $('chips').innerHTML = c;
     $('range').textContent = st.range != null ? st.range : '—';

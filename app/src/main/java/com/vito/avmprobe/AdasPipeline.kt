@@ -281,9 +281,12 @@ class AdasPipeline(
         Crumbs.step(Crumbs.FRAME, "ego") { accumulateEgoMotion(now) }
         // 在馬路上（90 秒內開過 30 km/h 以上、沒打 R）＝停等紅綠燈也算：不找停車格（實車：停紅燈時旁邊車道被當成格子）
         if ((vs.speedKmh ?: 0f) > 30f) lastFastAt = now
-        onRoad = vs.gear != 'R' && vs.gear != 'P' && lastFastAt > 0L && now - lastFastAt < 90_000L
-        // 推論緊貼車身的分隔線只在停車時（R／P 檔，或慢速且不在馬路上）
-        slotDet.allowInfer = vs.gear == 'R' || vs.gear == 'P' || (!onRoad && (vs.speedKmh ?: 99f) < 3f)
+        // 停車場判斷（慢慢開、打 R／P、慢速大角度轉方向盤）：在停車場就不算馬路（從馬路開進來很快停進格子也認得到）
+        val gearNow = CanVehicle.info.gear ?: vs.gear
+        inLot = lot.update(now, vs.speedKmh, gearNow, vs.steerDeg)
+        onRoad = gearNow != 'R' && gearNow != 'P' && !inLot && lastFastAt > 0L && now - lastFastAt < 90_000L
+        // 推論緊貼車身的分隔線只在停車時（R／P 檔，或在停車場、或慢速且不在馬路上）
+        slotDet.allowInfer = gearNow == 'R' || gearNow == 'P' || (!onRoad && (vs.speedKmh ?: 99f) < 3f)
         if (prefs.camBev && !groundBusy) Crumbs.step(Crumbs.FRAME, "bev") { runBev(g, now) }
 
         emaProc = ema(emaProc, (SystemClock.elapsedRealtime() - t0).toFloat())
@@ -934,11 +937,16 @@ class AdasPipeline(
             val tn = vs.turn
             if (vs.gear == 'R' && (tn == 'L' || tn == 'R')) slotSelection.autoPick(slots, tn, now)
             val sj = slotsJson(slots, false)
-            for (i in slots.indices) if (slotSelection.isSelected(slots[i])) sj.getJSONObject(i).put("sel", 1)
+            for (i in slots.indices) {
+                if (slotSelection.isSelected(slots[i])) sj.getJSONObject(i).put("sel", 1)
+                // 自車停在裡面的那格（有車所以是「佔用」，但要畫出來：目前車格）
+                if (SlotSelection.contains(slots[i], 0f, 0f)) sj.getJSONObject(i).put("own", 1)
+            }
             p.put("slots", sj)
             if (spd(vs)) parkPathJson(slots)?.let { p.put("park", it) }
         }
         roadsideAndShoulder(p, vs, now)
+        if (inLot) p.put("lot", 1)
         // 駕駛輔助警示：倒車兩側來車、開門預警、後方追撞、跟車秒數、休息提醒
         if (!Crumbs.off("aids")) try {
             Crumbs.at(Crumbs.FRAME, "aids")
@@ -1171,6 +1179,8 @@ class AdasPipeline(
     private val aids = DriverAids()
     private val hazardPrompt = HazardPrompt()
     @Volatile private var lastFastAt = 0L
+    private val lot = ParkingLotState()
+    @Volatile private var inLot = false
     @Volatile private var aidKeys: Set<String> = emptySet()
     private var rdStopAt = 0L
     private var rdStartUntil = 0L
