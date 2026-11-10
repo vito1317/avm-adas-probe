@@ -40,6 +40,7 @@
 <!-- 3D 道路畫面（行車時；之前 App 的 3D 面板，資料來自 360 裡的 ADAS 引擎） -->
 <iframe id="road" src="bev3d/index.html" title="3D 道路畫面"></iframe>
 <div id="roadFx" class="roadfx" aria-hidden="true"></div>
+<div id="edgeFx" class="edgefx" aria-hidden="true"><i class="sl"></i><i class="sr"></i></div>
 <!-- 介面：以 1920×720 設計，依螢幕等比例縮放（app.js fit()） -->
 <div id="ui">
 <!-- 道路畫面視角切換 -->
@@ -60,25 +61,29 @@
   <div class="gauge">
     <svg viewBox="0 0 220 220" aria-hidden="true">
       <defs>
-        <linearGradient id="gSpd" x1="0" y1="1" x2="1" y2="0"><stop offset="0" stop-color="#21d4fd"/><stop offset="1" stop-color="#b721ff"/></linearGradient>
-        <linearGradient id="gRpm" x1="0" y1="1" x2="1" y2="0"><stop offset="0" stop-color="#ffb347"/><stop offset="1" stop-color="#ff3d5a"/></linearGradient>
-        <filter id="neon"><feGaussianBlur stdDeviation="3" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+        <!-- 分段刻度：外圈切成一格一格 -->
+        <mask id="seg" maskUnits="userSpaceOnUse" x="0" y="0" width="220" height="220">
+          <circle cx="110" cy="110" r="96" fill="none" stroke="#fff" stroke-width="16" stroke-dasharray="5 3.37"/>
+        </mask>
       </defs>
-      <circle class="track" cx="110" cy="110" r="96"/>
-      <circle id="arcSpd" class="arc" cx="110" cy="110" r="96" stroke="url(#gSpd)" filter="url(#neon)"/>
+      <g mask="url(#seg)">
+        <circle class="track" cx="110" cy="110" r="96"/>
+        <circle class="redzone" cx="110" cy="110" r="96"/>
+        <circle id="arcSpd" class="arc" cx="110" cy="110" r="96"/>
+      </g>
       <circle class="track thin" cx="110" cy="110" r="80"/>
-      <circle id="arcRpm" class="arc thin" cx="110" cy="110" r="80" stroke="url(#gRpm)" filter="url(#neon)"/>
+      <circle id="arcRpm" class="arc thin" cx="110" cy="110" r="80"/>
     </svg>
     <div class="gtext">
       <div id="speed" class="speed">0</div>
       <div class="unit">km/h</div>
       <div id="rpm" class="rpm">— rpm</div>
     </div>
-    <div class="turns">
-      <span id="tL" class="arrow l" aria-label="左方向燈">◀</span>
-      <span id="gear" class="gear">P</span>
-      <span id="tR" class="arrow r" aria-label="右方向燈">▶</span>
-    </div>
+  </div>
+  <div class="drive">
+    <span id="tL" class="seq l" aria-label="左方向燈"><i></i><i></i><i></i></span>
+    <div id="gears" class="gears" aria-label="檔位"><span>P</span><span>R</span><span>N</span><span>D</span><b id="gear" class="gx"></b></div>
+    <span id="tR" class="seq r" aria-label="右方向燈"><i></i><i></i><i></i></span>
   </div>
   <div id="chips" class="chips"></div>
 </section>

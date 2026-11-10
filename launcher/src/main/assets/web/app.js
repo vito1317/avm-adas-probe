@@ -52,10 +52,10 @@
   tick(); setInterval(tick, 5000);
 
   // ───────── 強調色、車漆 ─────────
-  var ACCENTS = ['#3b82f6', '#e9ecf0', '#46a758', '#f0a330', '#e5484d'];
+  var ACCENTS = ['#ff4b1f', '#2f8cff', '#e9ecf0', '#36c46b', '#ffb020'];
   var PAINTS = [['銀灰', '#b9c2cc'], ['極地白', '#eef1f4'], ['碳黑', '#15181d'], ['寶石藍', '#1d4f9c'], ['火焰紅', '#a3141c'], ['墨綠', '#1f3d32'], ['香檳金', '#b9a27a']];
   function applyAccent(c) { document.documentElement.style.setProperty('--accent', c); }
-  applyAccent(pref('accent2', ACCENTS[0]));
+  applyAccent(pref('accent3', ACCENTS[0]));
   function dotRow(el, items, cur, onPick) {
     el.innerHTML = '';
     items.forEach(function (it) {
@@ -189,19 +189,29 @@
     if (!roadOn) renderer.render(scene, camera);            // 道路畫面蓋著時不畫 3D 車，省 GPU
   }
   // ───────── 中控台數值 ─────────
-  var ARC_S = 452, ARC_R = 377;      // 環形儀表弧長（3/4 圈）
+  var ARC_S = 452, ARC_R = 377, bootAt = Date.now();      // 環形儀表弧長（3/4 圈）
   function chip(text, cls) { return '<span class="chip ' + (cls || '') + '">' + text + '</span>'; }
   function poll() {
     try { st = JSON.parse(Car.state()); } catch (e) { st = {}; }
     var spd = Math.round(st.speed || 0), rpm = st.rpm;
+    // 開機自檢：刻度先掃到底再回來（像真車儀表）
+    var since = Date.now() - bootAt, sweep = since < 1600 ? Math.sin(Math.min(1, since / 1600) * Math.PI) : 0;
     $('speed').textContent = spd;
-    $('arcSpd').style.strokeDasharray = (Math.min(spd, 240) / 240 * ARC_S) + ' 603';
-    $('arcRpm').style.strokeDasharray = (rpm ? Math.min(rpm, 7000) / 7000 * ARC_R : 0) + ' 503';
+    $('arcSpd').style.strokeDasharray = Math.max(Math.min(spd, 240) / 240, sweep) * ARC_S + ' 603';
+    $('arcRpm').style.strokeDasharray = Math.max(rpm ? Math.min(rpm, 7000) / 7000 : 0, sweep) * ARC_R + ' 503';
+    $('arcRpm').classList.toggle('hi', (rpm || 0) > 5200);
     $('rpm').textContent = rpm ? rpm + ' rpm' : '— rpm';
-    var g = st.gear || '–'; $('gear').textContent = g; $('gear').className = 'gear ' + g;
+    var g = st.gear || '';
+    var gi = 'PRND'.indexOf(g === 'S' || g === 'M' ? 'D' : g);
+    [].forEach.call($('gears').querySelectorAll('span'), function (e, i) { e.classList.toggle('on', i === gi); e.classList.toggle('rv', i === 1 && gi === 1); });
+    $('gear').textContent = g === 'S' || g === 'M' ? g : '';
     var blink = Math.floor(Date.now() / 400) % 2 === 0, hz = !!st.hazard;
-    $('tL').classList.toggle('on', (st.turnL || hz) && blink);
-    $('tR').classList.toggle('on', (st.turnR || hz) && blink);
+    $('tL').classList.toggle('on', !!(st.turnL || hz));
+    $('tR').classList.toggle('on', !!(st.turnR || hz));
+    // 畫面邊緣：踩煞車底邊亮紅、雙閃四邊閃琥珀、車速越快兩側速度線越明顯
+    var ef = $('edgeFx');
+    ef.classList.toggle('brake', !!st.brake); ef.classList.toggle('hazard', hz);
+    ef.style.setProperty('--spd', Math.min(1, Math.max(0, (spd - 20) / 100)).toFixed(2));
     var c = '';
     if (st.highBeam) c += chip('遠光', 'on'); else if (st.lowBeam) c += chip('近光', 'on');
     if (st.fogF || st.fogR) c += chip('霧燈', 'on');
@@ -378,7 +388,7 @@
     $('plate').value = pref('plate', 'ABC-1234');
     $('plateFront').checked = pref('plateFront', '1') === '1';
     dotRow($('paints'), PAINTS, pref('paint', PAINTS[0][1]), function (c) { setPref('paint', c); setPaint(c); });
-    dotRow($('accents'), ACCENTS, pref('accent2', ACCENTS[0]), function (c) { setPref('accent2', c); applyAccent(c); });
+    dotRow($('accents'), ACCENTS, pref('accent3', ACCENTS[0]), function (c) { setPref('accent3', c); applyAccent(c); });
     $('viewMode').value = pref('centerView', 'road');
     $('rainMode').value = pref('rainMode', 'auto');
     $('rainMode').onchange = function () { setPref('rainMode', $('rainMode').value); };
