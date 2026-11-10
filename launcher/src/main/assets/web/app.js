@@ -12,6 +12,11 @@
     return {
       state: function () {
         var t = (Date.now() - t0) / 1000, spd = Math.max(0, Math.round(60 + 50 * Math.sin(t / 6)));
+        var q = location.search;                                     // 預覽用：?fx 全部特效、?car 停車
+        if (q.indexOf('car') >= 0) spd = 0;
+        if (q.indexOf('fx') >= 0) return JSON.stringify({ can: true, speed: spd, rpm: 900, gear: spd ? 'D' : 'P', lowBeam: true, highBeam: true, brake: true, turnL: true,
+          fogF: true, wiper: 2, doors: { fl: true, fr: false, rl: false, rr: true, trunk: true, hood: false }, range: 412, water: 88, out: 24, volt: 14.1, odo: 238513,
+          adas: { objs: [{ t: 'car', x: 3.6, z: 8, c: .9, id: 2, yaw: 0 }], road: { lines: [{ k: 'w', d: 1, x1: -1.8, z1: -6, x2: -1.8, z2: 7, c: .9, kv: 0 }, { k: 'w', d: 1, x1: 1.8, z1: -6, x2: 1.8, z2: 7, c: .9, kv: 0 }], el: -5.6, er: 5.6 }, veh: { turn: 'L', gear: 'D', speed: spd } } });
         return JSON.stringify({ can: true, speed: spd, rpm: 800 + spd * 28, gear: spd > 0 ? 'D' : 'P', lowBeam: true, highBeam: false,
           handbrake: false, belt: true, brake: Math.sin(t / 2) > 0.85, turnL: (t % 12) < 4, turnR: false, hazard: false,
           range: 412, water: 88, out: 23.5, volt: 14.1, odo: 238513, fuel: 18, doors: { fl: (t % 20) > 17, fr: false, rl: false, rr: false, trunk: false, hood: false },
@@ -57,7 +62,7 @@
   }
 
   // ───────── 3D 車子 ─────────
-  var T = window.THREE, scene, camera, renderer, controls, car = null, mats = {}, glows = {}, ring, plates = {};
+  var T = window.THREE, scene, camera, renderer, controls, car = null, mats = {}, fx = null, ring, plates = {};
   var canvas = $('car3d');
   function init3d() {
     if (!T) return;
@@ -107,7 +112,7 @@
         if (m.name === 'paint' || m.name === 'headlight' || m.name === 'taillight') { o.material = m.clone(); mats[m.name] = o.material; }
       });
       setPaint(pref('paint', PAINTS[0][1]));
-      buildGlows();
+      fx = window.CarFx ? CarFx.attach(car, T) : null;      // 開門、車燈、方向燈、煞車（跟道路畫面共用）
       buildPlates();
     });
     window.addEventListener('resize', resize); resize();
@@ -125,28 +130,6 @@
     var m = mats.paint; if (!m) return;
     m.color = new T.Color(hex); if (m.color.convertSRGBToLinear) m.color.convertSRGBToLinear();
     m.metalness = 0.6; m.roughness = 0.28; if ('clearcoat' in m) m.clearcoat = 1;
-  }
-
-  // 光點：方向燈（四角琥珀）、煞車（車尾紅）、車門開（紅）
-  function glowTex(rgb) {
-    var c = document.createElement('canvas'); c.width = c.height = 128;
-    var g = c.getContext('2d'), gr = g.createRadialGradient(64, 64, 0, 64, 64, 64);
-    gr.addColorStop(0, 'rgba(' + rgb + ',1)'); gr.addColorStop(0.25, 'rgba(' + rgb + ',0.7)'); gr.addColorStop(1, 'rgba(' + rgb + ',0)');
-    g.fillStyle = gr; g.fillRect(0, 0, 128, 128);
-    return new T.CanvasTexture(c);
-  }
-  function sprite(tex, s, x, y, z) {
-    var sp = new T.Sprite(new T.SpriteMaterial({ map: tex, blending: T.AdditiveBlending, depthWrite: false, transparent: true }));
-    sp.scale.set(s, s, 1); sp.position.set(x, y, z); sp.visible = false; car.add(sp); return sp;
-  }
-  function buildGlows() {
-    var amber = glowTex('255,170,30'), red = glowTex('255,30,30'), door = glowTex('255,60,90');
-    glows.fl = sprite(amber, 0.7, 0.72, 0.62, 2.25); glows.fr = sprite(amber, 0.7, -0.72, 0.62, 2.25);
-    glows.rl = sprite(amber, 0.7, 0.74, 0.8, -2.3); glows.rr = sprite(amber, 0.7, -0.74, 0.8, -2.3);
-    glows.bl = sprite(red, 0.9, 0.6, 0.78, -2.36); glows.br = sprite(red, 0.9, -0.6, 0.78, -2.36);
-    glows.dfl = sprite(door, 1.2, 0.95, 0.8, 0.6); glows.dfr = sprite(door, 1.2, -0.95, 0.8, 0.6);
-    glows.drl = sprite(door, 1.2, 0.95, 0.8, -0.5); glows.drr = sprite(door, 1.2, -0.95, 0.8, -0.5);
-    glows.dtr = sprite(door, 1.3, 0, 1.0, -2.2); glows.dhd = sprite(door, 1.3, 0, 0.9, 1.9);
   }
 
   // ───────── 車牌 ─────────
@@ -195,22 +178,9 @@
     controls.update();
     var pulse = 0.5 + 0.5 * Math.sin(now / 700);
     if (ring) { ring.material.opacity = 0.35 + 0.35 * pulse; ring.userData.r2.material.opacity = 0.12 + 0.15 * (1 - pulse); }
-    if (car) lights(now);
+    if (fx) fx.update(st, now);
     if (!roadOn) renderer.render(scene, camera);            // 道路畫面蓋著時不畫 3D 車，省 GPU
   }
-  function lights(now) {
-    var blink = Math.floor(now / 400) % 2 === 0, hz = !!st.hazard;
-    var L = (st.turnL || hz) && blink, R = (st.turnR || hz) && blink;
-    // 模型車頭朝 +Z，車的左邊是 +X
-    glows.fl.visible = glows.rl.visible = L; glows.fr.visible = glows.rr.visible = R;
-    glows.bl.visible = glows.br.visible = !!st.brake;
-    var d = st.doors || {};
-    glows.dfl.visible = !!d.fl; glows.dfr.visible = !!d.fr; glows.drl.visible = !!d.rl; glows.drr.visible = !!d.rr;
-    glows.dtr.visible = !!d.trunk; glows.dhd.visible = !!d.hood;
-    if (mats.headlight) { mats.headlight.emissive = new T.Color(0xeaf4ff); mats.headlight.emissiveIntensity = st.highBeam ? 3 : st.lowBeam || st.ill ? 1.6 : 0.15; }
-    if (mats.taillight) { mats.taillight.emissive = new T.Color(0xff2016); mats.taillight.emissiveIntensity = st.brake ? 3 : st.lowBeam || st.ill ? 1.1 : 0.2; }
-  }
-
   // ───────── 中控台數值 ─────────
   var ARC_S = 452, ARC_R = 377;      // 環形儀表弧長（3/4 圈）
   function chip(text, cls) { return '<span class="chip ' + (cls || '') + '">' + text + '</span>'; }
@@ -247,6 +217,9 @@
     if (st.belt === false && spd > 10) al.push(['請繫安全帶', 1]);
     if (spd > 3 && Object.keys(names).some(function (k) { return d[k]; })) al.push(['車門沒關好', 2]);
     if (st.range != null && st.range < 50) al.push(['續航只剩 ' + st.range + ' km', 1]);
+    // 下雨動畫：自動跟雨刷段數（CAN 有給才有），或設定成一直開／關
+    var rm = pref('rainMode', 'auto');
+    if (window.Rain) Rain.set(rm === 'off' ? 0 : rm === 'on' ? 2 : (st.wiper > 0 ? Math.min(3, st.wiper) : 0));
     $('alerts').innerHTML = al.map(function (a) { return '<div class="alert l' + a[1] + '">' + a[0] + '</div>'; }).join('');
   }
   setInterval(poll, 150); poll();
@@ -265,7 +238,13 @@
     if (roadOn && !road._viewSent && road.contentWindow) { road._viewSent = true; sendView(pref('roadView', 'front')); }
     $('viewBtn').setAttribute('aria-pressed', String(roadOn));
     $('roadWait').hidden = !(roadOn && !st.adas);
-    if (roadOn && st.adas && road.contentWindow) { try { road.contentWindow.postMessage(st.adas, '*'); } catch (e) {} }
+    if (roadOn && road.contentWindow) {
+      try {
+        if (st.adas) road.contentWindow.postMessage(st.adas, '*');
+        road.contentWindow.postMessage({ __car: { brake: st.brake, turnL: st.turnL, turnR: st.turnR, hazard: st.hazard, lowBeam: st.lowBeam,
+          highBeam: st.highBeam, ill: st.ill, fogF: st.fogF, fogR: st.fogR, doors: st.doors } }, '*');
+      } catch (e) {}
+    }
   }
   setInterval(updateView, 150);
   // 視角：前方斜視（預設）／追車／俯視／環繞，記住上次選的
@@ -293,6 +272,25 @@
   document.querySelectorAll('[data-close]').forEach(function (b) { b.onclick = function () { b.closest('.sheet').hidden = true; }; });
   document.querySelectorAll('.sheet').forEach(function (s) { s.addEventListener('click', function (e) { if (e.target === s) s.hidden = true; }); });
   window.onBack = function () { document.querySelectorAll('.sheet').forEach(function (s) { s.hidden = true; }); };
+  // 常用 App：抽屜裡長按釘到快捷列（最多 4 個），再長按取消
+  function favs() { try { return JSON.parse(pref('favs', '[]')); } catch (e) { return []; } }
+  function renderFavs() {
+    var box = $('favs'); box.innerHTML = '';
+    favs().forEach(function (a) {
+      var b = document.createElement('button'); b.className = 'fav';
+      b.innerHTML = '<b><img alt=""></b><span></span>'; b.querySelector('span').textContent = a.label;
+      b.onclick = function () { try { Car.launch(a.pkg); } catch (e) {} };
+      try { var u = Car.icon(a.pkg); if (u) b.querySelector('img').src = u; } catch (e) {}
+      box.appendChild(b);
+    });
+  }
+  function toggleFav(a, btn) {
+    var f = favs(), i = f.findIndex(function (x) { return x.pkg === a.pkg; });
+    if (i >= 0) f.splice(i, 1); else { if (f.length >= 4) f.shift(); f.push({ pkg: a.pkg, label: a.label }); }
+    setPref('favs', JSON.stringify(f)); renderFavs();
+    document.querySelectorAll('#appGrid button').forEach(function (x) { x.classList.toggle('pinned', f.some(function (y) { return y.pkg === x.dataset.pkg; })); });
+  }
+  renderFavs();
   var appsLoaded = false;
   $('appsBtn').onclick = function () {
     show('drawer', true);
@@ -302,7 +300,13 @@
     list.forEach(function (a, i) {
       var b = document.createElement('button');
       b.innerHTML = '<img alt=""><span></span>'; b.querySelector('span').textContent = a.label;
-      b.onclick = function () { try { Car.launch(a.pkg); } catch (e) {} show('drawer', false); };
+      b.dataset.pkg = a.pkg;
+      if (favs().some(function (y) { return y.pkg === a.pkg; })) b.classList.add('pinned');
+      var held = null, longPressed = false;
+      b.addEventListener('pointerdown', function () { longPressed = false; held = setTimeout(function () { longPressed = true; toggleFav(a, b); }, 600); });
+      ['pointerup', 'pointerleave', 'pointercancel'].forEach(function (ev) { b.addEventListener(ev, function () { clearTimeout(held); }); });
+      b.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+      b.onclick = function () { if (longPressed) return; try { Car.launch(a.pkg); } catch (e) {} show('drawer', false); };
       grid.appendChild(b);
       setTimeout(function () { try { var u = Car.icon(a.pkg); if (u) b.querySelector('img').src = u; } catch (e) {} }, 20 * i);
     });
@@ -313,6 +317,8 @@
     dotRow($('paints'), PAINTS, pref('paint', PAINTS[0][1]), function (c) { setPref('paint', c); setPaint(c); });
     dotRow($('accents'), ACCENTS, pref('accent', ACCENTS[0]), function (c) { setPref('accent', c); applyAccent(c); });
     $('viewMode').value = pref('viewMode', 'auto');
+    $('rainMode').value = pref('rainMode', 'auto');
+    $('rainMode').onchange = function () { setPref('rainMode', $('rainMode').value); };
     $('viewMode').onchange = function () { setPref('viewMode', $('viewMode').value); override = null; };
     show('settings', true);
   };

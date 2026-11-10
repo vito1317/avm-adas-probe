@@ -74,12 +74,13 @@ val copyBev3d by tasks.registering(Copy::class) {
                 .replace("function setView(name) {", "window.__setView = function (n) { autoView = null; userView = n; setView(n); }; function setView(name) {")
                 .replace("var curView = 'chase', userView = 'chase', autoView = null;", "var curView = 'front', userView = 'front', autoView = null;")
                 .replace("setView('chase');", "setView('front');")
+                .replace("ego.add(car);", "ego.add(car); window.__egoCar = car;")      // 給 carfx.js 加開門／車燈／方向燈／煞車特效
                 .replace("</body>",
                 "<style>.panel,.dock,.topbtn,.cal,#stat,.tl{display:none!important}</style>" +
                 "<script>window.addEventListener('message',function(e){try{var d=e.data;if(!d)return;if(d.__view){if(window.__setView)window.__setView(d.__view);return;}if(window.setFrame)window.setFrame(d)}catch(x){}});" +
                 // 預設是「實景」地面（要鏡頭畫面），中控台沒有 → 換成 Tesla 式的虛擬道路、追車視角
                 "window.addEventListener('load',function(){var b=document.querySelector('#dock button[data-ground=virtual]');" +
-                "if(b&&b.getAttribute('aria-pressed')!=='true')b.click();});</script></body>")
+                "if(b&&b.getAttribute('aria-pressed')!=='true')b.click();});</script><script src=\"../carfx.js\"></script></body>")
         }
     }
 }

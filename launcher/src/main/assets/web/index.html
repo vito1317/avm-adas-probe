@@ -93,6 +93,7 @@
   <button data-open="music"><b>♫</b><span>音樂</span></button>
   <button data-open="phone"><b>✆</b><span>電話</span></button>
   <button data-open="trip"><b>⌁</b><span>行車電腦</span></button>
+  <span id="favs" class="favs"></span>
   <button id="appsBtn"><b>⊞</b><span>所有 App</span></button>
   <button id="setBtn"><b>⚙</b><span>設定</span></button>
 </nav>
@@ -100,7 +101,7 @@
 <!-- 所有 App -->
 <div id="drawer" class="sheet" hidden>
   <div class="sheet-in">
-    <header><h2>所有 App</h2><button class="x" data-close aria-label="關閉">✕</button></header>
+    <header><h2>所有 App <small class="hint">長按可以釘到快捷列</small></h2><button class="x" data-close aria-label="關閉">✕</button></header>
     <div id="appGrid" class="appgrid"></div>
   </div>
 </div>
@@ -115,6 +116,9 @@
     <div class="f"><span>中間畫面</span>
       <select id="viewMode"><option value="auto">行車時自動切成 3D 道路</option><option value="car">一直顯示 3D 車</option><option value="road">一直顯示 3D 道路</option></select>
     </div>
+    <div class="f"><span>下雨動畫</span>
+      <select id="rainMode"><option value="auto">自動（雨刷有動就下雨）</option><option value="on">一直開</option><option value="off">關</option></select>
+    </div>
     <div class="f"><span>強調色</span><div id="accents" class="dots"></div></div>
     <p class="credit">3D 車模：「BMW 5 Series 525i MK5 (E60) 2003-2010」by szymonpasterczyk（Sketchfab），CC BY 4.0，已修改。<br>
     道路使用者模型署名見 bev3d/models/CREDITS.md。BMW 為 BMW AG 的商標，本程式與 BMW 無關。<br>3D 引擎：three.js（MIT）。</p>
@@ -125,6 +129,8 @@
 <script src="bev3d/lib/GLTFLoader.js"></script>
 <script src="bev3d/lib/OrbitControls.js"></script>
 <script src="bev3d/lib/RoomEnvironment.js"></script>
+<script src="carfx.js"></script>
+<script src="rain.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
