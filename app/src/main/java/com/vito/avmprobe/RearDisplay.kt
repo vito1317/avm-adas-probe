@@ -167,6 +167,9 @@ object RearDisplay {
         h?.post { if (write(RearDisplayProtocol.playList(list))) status = "已連線：顯示第 ${list.joinToString("、")} 則（${e.label}）" }
     }
 
+    /** 中控台：回到自動（下一輪偵測依情境重新切換，沒事就回到平常那幾則）。 */
+    fun resume() { h?.post { shown = null; shownAt = 0L } }
+
     /** 設定裡測試：播放第 [slot] 則。 */
     fun testList(list: List<Int>) {
         h?.post {

@@ -47,7 +47,9 @@ object LauncherLink {
 
     private fun handle(cmd: String, arg: String) {
         when (cmd) {
-            "alive" -> aliveAt = SystemClock.elapsedRealtime()
+            "alive" -> { aliveAt = SystemClock.elapsedRealtime(); sendAcc() }
+            // 中控台有車控指令：驗過中控台的身分（套件名＋簽章）才去它的待辦清單拿
+            "poll" -> pollCommands()
             // 氛圍燈：全部變成某個顏色 2 秒（測試用）
             "ambient" -> arg.toIntOrNull(16)?.let { AmbientLight.test(AmbientProtocol.ZONE_ALL, it) }
             // 後擋看板：播第幾則
@@ -56,6 +58,68 @@ object LauncherLink {
             "roadview" -> Engine360.showRoad(true)
             else -> {}
         }
+    }
+
+    // ───── 車控指令（車窗、車鎖、氛圍燈、看板）─────
+    private const val AUTHORITY = "com.vito.avmlauncher.cmd"
+    /** 中控台 APK 的簽章（SHA-256）。只有用這把金鑰簽的中控台送來的車控指令才執行。 */
+    private const val LAUNCHER_CERT = "fa5736a4d084e599e2b5bb75d0b5b5e916c3264283065274a06673394c206e92"
+
+    private fun trustedLauncher(c: Context): Boolean = try {
+        val pm = c.packageManager
+        val owner = pm.resolveContentProvider(AUTHORITY, 0)?.packageName
+        if (owner != PKG) false else {
+            @Suppress("DEPRECATION")
+            val sigs = if (android.os.Build.VERSION.SDK_INT >= 28)
+                pm.getPackageInfo(PKG, android.content.pm.PackageManager.GET_SIGNING_CERTIFICATES).signingInfo?.apkContentsSigners
+            else pm.getPackageInfo(PKG, android.content.pm.PackageManager.GET_SIGNATURES).signatures
+            val md = java.security.MessageDigest.getInstance("SHA-256")
+            sigs?.any { s -> md.digest(s.toByteArray()).joinToString("") { "%02x".format(it.toInt() and 255) } == LAUNCHER_CERT } == true
+        }
+    } catch (_: Throwable) { false }
+
+    private fun pollCommands() {
+        val c = app ?: return
+        Thread {
+            if (!trustedLauncher(c)) { Engine360.log("車控指令：中控台身分不符，不執行"); return@Thread }
+            val list = try {
+                org.json.JSONArray(c.contentResolver.call(android.net.Uri.parse("content://$AUTHORITY"), "take", null, null)?.getString("cmds") ?: "[]")
+            } catch (t: Throwable) { Engine360.log("拿不到車控指令：$t"); return@Thread }
+            for (k in 0 until list.length()) {
+                try {
+                    val j = JSONObject(list.getString(k))
+                    runControl(j.optString("cmd"), j.optString("arg"))
+                } catch (t: Throwable) { Engine360.log("車控指令失敗：$t") }
+            }
+            sendAcc()
+        }.start()
+    }
+
+    /** 只接受這些：遠端模組白名單（CyProtocol.Cmd，本來就送不出發動、斷油）、氛圍燈、看板、道路畫面。 */
+    private fun runControl(cmd: String, arg: String) {
+        when (cmd) {
+            "remote" -> CyProtocol.Cmd.values().firstOrNull { it.name == arg }?.let { CyRemote.send(it) }
+            "ambient_color" -> arg.toIntOrNull(16)?.let { AmbientLight.setColor(it) }
+            "ambient_power" -> AmbientLight.power(arg == "1")
+            "ambient_bright" -> arg.toIntOrNull()?.let { AmbientLight.brightness(it) }
+            "rear_play" -> arg.toIntOrNull()?.let { RearDisplay.test(it) }
+            "rear_idle" -> RearDisplay.resume()
+            "roadview" -> Engine360.showRoad(true)
+        }
+        Engine360.log("中控台車控：$cmd $arg")
+    }
+
+    /** 配件狀態回報給中控台。 */
+    private fun sendAcc() {
+        val c = app ?: return
+        try {
+            val p = AppPrefs(c)
+            val j = JSONObject()
+                .put("remote", CyRemote.status).put("remoteReady", p.cyKey.length == 32 && p.cyMac.isNotEmpty())
+                .put("ambient", AmbientLight.status).put("ambientOn", p.ambientOn)
+                .put("rear", RearDisplay.status).put("rearOn", p.rdOn)
+            c.sendBroadcast(Intent("com.vito.adas.ACC").setPackage(PKG).putExtra("json", j.toString()))
+        } catch (_: Throwable) {}
     }
 
     /** 每幀偵測結果：桌面在看才送，每秒最多 5 次。 */

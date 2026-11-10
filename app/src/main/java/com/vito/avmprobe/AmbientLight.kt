@@ -210,6 +210,22 @@ object AmbientLight {
         write(AmbientProtocol.color(zone, w.rgb))
     }
 
+    /** 中控台：換成新的常態顏色（警示結束後也回到這個顏色）。 */
+    fun setColor(rgb: Int) {
+        h?.post {
+            if (!ready) { status = "還沒連上，沒辦法換顏色"; return@post }
+            write(AmbientProtocol.color(AmbientProtocol.ZONE_ALL, rgb))
+            base = rgb to rgb; shown = null
+            status = "已連線（顏色 #%06X）".format(rgb and 0xFFFFFF)
+        }
+    }
+
+    /** 中控台：開／關燈（App 的 0701／0700）。 */
+    fun power(on: Boolean) { h?.post { if (ready) write(AmbientProtocol.frame(if (on) "0701" else "0700")) } }
+
+    /** 中控台：全部的亮度 0～100（App 的 0200xx）。 */
+    fun brightness(v: Int) { h?.post { if (ready) write(AmbientProtocol.frame("0200%02X".format(v.coerceIn(0, 100)))) } }
+
     /** 設定裡的測試：[zone] 顏色 [rgb] 亮 2 秒再恢復。 */
     fun test(zone: String, rgb: Int) {
         h?.post {

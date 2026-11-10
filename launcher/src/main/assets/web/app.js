@@ -265,8 +265,40 @@
   function openRoad() { try { Car.roadView(); } catch (e) {} }
   $('viewBtn').onclick = function () { override = roadOn ? 'car' : 'road'; updateView(); };
   $('roadCard').onclick = openRoad;
-  dotRow($('ambDots'), [['紅', '#ff2a2a'], ['橘', '#ff7a1a'], ['黃', '#ffd21a'], ['綠', '#2aff6a'], ['青', '#2ae0ff'], ['藍', '#2a5cff'], ['紫', '#b02aff'], ['白', '#ffffff']], '',
-    function (col) { try { Car.engine('ambient', col.slice(1)); } catch (e) {} });
+  // ───────── 車控（經 360 引擎；引擎會先驗中控台的簽章）─────────
+  function control(cmd, arg) { try { Car.control(cmd, String(arg)); } catch (e) {} }
+  var AMB = [['紅', '#ff2a2a'], ['橘', '#ff7a1a'], ['黃', '#ffd21a'], ['綠', '#2aff6a'], ['青', '#2ae0ff'], ['藍', '#2a5cff'], ['紫', '#b02aff'], ['白', '#ffffff']];
+  function pickAmb(col) { setPref('ambColor', col); control('ambient_color', col.slice(1)); }
+  dotRow($('ambDots'), AMB, pref('ambColor', ''), pickAmb);
+  var askCb = null;
+  function ask(text, cb) { $('askText').textContent = text; askCb = cb; show('ask', true); }
+  $('askYes').onclick = function () { show('ask', false); if (askCb) askCb(); askCb = null; };
+  $('askNo').onclick = function () { show('ask', false); askCb = null; };
+  document.querySelectorAll('[data-remote]').forEach(function (b) {
+    b.onclick = function () { ask(b.dataset.ask, function () { control('remote', b.dataset.remote); }); };
+  });
+  document.querySelectorAll('[data-ctl]').forEach(function (b) { b.onclick = function () { control(b.dataset.ctl, b.dataset.arg); }; });
+  var bt = null;
+  $('ambBright').addEventListener('input', function () { clearTimeout(bt); var v = $('ambBright').value; bt = setTimeout(function () { setPref('ambBright', v); control('ambient_bright', v); }, 250); });
+  (function () {
+    var box = $('rearSlots');
+    for (var n = 1; n <= 12; n++) (function (n) {
+      var b = document.createElement('button'); b.textContent = n; b.setAttribute('aria-label', '播第 ' + n + ' 則');
+      b.onclick = function () { control('rear_play', n); }; box.appendChild(b);
+    })(n);
+  })();
+  $('ctlBtn').onclick = function () {
+    dotRow($('ctlAmbDots'), AMB, pref('ambColor', ''), pickAmb);
+    $('ambBright').value = pref('ambBright', '80');
+    show('control', true);
+  };
+  function accStatus() {
+    var a = st.acc;
+    $('stRemote').textContent = !a ? '（等 360 回報）' : a.remoteReady ? a.remote : '還沒在 360 設定遠端模組（金鑰、選模組）';
+    $('stAmb').textContent = !a ? '' : a.ambientOn ? a.ambient : '還沒在 360 啟用氛圍燈';
+    $('stRear').textContent = !a ? '' : a.rearOn ? a.rear : '還沒在 360 啟用看板';
+  }
+  setInterval(function () { if (!$('control').hidden) accStatus(); }, 500);
 
   // 抽屜、設定
   function show(id, on) { $(id).hidden = !on; }

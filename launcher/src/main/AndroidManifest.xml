@@ -27,5 +27,10 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <!-- 車控指令待辦清單：360 引擎驗過簽章才來拿（見 CmdProvider） -->
+        <provider
+            android:name=".CmdProvider"
+            android:authorities="com.vito.avmlauncher.cmd"
+            android:exported="true" />
     </application>
 </manifest>

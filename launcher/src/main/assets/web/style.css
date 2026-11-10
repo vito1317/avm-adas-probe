@@ -150,3 +150,24 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid 
 .dock .fav img{width:26px;height:26px;border-radius:7px}
 .sheet h2 .hint{font-size:12px;color:var(--muted);font-weight:400;letter-spacing:0;margin-left:8px}
 .appgrid button.pinned{box-shadow:inset 0 0 0 2px var(--accent)}
+
+/* 車控面板 */
+.sheet-in.ctl{width:min(980px,94vw)}
+.cg{margin:6px 0 18px}
+.cg h3{margin:0 0 10px;font-size:14px;letter-spacing:.14em;color:#cfe6ff}
+.cg h3 small{font-size:12px;letter-spacing:0;color:var(--muted);font-weight:400;margin-left:8px}
+.cbtns{display:flex;flex-wrap:wrap;gap:10px}
+.cbtns button{width:104px;height:84px;border-radius:18px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;font-size:26px;
+  background:linear-gradient(160deg,rgba(255,255,255,.07),rgba(255,255,255,.02));border:1px solid var(--line);box-shadow:inset 0 1px 0 rgba(255,255,255,.06);transition:transform .12s,box-shadow .2s}
+.cbtns button span{font-size:13px;color:#cfe0f5}
+.cbtns button:active{transform:scale(.95);box-shadow:0 0 22px rgba(56,225,255,.45),inset 0 0 0 1px rgba(56,225,255,.6)}
+.cbtns.slots button{width:64px;height:64px;font-size:20px;font-weight:700}
+.dots.big button{width:40px;height:40px}
+.slider{display:flex;align-items:center;gap:12px;margin-top:12px}
+.slider span{color:var(--muted);width:40px}
+.slider input{flex:1;accent-color:var(--accent);height:30px}
+.sheet-in.ask{width:min(440px,90vw);text-align:center;padding:26px}
+.sheet-in.ask p{font-size:22px;margin:4px 0 22px}
+.askb{display:flex;gap:12px}
+.askb button{flex:1;height:56px;border-radius:16px;font-size:18px;background:rgba(255,255,255,.07);border:1px solid var(--line)}
+.askb .yes{background:linear-gradient(135deg,rgba(56,225,255,.4),rgba(183,33,255,.4));border-color:rgba(56,225,255,.6);color:#fff}

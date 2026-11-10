@@ -122,6 +122,15 @@ class MainActivity : Activity() {
             return ok
         }
 
+        /**
+         * 車控（車窗、車鎖、尾箱、空調、氛圍燈、看板）：排進 CmdProvider，再通知 360 引擎來拿。
+         * 引擎會先確認 provider 的擁有者與簽章，別的 App 送廣播沒用。
+         */
+        @JavascriptInterface fun control(cmd: String, arg: String) {
+            CmdProvider.push(org.json.JSONObject().put("cmd", cmd).put("arg", arg).toString())
+            car.engineCmd("poll", "")
+        }
+
         @JavascriptInterface fun pref(k: String): String = prefs.getString(k, "") ?: ""
         @JavascriptInterface fun setPref(k: String, v: String) { prefs.edit().putString(k, v).apply() }
     }

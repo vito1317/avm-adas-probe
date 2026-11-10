@@ -89,6 +89,7 @@
 <nav class="dock">
   <button data-open="360"><b>◎</b><span>360 環景</span></button>
   <button id="viewBtn"><b>⛛</b><span>道路畫面</span></button>
+  <button id="ctlBtn"><b>⌘</b><span>車控</span></button>
   <button data-open="nav"><b>➤</b><span>導航</span></button>
   <button data-open="music"><b>♫</b><span>音樂</span></button>
   <button data-open="phone"><b>✆</b><span>電話</span></button>
@@ -103,6 +104,47 @@
   <div class="sheet-in">
     <header><h2>所有 App <small class="hint">長按可以釘到快捷列</small></h2><button class="x" data-close aria-label="關閉">✕</button></header>
     <div id="appGrid" class="appgrid"></div>
+  </div>
+</div>
+
+<!-- 車控 -->
+<div id="control" class="sheet" hidden>
+  <div class="sheet-in ctl">
+    <header><h2>車控</h2><button class="x" data-close aria-label="關閉">✕</button></header>
+    <section class="cg">
+      <h3>車窗・車鎖 <small id="stRemote"></small></h3>
+      <div class="cbtns">
+        <button data-remote="WINDOW_UP" data-ask="升起所有車窗？">⬆<span>升窗</span></button>
+        <button data-remote="WINDOW_DOWN" data-ask="降下所有車窗？">⬇<span>降窗</span></button>
+        <button data-remote="LOCK" data-ask="鎖車？">🔒<span>鎖車</span></button>
+        <button data-remote="UNLOCK" data-ask="開鎖？">🔓<span>開鎖</span></button>
+        <button data-remote="TRUNK_OPEN" data-ask="打開後車廂？">⬒<span>開尾箱</span></button>
+        <button data-remote="AC_ON" data-ask="開空調？">❄<span>開空調</span></button>
+        <button data-remote="AC_OFF" data-ask="關空調？">✕<span>關空調</span></button>
+      </div>
+    </section>
+    <section class="cg">
+      <h3>氛圍燈 <small id="stAmb"></small></h3>
+      <div class="cbtns">
+        <button data-ctl="ambient_power" data-arg="1">◉<span>開</span></button>
+        <button data-ctl="ambient_power" data-arg="0">○<span>關</span></button>
+      </div>
+      <div id="ctlAmbDots" class="dots big"></div>
+      <label class="slider"><span>亮度</span><input id="ambBright" type="range" min="5" max="100" value="80"></label>
+    </section>
+    <section class="cg">
+      <h3>後擋看板 <small id="stRear"></small></h3>
+      <div id="rearSlots" class="cbtns slots"></div>
+      <div class="cbtns"><button data-ctl="rear_idle" data-arg="">↺<span>回到自動</span></button></div>
+    </section>
+  </div>
+</div>
+
+<!-- 確認 -->
+<div id="ask" class="sheet" hidden>
+  <div class="sheet-in ask">
+    <p id="askText"></p>
+    <div class="askb"><button id="askNo">取消</button><button id="askYes" class="yes">確定</button></div>
   </div>
 </div>
 

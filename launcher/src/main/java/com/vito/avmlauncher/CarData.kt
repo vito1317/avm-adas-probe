@@ -26,6 +26,7 @@ class CarData(private val ctx: Context) {
         private const val DESCRIPTOR = "com.ts.can.carinfo.ICarInfoService"
         const val ACTION_STATE = "com.vito.adas.STATE"
         const val ACTION_CMD = "com.vito.adas.LAUNCHER_CMD"
+        const val ACTION_ACC = "com.vito.adas.ACC"
         const val ENGINE_PKG = "com.baony.avm360"
     }
 
@@ -36,6 +37,8 @@ class CarData(private val ctx: Context) {
     @Volatile private var adas: JSONObject? = null
     @Volatile private var adasAt = 0L
     @Volatile var canStatus = "連線中"; private set
+    @Volatile private var acc: JSONObject? = null
+    @Volatile private var accAt = 0L
     private val sp = ctx.getSharedPreferences("car_fields", Context.MODE_PRIVATE)
     private val seen = HashSet<Int>().apply { (sp.getString("seen", "") ?: "").split(',').mapNotNull { it.toIntOrNull() }.forEach { add(it) } }
     private val h = Handler(HandlerThread("car-data").apply { start() }.looper)
@@ -50,6 +53,7 @@ class CarData(private val ctx: Context) {
 
     private val rx = object : BroadcastReceiver() {
         override fun onReceive(c: Context?, i: Intent?) {
+            if (i?.action == ACTION_ACC) { i.getStringExtra("json")?.let { try { acc = JSONObject(it); accAt = SystemClock.elapsedRealtime() } catch (_: Throwable) {} }; return }
             val s = i?.getStringExtra("json") ?: return
             try { adas = JSONObject(s); adasAt = SystemClock.elapsedRealtime() } catch (_: Throwable) {}
         }
@@ -59,7 +63,7 @@ class CarData(private val ctx: Context) {
         try {
             ctx.bindService(Intent("com.ts.can.carinfo.CarInfoService").setPackage("com.ts.MainUI"), conn, Context.BIND_AUTO_CREATE)
         } catch (t: Throwable) { canStatus = "連不上：$t" }
-        ctx.registerReceiver(rx, IntentFilter(ACTION_STATE))
+        ctx.registerReceiver(rx, IntentFilter(ACTION_STATE).apply { addAction(ACTION_ACC) })
         h.post(object : Runnable {
             override fun run() { poll(); h.postDelayed(this, 200) }
         })
@@ -126,6 +130,8 @@ class CarData(private val ctx: Context) {
             if (j.optString("turn") == "R") o.put("turnR", true)
             if (j.optString("turn") == "H") o.put("hazard", true)
         }
+        // 配件狀態（遠端模組、氛圍燈、看板）：引擎每次收到心跳／指令就回報
+        acc?.takeIf { SystemClock.elapsedRealtime() - accAt < 10_000 }?.let { o.put("acc", it) }
         return o.toString()
     }
 
