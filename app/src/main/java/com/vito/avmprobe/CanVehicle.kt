@@ -17,8 +17,11 @@ object CanVehicle {
         val highBeam: Boolean? = null, val lowBeam: Boolean? = null, val fogFront: Boolean? = null, val fogRear: Boolean? = null,
         val hazard: Boolean? = null, val rangeKm: Int? = null, val waterC: Int? = null, val oilC: Int? = null,
         val outC: Float? = null, val batV: Float? = null, val rpm: Int? = null, val instFuel: Int? = null, val avgFuel: Int? = null,
-        val odoKm: Int? = null, val wiper: Int? = null
-    )
+        val odoKm: Int? = null, val wiper: Int? = null, val ill: Boolean? = null
+    ) {
+        /** 大燈有沒有開（近光、遠光、大燈開關任一）；CAN 沒給回 null。 */
+        val lightsOn: Boolean? get() = if (lowBeam == null && highBeam == null && ill == null) null else (lowBeam == true || highBeam == true || ill == true)
+    }
 
     data class Msg(val key: String, val text: String, val level: Int)
 
@@ -50,7 +53,8 @@ object CanVehicle {
                 rpm = g(3).takeIf { nonZero[3] && it in 0..9000 },
                 instFuel = g(12).takeIf { nonZero[12] }, avgFuel = g(11).takeIf { nonZero[11] },
                 odoKm = g(14).takeIf { it in 1..2_000_000 },
-                wiper = g(60).takeIf { nonZero[60] }
+                wiper = g(60).takeIf { nonZero[60] },
+                ill = flag(25)
             )
         }
     }

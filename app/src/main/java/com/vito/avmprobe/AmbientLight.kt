@@ -185,8 +185,10 @@ object AmbientLight {
         }
         // 分區是前座／後座：前方的危險亮前座、後方的危險亮後座（設定了哪一組是前座才分，不然全部）
         val frontZone = p.ambientLeftZone
+        // 後座燈接大燈電源：大燈沒開（白天）後座不會亮 → 後方危險改成前後一起亮
+        val rearDark = w.side == 'B' && !(CanVehicle.fresh() && CanVehicle.info.lightsOn == true)
         val zone = when {
-            w.side == null || frontZone == 0 -> AmbientProtocol.ZONE_ALL
+            w.side == null || frontZone == 0 || rearDark -> AmbientProtocol.ZONE_ALL
             (w.side == 'F') == (frontZone == 1) -> AmbientProtocol.ZONE_1
             else -> AmbientProtocol.ZONE_2
         }
