@@ -114,6 +114,17 @@ object AmbientLight {
         try { gatt?.close() } catch (_: Throwable) {}
         // 一定要指定 BLE：車機的藍牙晶片預設可能走傳統藍牙，連上很容易斷、斷了就連不回來（錯誤 133）
         gatt = ad.getRemoteDevice(mac).connectGatt(ctx, false, cb, android.bluetooth.BluetoothDevice.TRANSPORT_LE)
+        // 連線逾時：Android 有時一直不回報，會永遠卡在「連線中」→ 15 秒沒好就放掉重來
+        val mine = gatt
+        h?.postDelayed({
+            if (!ready && gatt != null && gatt === mine) {
+                try { mine?.disconnect(); mine?.close() } catch (_: Throwable) {}
+                gatt = null; fails++
+                val d = if (fails <= 2) 3_000L else 15_000L
+                status = "連線逾時（第 $fails 次），${d / 1000} 秒後再試；手機 App 在背景連著燈的話車機連不上"
+                h?.postDelayed({ val p = prefs; if (!paused && gatt == null && p != null && p.ambientOn && p.ambientMac.isNotEmpty()) connect(p.ambientMac) }, d)
+            }
+        }, 15_000)
     }
 
     private val cb = object : BluetoothGattCallback() {
