@@ -154,7 +154,7 @@ object CyRemote {
         note("連線中…（手機 App 連著的話會連不上）")
         Crumbs.at(Crumbs.OTHER, "cy-connect")
         buf.setLength(0); rand = null; ready = false
-        gatt = ad.getRemoteDevice(mac).connectGatt(ctx, false, cb)
+        gatt = ad.getRemoteDevice(mac).connectGatt(ctx, false, cb, android.bluetooth.BluetoothDevice.TRANSPORT_LE)   // 指定 BLE（車機預設可能走傳統藍牙）
         h.postDelayed({ if (!ready && gatt != null) { note("握手逾時（金鑰不對，或模組被手機連著）"); queue.clear(); close() } }, HANDSHAKE_MS)
     }
 

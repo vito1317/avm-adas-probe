@@ -194,10 +194,10 @@ object Engine360Settings {
             text = "選擇氛圍燈（先把手機 App 斷開）"; isAllCaps = false
             setOnClickListener { pickAmbient(act, prefs) { ambStatus.text = "氛圍燈：${prefs.ambientName}（${prefs.ambientMac}）\n狀態：" + AmbientLight.status } }
         })
-        val zoneNames = arrayOf("不分側（全部一起亮）", "第 1 組在左邊", "第 2 組在左邊")
+        val zoneNames = arrayOf("不分（全部一起亮）", "第 1 組是前座", "第 2 組是前座")
         col.addView(Button(act).apply {
-            text = "左右側：" + zoneNames[prefs.ambientLeftZone]; isAllCaps = false
-            setOnClickListener { prefs.ambientLeftZone = (prefs.ambientLeftZone + 1) % 3; text = "左右側：" + zoneNames[prefs.ambientLeftZone] }
+            text = "前後座：" + zoneNames[prefs.ambientLeftZone] + "（前方危險亮前座、後方亮後座）"; isAllCaps = false
+            setOnClickListener { prefs.ambientLeftZone = (prefs.ambientLeftZone + 1) % 3; text = "前後座：" + zoneNames[prefs.ambientLeftZone] + "（前方危險亮前座、後方亮後座）" }
         })
         col.addView(LinearLayout(act).apply {
             orientation = LinearLayout.HORIZONTAL

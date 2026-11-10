@@ -399,7 +399,13 @@ class AdasPipeline(
         )
         // 氛圍燈連動：危險紅閃（那一側有車只亮那側）、偏離橘、起步綠
         if (!Crumbs.off("ambient")) try {
-            val side = if (lcaFresh && l!!.L >= 2) 'L' else if (lcaFresh && l!!.R >= 2) 'R' else cutIn?.takeIf { now - cutInAt < 1500 }?.first
+            // 氛圍燈分區是前座／後座：後方來的危險（盲點來車、倒車）亮後座，前方的（碰撞、切入、轉彎掃到）亮前座
+            val side = when {
+                lcaFresh && (l!!.L >= 2 || l.R >= 2) -> 'B'
+                vs.gear == 'R' -> 'B'
+                state.collision || state.turnHit || (cutIn != null && now - cutInAt < 1500) -> 'F'
+                else -> null
+            }
             AmbientLight.onAlerts(state.lcaDanger || state.turnHit || state.collision, side, state.ldw, state.start)
         } catch (t: Throwable) { Log.w(TAG, "ambient", t) }
         if (!prefs.alertSound) return

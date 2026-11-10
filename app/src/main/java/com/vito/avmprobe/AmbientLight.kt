@@ -65,7 +65,7 @@ object AmbientRules {
     const val GREEN = 0x00FF20
 
     fun want(danger: Boolean, dangerSide: Char?, warn: Boolean, go: Boolean, now: Long): Want? = when {
-        danger -> Want(if ((now / 250) % 2 == 0L) RED else DIM_RED, dangerSide)
+        danger -> Want(if ((now / 500) % 2 == 0L) RED else DIM_RED, dangerSide)   // 一秒閃一次（太快會把控制器塞爆斷線）
         warn -> Want(ORANGE, null)
         go -> Want(if ((now / 300) % 2 == 0L) GREEN else 0x002008, null)
         else -> null
@@ -78,7 +78,8 @@ object AmbientLight {
     private val TX = UUID.fromString("0000ffe2-0000-1000-8000-00805f9b34fb")
     private val RX = UUID.fromString("0000ffe1-0000-1000-8000-00805f9b34fb")
     private val CCC = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
-    private const val MIN_GAP_MS = 120L
+    private const val MIN_GAP_MS = 250L
+    private var fails = 0
 
     @Volatile var status = "未啟用"; private set
     @Volatile private var gatt: BluetoothGatt? = null
@@ -110,7 +111,9 @@ object AmbientLight {
         if (!ad.isEnabled) { status = "車機藍牙是關的"; return }
         status = "連線中（$mac）…"
         Crumbs.at(Crumbs.OTHER, "ambient-connect")
-        gatt = ad.getRemoteDevice(mac).connectGatt(ctx, false, cb)
+        try { gatt?.close() } catch (_: Throwable) {}
+        // 一定要指定 BLE：車機的藍牙晶片預設可能走傳統藍牙，連上很容易斷、斷了就連不回來（錯誤 133）
+        gatt = ad.getRemoteDevice(mac).connectGatt(ctx, false, cb, android.bluetooth.BluetoothDevice.TRANSPORT_LE)
     }
 
     private val cb = object : BluetoothGattCallback() {
@@ -120,7 +123,12 @@ object AmbientLight {
                 ready = false; tx = null
                 try { g.close() } catch (_: Throwable) {}
                 if (gatt === g) gatt = null
-                status = if (paused) "已斷開（讓手機 App 用）" else "斷線（錯誤 $st），15 秒後重連；手機 App 連著的話車機連不上"
+                if (paused) { status = "已斷開（讓手機 App 用）"; return }
+                // 斷線：2 秒、5 秒、15 秒後重連（先完全釋放舊連線）
+                fails++
+                val d = when (fails) { 1 -> 2_000L; 2 -> 5_000L; else -> 15_000L }
+                status = "斷線（錯誤 $st），${d / 1000} 秒後重連（第 $fails 次）；手機 App 在背景連著的話車機會連不上"
+                h?.postDelayed({ val p = prefs; if (!paused && gatt == null && p != null && p.ambientOn && p.ambientMac.isNotEmpty()) connect(p.ambientMac) }, d)
             }
         }
         override fun onServicesDiscovered(g: BluetoothGatt, st: Int) {
@@ -132,7 +140,7 @@ object AmbientLight {
                 g.setCharacteristicNotification(rx, true)
                 rx.getDescriptor(CCC)?.let { d -> d.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE; g.writeDescriptor(d) }
             }
-            ready = true
+            ready = true; fails = 0
             status = "已連線"
             h?.postDelayed({ write(AmbientProtocol.frame("0A01")) }, 600)   // 跟 App 一樣：連上先送 0A01，燈會回狀態
         }
@@ -175,11 +183,11 @@ object AmbientLight {
             else write(AmbientProtocol.frame("0A01"))   // 不知道原本顏色：至少讓燈回報一次
             return
         }
-        // 指定一側：設定了哪一組在左邊才分側，不然全部
-        val leftZone = p.ambientLeftZone
+        // 分區是前座／後座：前方的危險亮前座、後方的危險亮後座（設定了哪一組是前座才分，不然全部）
+        val frontZone = p.ambientLeftZone
         val zone = when {
-            w.side == null || leftZone == 0 -> AmbientProtocol.ZONE_ALL
-            (w.side == 'L') == (leftZone == 1) -> AmbientProtocol.ZONE_1
+            w.side == null || frontZone == 0 -> AmbientProtocol.ZONE_ALL
+            (w.side == 'F') == (frontZone == 1) -> AmbientProtocol.ZONE_1
             else -> AmbientProtocol.ZONE_2
         }
         write(AmbientProtocol.color(zone, w.rgb))
