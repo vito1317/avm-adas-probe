@@ -292,6 +292,9 @@ class AppPrefs(context: Context) {
         get() = sp.getString("ambientName", "") ?: ""
         set(v) = sp.edit().putString("ambientName", v).apply()
     /** 中控台開著時 360 在背景也跑偵測（中控台的 3D 道路畫面才有資料）。實驗：實車會讓 360 閃退，預設關。 */
+    var trainCollect: Boolean
+        get() = sp.getBoolean("trainCollect", false)
+        set(v) = sp.edit().putBoolean("trainCollect", v).apply()
     var launcherBgDetect: Boolean
         get() = sp.getBoolean("launcherBgDetect", false)
         set(v) = sp.edit().putBoolean("launcherBgDetect", v).apply()

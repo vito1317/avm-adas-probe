@@ -185,6 +185,13 @@ object Engine360Settings {
         }
         check("停好車（P 檔＋手煞車）問要不要升窗、鎖車", { prefs.cyParkPrompt }) { prefs.cyParkPrompt = it }
 
+        section("收集訓練資料（魚眼道路線模型）")
+        val trainInfo = TextView(act).apply { setTextColor(0xFFB0B8C4.toInt()); textSize = 13f; text = TrainCollector.status }
+        check("開車時每秒存一張原始影格＋車況到「下載/avm-adas/train_…」（停著每 10 秒一張；360 畫面要開著才收得到；每張約 0.4 MB，一小時約 1.4 GB）",
+            { prefs.trainCollect }) { v -> prefs.trainCollect = v; if (v) TrainCollector.reset(); trainInfo.text = if (v) TrainCollector.status else "關閉（已存 ${TrainCollector.count} 張）" }
+        col.addView(trainInfo)
+        trainInfo.postDelayed(object : Runnable { override fun run() { if (prefs.trainCollect) trainInfo.text = TrainCollector.status; if (trainInfo.isAttachedToWindow) trainInfo.postDelayed(this, 1000) } }, 1000)
+
         section("中控台")
         check("中控台開著時，360 在背景也跑偵測（中控台的 3D 道路畫面才有資料；實驗，可能讓 360 閃退）", { prefs.launcherBgDetect }) { prefs.launcherBgDetect = it }
 

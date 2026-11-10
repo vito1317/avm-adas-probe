@@ -294,6 +294,15 @@ class AdasPipeline(
         if (lastFrameAt != 0L) emaFps = ema(emaFps, 1000f / max(1L, t0 - lastFrameAt))
         lastFrameAt = t0
         Crumbs.step(Crumbs.FRAME, "publish") { pushPayload(g, det, now, vs) }
+        if (prefs.trainCollect && !Crumbs.off("train") && TrainCollector.due(now, vs.speedKmh)) Crumbs.step(Crumbs.FRAME, "train") {
+            val rd = road?.takeIf { now - roadAt < BEV_TTL_MS }
+            val meta = JSONObject().put("t", System.currentTimeMillis())
+                .put("speed", vs.speedKmh ?: JSONObject.NULL).put("gear", gearCur?.toString() ?: JSONObject.NULL)
+                .put("steer", vs.steerDeg ?: JSONObject.NULL).put("turn", vs.turn?.toString() ?: JSONObject.NULL)
+                .put("lot", inLot).put("lines", TrainCollector.lines(rd?.lines))
+                .put("edgeL", rd?.edgeL ?: JSONObject.NULL).put("edgeR", rd?.edgeR ?: JSONObject.NULL)
+            TrainCollector.submit(ctx, frame.toNv21(), frame.width, frame.height, now, meta, calibText)
+        }
     }
 
     private fun slots(): List<String> {
