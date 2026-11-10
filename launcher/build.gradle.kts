@@ -16,7 +16,7 @@ android {
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.vito.avmlauncher"
+        applicationId = "com.vito.navilauncher"   // 套件名稱含 navi：車機主程式行駛中放行導航類 App（否則跳「行車中請勿觀看影片」）
         minSdk = 26
         targetSdk = 29          // 車機是 Android 10；照 Q 的行為（不用處理 Android 11+ 的套件可見性）
         versionCode = 1

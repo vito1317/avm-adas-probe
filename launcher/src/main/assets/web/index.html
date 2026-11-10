@@ -7,13 +7,15 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<div id="bg"><div class="grid"></div><div class="glow g1"></div><div class="glow g2"></div></div>
+<div id="bg"><div class="grid"></div><div class="glow g1"></div><div class="glow g2"></div><i class="streak s1"></i><i class="streak s2"></i><i class="streak s3"></i></div>
 
 <!-- 3D 車子展示（停車時） -->
 <canvas id="car3d"></canvas>
 <!-- 3D 道路畫面（行車時；之前 App 的 3D 面板，資料來自 360 裡的 ADAS 引擎） -->
 <iframe id="road" src="bev3d/index.html" title="3D 道路畫面"></iframe>
 <div id="roadFx" class="roadfx" aria-hidden="true"></div>
+<!-- 介面：以 1920×720 設計，依螢幕等比例縮放（app.js fit()） -->
+<div id="ui">
 <!-- 道路畫面視角切換 -->
 <div id="views" class="views" role="group" aria-label="道路畫面視角">
   <button data-view="front" aria-pressed="true">前方斜視</button>
@@ -174,6 +176,8 @@
     <p class="credit">3D 車模：「BMW 5 Series 525i MK5 (E60) 2003-2010」by szymonpasterczyk（Sketchfab），CC BY 4.0，已修改。<br>
     道路使用者模型署名見 bev3d/models/CREDITS.md。BMW 為 BMW AG 的商標，本程式與 BMW 無關。<br>3D 引擎：three.js（MIT）。</p>
   </div>
+</div>
+
 </div>
 
 <script src="bev3d/lib/three.min.js"></script>

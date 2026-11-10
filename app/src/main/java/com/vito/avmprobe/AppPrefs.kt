@@ -291,6 +291,10 @@ class AppPrefs(context: Context) {
     var ambientName: String
         get() = sp.getString("ambientName", "") ?: ""
         set(v) = sp.edit().putString("ambientName", v).apply()
+    /** 中控台開著時 360 在背景也跑偵測（中控台的 3D 道路畫面才有資料）。實驗：實車會讓 360 閃退，預設關。 */
+    var launcherBgDetect: Boolean
+        get() = sp.getBoolean("launcherBgDetect", false)
+        set(v) = sp.edit().putBoolean("launcherBgDetect", v).apply()
     /** 氛圍燈目前的動態模式（空字串 = 單色）；警示結束後恢復成這個。 */
     var ambientMode: String
         get() = sp.getString("ambientMode", "") ?: ""

@@ -8,13 +8,13 @@ import android.os.SystemClock
 import org.json.JSONObject
 
 /**
- * 跟車機桌面（com.vito.avmlauncher）連動：
+ * 跟車機桌面（中控台，com.vito.navilauncher）連動：
  * - 桌面開著時每 2 秒送「我在看」（ALIVE）→ 引擎在背景也繼續跑偵測（平常只有 360 畫面開著或行車記錄器在錄才跑）。
  * - 每一幀偵測結果（跟 3D 面板同一個格式）每秒最多 5 次廣播給桌面，桌面的道路畫面直接拿去畫。
  * - 桌面送來的指令：氛圍燈顏色、後擋看板試播。只接受這些非敏感的指令（遠端模組的鎖車、車窗不經過這裡）。
  */
 object LauncherLink {
-    const val PKG = "com.vito.avmlauncher"
+    const val PKG = "com.vito.navilauncher"   // 中控台（套件名稱含 navi 才不會被車機擋成「行車中請勿觀看影片」）
     const val ACTION_STATE = "com.vito.adas.STATE"
     const val ACTION_CMD = "com.vito.adas.LAUNCHER_CMD"
     private const val ALIVE_MS = 6000L
@@ -32,6 +32,14 @@ object LauncherLink {
         if (registered) return
         registered = true
         app = ctx.applicationContext
+        // 車況轉送：中控台開著時每 0.3 秒送一次（中控台不自己去讀車機 CAN——兩邊同時呼叫主程式的 CAN 原生程式會讓主程式閃退）
+        val h = android.os.Handler(android.os.HandlerThread("launcher-car").apply { start() }.looper)
+        h.post(object : Runnable {
+            override fun run() {
+                if (watching()) sendCar()
+                h.postDelayed(this, 300)
+            }
+        })
         val rx = object : BroadcastReceiver() {
             override fun onReceive(c: Context?, i: Intent?) {
                 val cmd = i?.getStringExtra("cmd") ?: return
@@ -61,7 +69,7 @@ object LauncherLink {
     }
 
     // ───── 車控指令（車窗、車鎖、氛圍燈、看板）─────
-    private const val AUTHORITY = "com.vito.avmlauncher.cmd"
+    private const val AUTHORITY = "com.vito.navilauncher.cmd"
     /** 中控台 APK 的簽章（SHA-256）。只有用這把金鑰簽的中控台送來的車控指令才執行。 */
     private const val LAUNCHER_CERT = "fa5736a4d084e599e2b5bb75d0b5b5e916c3264283065274a06673394c206e92"
 
@@ -108,6 +116,24 @@ object LauncherLink {
             "roadview" -> Engine360.showRoad(true)
         }
         Engine360.log("中控台車控：$cmd $arg")
+    }
+
+    /** 車況：車機 CAN 的整個陣列（中控台用同一套解碼）、原廠車門、方向燈、檔位、車速。 */
+    private fun sendCar() {
+        val c = app ?: return
+        try {
+            val j = JSONObject()
+            CanCarInfo.last?.takeIf { CanCarInfo.fresh() || CanCarInfo.status.startsWith("CAN") }?.let { a ->
+                j.put("can", org.json.JSONArray().apply { for (v in a) put(v) })
+            }
+            FactoryVehicle.doorArray()?.let { d -> j.put("doors", org.json.JSONArray().apply { for (v in d) put(v) }) }
+            val vs = VehicleBus.signals.snapshot()
+            vs.speedKmh?.let { j.put("speed", it.toDouble()) }
+            vs.turn?.let { j.put("turn", it.toString()) }
+            (CanVehicle.info.gear ?: vs.gear)?.let { j.put("gear", it.toString()) }
+            j.put("canStatus", CanCarInfo.status)
+            c.sendBroadcast(Intent("com.vito.adas.CAR").setPackage(PKG).putExtra("json", j.toString()))
+        } catch (_: Throwable) {}
     }
 
     /** 配件狀態回報給中控台。 */

@@ -185,6 +185,9 @@ object Engine360Settings {
         }
         check("停好車（P 檔＋手煞車）問要不要升窗、鎖車", { prefs.cyParkPrompt }) { prefs.cyParkPrompt = it }
 
+        section("中控台")
+        check("中控台開著時，360 在背景也跑偵測（中控台的 3D 道路畫面才有資料；實驗，可能讓 360 閃退）", { prefs.launcherBgDetect }) { prefs.launcherBgDetect = it }
+
         section("後擋 LED 看板（iPixel；先用 iPixel App 把要顯示的字存進看板，這裡選每個情境播第幾則）")
         check("啟用：急煞／雙閃、倒車、方向燈、起步、紅燈停等、跟車太近、路邊停車時切換看板", { prefs.rdOn }) { v -> prefs.rdOn = v; if (v) RearDisplay.start(act, prefs) }
         val rdInfo = TextView(act).apply { textSize = 12f }

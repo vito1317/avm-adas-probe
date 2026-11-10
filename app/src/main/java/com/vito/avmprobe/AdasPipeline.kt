@@ -283,7 +283,7 @@ class AdasPipeline(
         if ((vs.speedKmh ?: 0f) > 30f) lastFastAt = now
         // 停車場判斷（慢慢開、打 R／P、慢速大角度轉方向盤）：在停車場就不算馬路（從馬路開進來很快停進格子也認得到）
         val gearNow = CanVehicle.info.gear ?: vs.gear
-        inLot = lot.update(now, vs.speedKmh, gearNow, vs.steerDeg)
+        inLot = lot.update(now, vs.speedKmh, gearNow, vs.steerDeg, lotClues(now))
         onRoad = gearNow != 'R' && gearNow != 'P' && !inLot && lastFastAt > 0L && now - lastFastAt < 90_000L
         // 推論緊貼車身的分隔線只在停車時（R／P 檔，或在停車場、或慢速且不在馬路上）
         slotDet.allowInfer = gearNow == 'R' || gearNow == 'P' || (!onRoad && (vs.speedKmh ?: 99f) < 3f)
@@ -374,7 +374,7 @@ class AdasPipeline(
         ldw.minKmh = prefs.ldwMinKmh.toFloat()
         ldwState = ldw.update(
             now, vs.speedKmh,
-            if (rd != null && now - roadAt < BEV_TTL_MS) rd.lines else emptyList(), vs.turn
+            if (rd != null && now - roadAt < BEV_TTL_MS && !inLot) rd.lines else emptyList(), vs.turn
         )
         beepIfNeeded(now)
     }
@@ -577,6 +577,8 @@ class AdasPipeline(
                 CutInWatcher.Box(d.rect.left, d.rect.top, d.rect.right, d.rect.bottom, w[0], w[1])
             }
             cutIn = cutInWatch.update(now, argb, v.size, boxes); cutInAt = now
+            // 停車場判斷用：正前方（同車道）15 m 內有車 = 在排隊（塞車），不是在停車場找車位
+            if (slot == "front:n" && boxes.any { abs(it.worldX) < 1.6f && it.worldZ in 0.5f..15f }) leadCloseAt = now
         } catch (t: Throwable) { Log.w(TAG, "cut-in", t) }
         if (slot == "front:n" && !Crumbs.off("lead")) {
             Crumbs.at(Crumbs.FRAME, "lead")
@@ -922,7 +924,8 @@ class AdasPipeline(
         val mode = prefs.groundMode
         if (mode == AppPrefs.GROUND_REAL && now - groundAt < BEV_TTL_MS) groundUrl?.let { p.put("ground", it) }
         val rd = road
-        if (mode == AppPrefs.GROUND_VIRTUAL && rd != null && now - roadAt < BEV_TTL_MS) {
+        // 停車場裡不畫道路線（停車格的白線、輪擋會被當成車道線，實車：一堆奇怪的線）
+        if (mode == AppPrefs.GROUND_VIRTUAL && rd != null && now - roadAt < BEV_TTL_MS && !inLot) {
             val lines = JSONArray()
             for (l in rd.lines) lines.put(JSONObject().put("k", l.kind.toString()).put("d", if (l.dashed) 1 else 0)
                 .put("x1", r2(l.x1)).put("z1", r2(l.z1)).put("x2", r2(l.x2)).put("z2", r2(l.z2))
@@ -1180,6 +1183,23 @@ class AdasPipeline(
     private val hazardPrompt = HazardPrompt()
     @Volatile private var lastFastAt = 0L
     private val lot = ParkingLotState()
+    @Volatile private var leadCloseAt = 0L
+
+    /**
+     * 停車場 vs 塞車的畫面線索：前面 15 m 內有車（排隊）、車子左右兩側都有長的縱向線且間距像車道（2.6～4.4 m；
+     * 停車場走道兩側的格子底線間距約 5.5～6 m，不會算進來）、附近有幾格停車格。
+     */
+    private fun lotClues(now: Long): ParkingLotState.Clues {
+        val lines = road?.takeIf { now - roadAt < BEV_TTL_MS }?.lines.orEmpty()
+        val lon = lines.filter { abs(it.z2 - it.z1) >= 5f && abs(it.x2 - it.x1) < 0.35f * abs(it.z2 - it.z1) }
+            .map { (it.x1 + it.x2) / 2f }
+        val l = lon.filter { it in -4.4f..-0.8f }.maxOrNull()
+        val r = lon.filter { it in 0.8f..4.4f }.minOrNull()
+        val lanes = (l != null && r != null && r - l in 2.6f..4.4f) ||
+            lines.any { it.dashed && abs(it.z2 - it.z1) >= 3f && abs(it.x2 - it.x1) < 0.35f * abs(it.z2 - it.z1) }
+        val nSlots = if (now - slotsAt < 2000L) slots.size else 0
+        return ParkingLotState.Clues(leadClose = now - leadCloseAt < 1500L, longLanes = lanes, slots = nSlots)
+    }
     @Volatile private var inLot = false
     @Volatile private var aidKeys: Set<String> = emptySet()
     private var rdStopAt = 0L

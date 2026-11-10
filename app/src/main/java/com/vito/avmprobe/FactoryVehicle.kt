@@ -38,6 +38,8 @@ object FactoryVehicle {
     /** 原廠的車門狀態（VehicleState.doorState，CAN 來的）：任一門開著。 */
     @Volatile private var doors: IntArray? = null
     fun doorOpen(): Boolean = doors?.any { it != 0 } == true
+    /** 原廠的車門陣列（給中控台）；沒有回 null。 */
+    fun doorArray(): IntArray? = doors?.copyOf()
 
     /** 最近 1 秒內有原廠的方向盤角度、而且確定有接 CAN。 */
     fun steerFresh(): Boolean = wheelLive && SystemClock.elapsedRealtime() - wheelAt < 1000

@@ -35,6 +35,13 @@
   function pref(k, d) { var v = ''; try { v = Car.pref(k); } catch (e) {} return v === '' || v == null ? d : v; }
   function setPref(k, v) { try { Car.setPref(k, String(v)); } catch (e) {} }
 
+  // ───────── 適配：介面 1920×720 等比例縮放置中 ─────────
+  function fit() {
+    var ui = $('ui'), w = window.innerWidth, h = window.innerHeight, s = Math.min(w / 1920, h / 720);
+    ui.style.transform = 'translate(' + ((w - 1920 * s) / 2) + 'px,' + ((h - 720 * s) / 2) + 'px) scale(' + s + ')';
+  }
+  window.addEventListener('resize', fit); fit();
+
   // ───────── 時鐘 ─────────
   var WD = ['日', '一', '二', '三', '四', '五', '六'];
   function tick() {
@@ -188,6 +195,7 @@
     try { st = JSON.parse(Car.state()); } catch (e) { st = {}; }
     var spd = Math.round(st.speed || 0), rpm = st.rpm;
     $('speed').textContent = spd;
+    $('speed').style.filter = 'drop-shadow(0 0 ' + (8 + Math.min(spd, 160) / 6) + 'px rgba(56,225,255,' + (0.4 + Math.min(spd, 160) / 400) + '))';
     $('arcSpd').style.strokeDasharray = (Math.min(spd, 240) / 240 * ARC_S) + ' 603';
     $('arcRpm').style.strokeDasharray = (rpm ? Math.min(rpm, 7000) / 7000 * ARC_R : 0) + ' 503';
     $('rpm').textContent = rpm ? rpm + ' rpm' : '— rpm';
@@ -231,7 +239,8 @@
   function updateView() {
     var mode = pref('viewMode', 'auto'), spd = st.speed || 0, driving = spd >= 5;
     if (driving !== wasDriving) { override = null; wasDriving = driving; }
-    var want = override || (mode === 'road' ? 'road' : mode === 'car' ? 'car' : driving ? 'road' : 'car');
+    // 自動模式：開車而且真的有偵測資料才切道路（360 在背景預設不偵測，避免閃退）
+    var want = override || (mode === 'road' ? 'road' : mode === 'car' ? 'car' : driving && st.adas ? 'road' : 'car');
     roadOn = want === 'road';
     road.classList.toggle('on', roadOn);
     $('roadFx').classList.toggle('on', roadOn);

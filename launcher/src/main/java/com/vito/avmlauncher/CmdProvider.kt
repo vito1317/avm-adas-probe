@@ -10,11 +10,11 @@ import org.json.JSONArray
 /**
  * 中控台 → 360 引擎的「待辦指令」（車窗、車鎖、氛圍燈、看板…）。
  * 廣播任何 App 都能送，所以車控指令不放在廣播裡：中控台把指令排在這裡，只廣播「有新指令」；
- * 360 引擎收到後先確認這個 provider 的擁有者是 com.vito.avmlauncher、而且簽章是固定的那把金鑰，才來 call("take") 拿走。
+ * 360 引擎收到後先確認這個 provider 的擁有者是 com.vito.navilauncher、而且簽章是固定的那把金鑰，才來 call("take") 拿走。
  */
 class CmdProvider : ContentProvider() {
     companion object {
-        const val AUTHORITY = "com.vito.avmlauncher.cmd"
+        const val AUTHORITY = "com.vito.navilauncher.cmd"
         private val queue = ArrayList<String>()
         private const val MAX = 20
 

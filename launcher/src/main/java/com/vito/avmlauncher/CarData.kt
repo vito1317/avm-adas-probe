@@ -15,10 +15,10 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /**
- * 車況來源：
- * 1. 車機主程式的 CAN 服務（com.ts.can.carinfo.CarInfoService，唯讀）：交易碼 6 = 車況（82 個欄位）、4 = 車門。
- *    跟 ADAS 引擎用同一個服務（反編譯確認過，只用這兩個唯讀的交易碼）。
- * 2. ADAS 引擎（在原廠 360 程式裡）每秒廣播的偵測結果（周圍的車、車道線、警示）→ 道路畫面用。
+ * 車況來源：全部由 360 裡的 ADAS 引擎轉送（com.vito.adas.CAR，每 0.3 秒）。
+ * 中控台**不自己去讀車機主程式的 CAN 服務**：兩個程式同時呼叫，主程式的 CAN 原生程式會撞在一起閃退
+ * （實車：「MainApp 已停止運作」，之後兩邊都讀不到 CAN）。只讓引擎一個人讀，安全。
+ * 另外引擎每幀廣播偵測結果（周圍的車、車道線、警示）→ 道路畫面用。
  * CAN 盒不一定每個欄位都給：看過非 0 才算有（永久記住），一直是 0 的欄位不顯示。
  */
 class CarData(private val ctx: Context) {
@@ -27,10 +27,10 @@ class CarData(private val ctx: Context) {
         const val ACTION_STATE = "com.vito.adas.STATE"
         const val ACTION_CMD = "com.vito.adas.LAUNCHER_CMD"
         const val ACTION_ACC = "com.vito.adas.ACC"
+        const val ACTION_CAR = "com.vito.adas.CAR"
         const val ENGINE_PKG = "com.baony.avm360"
     }
 
-    @Volatile private var binder: IBinder? = null
     @Volatile private var base: IntArray? = null
     @Volatile private var doors: IntArray? = null
     @Volatile private var baseAt = 0L
@@ -43,16 +43,9 @@ class CarData(private val ctx: Context) {
     private val seen = HashSet<Int>().apply { (sp.getString("seen", "") ?: "").split(',').mapNotNull { it.toIntOrNull() }.forEach { add(it) } }
     private val h = Handler(HandlerThread("car-data").apply { start() }.looper)
 
-    private val conn = object : ServiceConnection {
-        override fun onServiceConnected(n: ComponentName?, b: IBinder?) {
-            val d = try { b?.interfaceDescriptor } catch (_: Throwable) { null }
-            if (d == DESCRIPTOR) { binder = b; canStatus = "已連上車機 CAN" } else canStatus = "介面不符"
-        }
-        override fun onServiceDisconnected(n: ComponentName?) { binder = null; canStatus = "斷線" }
-    }
-
     private val rx = object : BroadcastReceiver() {
         override fun onReceive(c: Context?, i: Intent?) {
+            if (i?.action == ACTION_CAR) { i.getStringExtra("json")?.let { onCar(it) }; return }
             if (i?.action == ACTION_ACC) { i.getStringExtra("json")?.let { try { acc = JSONObject(it); accAt = SystemClock.elapsedRealtime() } catch (_: Throwable) {} }; return }
             val s = i?.getStringExtra("json") ?: return
             try { adas = JSONObject(s); adasAt = SystemClock.elapsedRealtime() } catch (_: Throwable) {}
@@ -60,43 +53,40 @@ class CarData(private val ctx: Context) {
     }
 
     fun start() {
+        ctx.registerReceiver(rx, IntentFilter(ACTION_STATE).apply { addAction(ACTION_ACC); addAction(ACTION_CAR) })
+    }
+
+    @Volatile private var carSpeed: Double? = null
+    @Volatile private var carTurn: String? = null
+    @Volatile private var carGear: String? = null
+
+    /** 引擎轉送的車況：CAN 陣列（跟引擎同一個來源）、原廠車門、車速、方向燈、檔位。 */
+    private fun onCar(js: String) {
         try {
-            ctx.bindService(Intent("com.ts.can.carinfo.CarInfoService").setPackage("com.ts.MainUI"), conn, Context.BIND_AUTO_CREATE)
-        } catch (t: Throwable) { canStatus = "連不上：$t" }
-        ctx.registerReceiver(rx, IntentFilter(ACTION_STATE).apply { addAction(ACTION_ACC) })
-        h.post(object : Runnable {
-            override fun run() { poll(); h.postDelayed(this, 200) }
-        })
+            val j = JSONObject(js)
+            j.optJSONArray("can")?.let { arr ->
+                val a = IntArray(arr.length()) { arr.optInt(it) }
+                base = a; baseAt = SystemClock.elapsedRealtime()
+                var changed = false
+                for (i in a.indices) if (a[i] != 0 && seen.add(i)) changed = true
+                if (changed) sp.edit().putString("seen", seen.joinToString(",")).apply()
+            }
+            doors = j.optJSONArray("doors")?.let { d -> IntArray(d.length()) { d.optInt(it) } }
+            carSpeed = if (j.has("speed")) j.optDouble("speed") else null
+            carTurn = j.optString("turn").takeIf { it.isNotEmpty() }
+            carGear = j.optString("gear").takeIf { it.isNotEmpty() }
+            canStatus = j.optString("canStatus", canStatus)
+            carAt = SystemClock.elapsedRealtime()
+        } catch (_: Throwable) {}
     }
-
-    private fun call(code: Int): IntArray? {
-        val b = binder ?: return null
-        val d = Parcel.obtain(); val r = Parcel.obtain()
-        return try {
-            d.writeInterfaceToken(DESCRIPTOR)
-            b.transact(code, d, r, 0)
-            r.readException()
-            r.createIntArray()
-        } catch (_: Throwable) { null } finally { d.recycle(); r.recycle() }
-    }
-
-    private var doorTick = 0
-    private fun poll() {
-        call(6)?.let { a ->
-            base = a; baseAt = SystemClock.elapsedRealtime()
-            var changed = false
-            for (i in a.indices) if (a[i] != 0 && seen.add(i)) changed = true
-            if (changed) sp.edit().putString("seen", seen.joinToString(",")).apply()
-        }
-        if (++doorTick % 3 == 0) call(4)?.let { doors = it }
-    }
+    @Volatile private var carAt = 0L
 
     /** 給網頁的車況 JSON。 */
     fun json(): String {
         val o = JSONObject()
         val a = base
         val fresh = a != null && SystemClock.elapsedRealtime() - baseAt < 2000
-        o.put("can", fresh); o.put("canStatus", canStatus)
+        o.put("can", fresh); o.put("canStatus", if (SystemClock.elapsedRealtime() - carAt < 3000) canStatus else "等 360 送車況（開過 360 一次）")
         if (fresh && a != null) {
             fun g(i: Int) = if (i < a.size) a[i] else 0
             fun flag(i: Int): Any = if (i in seen) g(i) == 1 else JSONObject.NULL
@@ -117,8 +107,15 @@ class CarData(private val ctx: Context) {
             if (11 in seen) o.put("avgFuel", g(11))
             if (60 in seen) o.put("wiper", g(60))
         }
-        doors?.takeIf { it.size >= 7 && it[0] == 1 }?.let { d ->
-            o.put("doors", JSONObject().put("fl", d[1] != 0).put("fr", d[2] != 0).put("rl", d[3] != 0).put("rr", d[4] != 0).put("trunk", d[5] != 0).put("hood", d[6] != 0))
+        // 原廠 360 的車門陣列（CAN 來的）：前 4 個當左前、右前、左後、右後，第 5、6 個當後車廂、引擎蓋
+        doors?.takeIf { it.isNotEmpty() }?.let { d ->
+            fun at(i: Int) = i < d.size && d[i] != 0
+            o.put("doors", JSONObject().put("fl", at(0)).put("fr", at(1)).put("rl", at(2)).put("rr", at(3)).put("trunk", at(4)).put("hood", at(5)))
+        }
+        if (SystemClock.elapsedRealtime() - carAt < 2000) {
+            if (!o.has("speed")) carSpeed?.let { o.put("speed", it) }
+            if (!o.has("gear")) carGear?.let { o.put("gear", it) }
+            when (carTurn) { "L" -> o.put("turnL", true); "R" -> o.put("turnR", true); "H" -> o.put("hazard", true) }
         }
         // ADAS 引擎（原廠 360 程式）廣播的偵測結果
         adas?.takeIf { SystemClock.elapsedRealtime() - adasAt < 3000 }?.let { j ->
@@ -140,7 +137,7 @@ class CarData(private val ctx: Context) {
         try { ctx.sendBroadcast(Intent(ACTION_CMD).setPackage(ENGINE_PKG).putExtra("cmd", cmd).putExtra("arg", arg)) } catch (_: Throwable) {}
     }
 
-    fun stop() { try { ctx.unbindService(conn); ctx.unregisterReceiver(rx) } catch (_: Throwable) {} }
+    fun stop() { try { ctx.unregisterReceiver(rx) } catch (_: Throwable) {} }
 }
 
 /** 網頁用的已安裝 App 清單。 */

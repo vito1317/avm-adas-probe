@@ -607,8 +607,9 @@ object Engine360 {
         val v = view?.get()
         val visible = v != null && v.isAttachedToWindow
         val recording = Dashcam.recorder?.running == true
-        // 中控台開著（有送心跳）也要跑：中控台的 3D 道路畫面要偵測結果
-        if (!prefs.annotEnabled || (!visible && !recording && !LauncherLink.watching())) return
+        // 中控台開著時背景偵測：預設關（實車：中控台開著 360 就閃退——背景時跑偵測＋中控台的 3D 一起搶資源）
+        val bgForLauncher = prefs.launcherBgDetect && LauncherLink.watching()
+        if (!prefs.annotEnabled || (!visible && !recording && !bgForLauncher)) return
         // 上一幀還在算 → 這幀丟掉（Image 由呼叫端馬上還給相機）
         if (frameBusy) return
         val p = pipeline

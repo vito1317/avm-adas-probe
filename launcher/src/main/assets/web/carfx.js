@@ -88,7 +88,8 @@
         g.bl.visible = g.br.visible = g.bc.visible = !!s.brake;
         var lit = s.lowBeam || s.highBeam || s.ill;
         g.hl.visible = g.hr.visible = !!lit;
-        g.hl.scale.setScalar(s.highBeam ? 0.95 : 0.65); g.hr.scale.setScalar(s.highBeam ? 0.95 : 0.65);
+        g.hl.scale.setScalar(s.highBeam ? 0.8 : 0.45); g.hr.scale.setScalar(s.highBeam ? 0.8 : 0.45);
+        g.hl.material.opacity = g.hr.material.opacity = s.highBeam ? 0.85 : 0.55;
         g.tl.visible = g.tr.visible = !!lit && !s.brake;
         g.ffl.visible = g.ffr.visible = !!s.fogF;
         g.rfg.visible = !!s.fogR;
