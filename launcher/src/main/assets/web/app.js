@@ -52,10 +52,10 @@
   tick(); setInterval(tick, 5000);
 
   // ───────── 強調色、車漆 ─────────
-  var ACCENTS = ['#38e1ff', '#b721ff', '#3dff9a', '#ff3d5a', '#ffb020', '#ffffff'];
+  var ACCENTS = ['#3b82f6', '#e9ecf0', '#46a758', '#f0a330', '#e5484d'];
   var PAINTS = [['銀灰', '#b9c2cc'], ['極地白', '#eef1f4'], ['碳黑', '#15181d'], ['寶石藍', '#1d4f9c'], ['火焰紅', '#a3141c'], ['墨綠', '#1f3d32'], ['香檳金', '#b9a27a']];
   function applyAccent(c) { document.documentElement.style.setProperty('--accent', c); }
-  applyAccent(pref('accent', ACCENTS[0]));
+  applyAccent(pref('accent2', ACCENTS[0]));
   function dotRow(el, items, cur, onPick) {
     el.innerHTML = '';
     items.forEach(function (it) {
@@ -78,25 +78,25 @@
     if (renderer.outputEncoding !== undefined) renderer.outputEncoding = T.sRGBEncoding;
     renderer.toneMapping = T.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.05;
     scene = new T.Scene();
-    scene.fog = new T.Fog(0x04060a, 14, 34);
+    scene.fog = new T.Fog(0x0b0d10, 14, 34);
     camera = new T.PerspectiveCamera(30, 1, 0.1, 100);
     camera.position.set(6.4, 2.4, 6.6);              // 車頭朝自己的斜前方（車頭朝 +Z，+X 是車的左邊）
     if (T.RoomEnvironment) {
       var pm = new T.PMREMGenerator(renderer);
       scene.environment = pm.fromScene(new T.RoomEnvironment(), 0.04).texture;
     }
-    scene.add(new T.HemisphereLight(0x9fd8ff, 0x10141c, 0.5));
+    scene.add(new T.HemisphereLight(0xdfe6ee, 0x111419, 0.55));
     var key = new T.DirectionalLight(0xffffff, 1.1); key.position.set(-4, 7, 5); scene.add(key);
-    var rim = new T.DirectionalLight(0x6a5cff, 0.8); rim.position.set(5, 3, -6); scene.add(rim);
+    var rim = new T.DirectionalLight(0xaab4c0, 0.6); rim.position.set(5, 3, -6); scene.add(rim);
 
     // 地板：中間亮、往外變暗的圓盤＋霓虹圈
     var fc = document.createElement('canvas'); fc.width = fc.height = 512;
     var g = fc.getContext('2d'), gr = g.createRadialGradient(256, 256, 0, 256, 256, 256);
-    gr.addColorStop(0, 'rgba(70,110,160,0.55)'); gr.addColorStop(0.45, 'rgba(20,32,52,0.5)'); gr.addColorStop(1, 'rgba(4,6,10,0)');
+    gr.addColorStop(0, 'rgba(60,66,76,0.55)'); gr.addColorStop(0.45, 'rgba(24,27,32,0.5)'); gr.addColorStop(1, 'rgba(11,13,16,0)');
     g.fillStyle = gr; g.fillRect(0, 0, 512, 512);
     var floor = new T.Mesh(new T.CircleGeometry(9, 64), new T.MeshBasicMaterial({ map: new T.CanvasTexture(fc), transparent: true, depthWrite: false }));
     floor.rotation.x = -Math.PI / 2; scene.add(floor);
-    ring = new T.Mesh(new T.RingGeometry(3.2, 3.32, 96), new T.MeshBasicMaterial({ color: 0x38e1ff, transparent: true, opacity: 0.6, blending: T.AdditiveBlending, side: T.DoubleSide }));
+    ring = new T.Mesh(new T.RingGeometry(3.2, 3.32, 96), new T.MeshBasicMaterial({ color: 0x5d6570, transparent: true, opacity: 0.6, side: T.DoubleSide }));
     ring.rotation.x = -Math.PI / 2; ring.position.y = 0.01; scene.add(ring);
     var ring2 = ring.clone(); ring2.material = ring.material.clone(); ring2.scale.setScalar(1.25); ring2.material.opacity = 0.25; scene.add(ring2);
     ring.userData.r2 = ring2;
@@ -184,7 +184,7 @@
     if (!renderer) return;
     controls.update();
     var pulse = 0.5 + 0.5 * Math.sin(now / 700);
-    if (ring) { ring.material.opacity = 0.35 + 0.35 * pulse; ring.userData.r2.material.opacity = 0.12 + 0.15 * (1 - pulse); }
+    if (ring) { ring.material.opacity = 0.4; ring.userData.r2.material.opacity = 0.15; }
     if (fx) fx.update(st, now);
     if (!roadOn) renderer.render(scene, camera);            // 道路畫面蓋著時不畫 3D 車，省 GPU
   }
@@ -195,7 +195,6 @@
     try { st = JSON.parse(Car.state()); } catch (e) { st = {}; }
     var spd = Math.round(st.speed || 0), rpm = st.rpm;
     $('speed').textContent = spd;
-    $('speed').style.filter = 'drop-shadow(0 0 ' + (8 + Math.min(spd, 160) / 6) + 'px rgba(56,225,255,' + (0.4 + Math.min(spd, 160) / 400) + '))';
     $('arcSpd').style.strokeDasharray = (Math.min(spd, 240) / 240 * ARC_S) + ' 603';
     $('arcRpm').style.strokeDasharray = (rpm ? Math.min(rpm, 7000) / 7000 * ARC_R : 0) + ' 503';
     $('rpm').textContent = rpm ? rpm + ' rpm' : '— rpm';
@@ -379,7 +378,7 @@
     $('plate').value = pref('plate', 'ABC-1234');
     $('plateFront').checked = pref('plateFront', '1') === '1';
     dotRow($('paints'), PAINTS, pref('paint', PAINTS[0][1]), function (c) { setPref('paint', c); setPaint(c); });
-    dotRow($('accents'), ACCENTS, pref('accent', ACCENTS[0]), function (c) { setPref('accent', c); applyAccent(c); });
+    dotRow($('accents'), ACCENTS, pref('accent2', ACCENTS[0]), function (c) { setPref('accent2', c); applyAccent(c); });
     $('viewMode').value = pref('centerView', 'road');
     $('rainMode').value = pref('rainMode', 'auto');
     $('rainMode').onchange = function () { setPref('rainMode', $('rainMode').value); };
