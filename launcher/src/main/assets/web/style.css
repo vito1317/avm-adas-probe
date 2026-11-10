@@ -171,3 +171,11 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid 
 .askb{display:flex;gap:12px}
 .askb button{flex:1;height:56px;border-radius:16px;font-size:18px;background:rgba(255,255,255,.07);border:1px solid var(--line)}
 .askb .yes{background:linear-gradient(135deg,rgba(56,225,255,.4),rgba(183,33,255,.4));border-color:rgba(56,225,255,.6);color:#fff}
+
+/* 氛圍燈模式 */
+.modes{display:flex;flex-wrap:wrap;gap:8px;margin:2px 0 10px}
+.modes button{padding:10px 16px;border-radius:999px;border:1px solid var(--line);background:rgba(255,255,255,.05);font-size:14px;color:#cfe0f5;transition:box-shadow .2s}
+.modes button[aria-pressed="true"]{color:#fff;border-color:rgba(255,255,255,.6);box-shadow:0 0 16px rgba(56,225,255,.5)}
+.modes .rainbow{background:linear-gradient(90deg,#ff2a2a,#ffd21a,#2aff6a,#2ae0ff,#2a5cff,#b02aff);color:#fff;text-shadow:0 1px 3px rgba(0,0,0,.6);border:0}
+.dots button.rainbow{background:conic-gradient(#ff2a2a,#ffd21a,#2aff6a,#2ae0ff,#2a5cff,#b02aff,#ff2a2a) !important;animation:spin 3s linear infinite}
+@keyframes spin{to{filter:hue-rotate(360deg)}}

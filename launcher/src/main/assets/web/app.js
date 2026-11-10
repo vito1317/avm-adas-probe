@@ -268,8 +268,22 @@
   // ───────── 車控（經 360 引擎；引擎會先驗中控台的簽章）─────────
   function control(cmd, arg) { try { Car.control(cmd, String(arg)); } catch (e) {} }
   var AMB = [['紅', '#ff2a2a'], ['橘', '#ff7a1a'], ['黃', '#ffd21a'], ['綠', '#2aff6a'], ['青', '#2ae0ff'], ['藍', '#2a5cff'], ['紫', '#b02aff'], ['白', '#ffffff']];
-  function pickAmb(col) { setPref('ambColor', col); control('ambient_color', col.slice(1)); }
-  dotRow($('ambDots'), AMB, pref('ambColor', ''), pickAmb);
+  function pickAmb(col) { setPref('ambColor', col); setPref('ambMode', ''); control('ambient_color', col.slice(1)); markModes(); }
+  // 動態模式（炫彩循環、漸變、呼吸、律動、流水、爆閃、單色）
+  function setMode(code) { setPref('ambMode', code === '0800' ? '' : code); control('ambient_mode', code); markModes(); }
+  function markModes() {
+    var m = pref('ambMode', '');
+    document.querySelectorAll('[data-mode]').forEach(function (b) { b.setAttribute('aria-pressed', String(b.dataset.mode === (m || '0800'))); });
+  }
+  document.querySelectorAll('[data-mode]').forEach(function (b) { b.onclick = function () { setMode(b.dataset.mode); }; });
+  function ambCard() {
+    dotRow($('ambDots'), AMB, pref('ambMode', '') ? '' : pref('ambColor', ''), pickAmb);
+    var r = document.createElement('button'); r.className = 'rainbow'; r.setAttribute('aria-label', '炫彩循環');
+    r.setAttribute('aria-pressed', String(pref('ambMode', '') === '0804'));
+    r.onclick = function () { setMode('0804'); ambCard(); };
+    $('ambDots').appendChild(r);
+  }
+  ambCard(); markModes();
   var askCb = null;
   function ask(text, cb) { $('askText').textContent = text; askCb = cb; show('ask', true); }
   $('askYes').onclick = function () { show('ask', false); if (askCb) askCb(); askCb = null; };
@@ -288,7 +302,8 @@
     })(n);
   })();
   $('ctlBtn').onclick = function () {
-    dotRow($('ctlAmbDots'), AMB, pref('ambColor', ''), pickAmb);
+    dotRow($('ctlAmbDots'), AMB, pref('ambMode', '') ? '' : pref('ambColor', ''), function (c) { pickAmb(c); ambCard(); });
+    markModes();
     $('ambBright').value = pref('ambBright', '80');
     show('control', true);
   };

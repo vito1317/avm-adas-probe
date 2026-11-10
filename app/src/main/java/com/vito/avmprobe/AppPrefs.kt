@@ -291,6 +291,10 @@ class AppPrefs(context: Context) {
     var ambientName: String
         get() = sp.getString("ambientName", "") ?: ""
         set(v) = sp.edit().putString("ambientName", v).apply()
+    /** 氛圍燈目前的動態模式（空字串 = 單色）；警示結束後恢復成這個。 */
+    var ambientMode: String
+        get() = sp.getString("ambientMode", "") ?: ""
+        set(v) = sp.edit().putString("ambientMode", v).apply()
     /** 哪一組燈在左邊：0 = 不分側（全部一起）、1 = 第 1 組、2 = 第 2 組。 */
     var ambientLeftZone: Int
         get() = sp.getInt("ambientLeftZone", 0)

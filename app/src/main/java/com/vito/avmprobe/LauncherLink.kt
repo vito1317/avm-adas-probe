@@ -101,6 +101,7 @@ object LauncherLink {
             "remote" -> CyProtocol.Cmd.values().firstOrNull { it.name == arg }?.let { CyRemote.send(it) }
             "ambient_color" -> arg.toIntOrNull(16)?.let { AmbientLight.setColor(it) }
             "ambient_power" -> AmbientLight.power(arg == "1")
+            "ambient_mode" -> AmbientLight.setMode(arg)
             "ambient_bright" -> arg.toIntOrNull()?.let { AmbientLight.brightness(it) }
             "rear_play" -> arg.toIntOrNull()?.let { RearDisplay.test(it) }
             "rear_idle" -> RearDisplay.resume()

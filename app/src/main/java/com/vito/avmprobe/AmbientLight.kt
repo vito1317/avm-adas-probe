@@ -193,6 +193,9 @@ object AmbientLight {
 
     private fun apply(w: AmbientRules.Want?, p: AppPrefs) {
         if (w == null) {
+            // 原本是動態模式（炫彩、漸變…）：恢復成那個模式，不要蓋成固定顏色
+            val m = mode ?: p.ambientMode.takeIf { it.isNotEmpty() }
+            if (m != null) { write(AmbientProtocol.frame(m)); return }
             val b = base
             if (b != null) { write(AmbientProtocol.color(AmbientProtocol.ZONE_1, b.first)); SystemClock.sleep(MIN_GAP_MS); write(AmbientProtocol.color(AmbientProtocol.ZONE_2, b.second)) }
             else write(AmbientProtocol.frame("0A01"))   // 不知道原本顏色：至少讓燈回報一次
@@ -215,8 +218,27 @@ object AmbientLight {
         h?.post {
             if (!ready) { status = "還沒連上，沒辦法換顏色"; return@post }
             write(AmbientProtocol.color(AmbientProtocol.ZONE_ALL, rgb))
-            base = rgb to rgb; shown = null
+            base = rgb to rgb; shown = null; mode = null; prefs?.ambientMode = ""
             status = "已連線（顏色 #%06X）".format(rgb and 0xFFFFFF)
+        }
+    }
+
+    /**
+     * 動態模式（App 的 R_G_B_MODE／WATER_MODE）：0800 單色、0802 呼吸、0803 漸變、0804 自動（七彩循環）、
+     * 0801 律動、0806 爆閃；流水 0401 開、0400 關、0402 自動。記住目前的模式：警示（閃紅）結束後恢復成這個模式，不是固定顏色。
+     */
+    val MODES = setOf("0800", "0801", "0802", "0803", "0804", "0806", "0400", "0401", "0402")
+    @Volatile private var mode: String? = null
+
+    fun setMode(code: String) {
+        if (code !in MODES) return
+        h?.post {
+            if (!ready) { status = "還沒連上，沒辦法換模式"; return@post }
+            write(AmbientProtocol.frame(code))
+            mode = if (code == "0800") null else code
+            prefs?.ambientMode = mode ?: ""
+            shown = null
+            status = "已連線（" + when (code) { "0800" -> "單色"; "0801" -> "律動"; "0802" -> "呼吸"; "0803" -> "漸變"; "0804" -> "炫彩循環"; "0806" -> "爆閃"; "0401" -> "流水"; "0402" -> "流水自動"; else -> "流水關" } + "）"
         }
     }
 
