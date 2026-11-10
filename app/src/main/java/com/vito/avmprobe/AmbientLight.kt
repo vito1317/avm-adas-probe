@@ -80,6 +80,7 @@ object AmbientLight {
     private val CCC = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
     private const val MIN_GAP_MS = 250L
     private var fails = 0
+    private var rediscovered = false
 
     @Volatile var status = "未啟用"; private set
     @Volatile private var gatt: BluetoothGatt? = null
@@ -129,7 +130,7 @@ object AmbientLight {
 
     private val cb = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(g: BluetoothGatt, st: Int, ns: Int) {
-            if (ns == BluetoothProfile.STATE_CONNECTED) { status = "已連線，找服務…"; g.discoverServices() }
+            if (ns == BluetoothProfile.STATE_CONNECTED) { status = "已連線，找服務…"; rediscovered = false; g.discoverServices() }
             else {
                 ready = false; tx = null
                 try { g.close() } catch (_: Throwable) {}
@@ -143,7 +144,10 @@ object AmbientLight {
             }
         }
         override fun onServicesDiscovered(g: BluetoothGatt, st: Int) {
-            val s = g.getService(SERVICE) ?: run { status = "這個裝置沒有 FFE0 服務（不是這款氛圍燈？）"; return }
+            val s = g.getService(SERVICE) ?: run {
+                if (!rediscovered) { rediscovered = true; status = "找不到 FFE0（狀態 $st），清快取重找…"; GattUtil.refresh(g); h?.postDelayed({ try { g.discoverServices() } catch (_: Throwable) {} }, 800); return }
+                status = "找不到 FFE0（狀態 $st）。這個裝置的服務：" + GattUtil.describe(g); return
+            }
             tx = s.getCharacteristic(TX)
             val rx = s.getCharacteristic(RX)
             if (tx == null) { status = "找不到寫入通道 FFE2"; return }

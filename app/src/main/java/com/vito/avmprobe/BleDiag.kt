@@ -66,3 +66,17 @@ object BleDiag {
         } catch (_: Throwable) { {} }
     }
 }
+
+/** GATT 小工具：清掉 Android 快取的服務清單（車機常留著舊的，找不到特徵值）、列出裝置有哪些服務。 */
+object GattUtil {
+    fun refresh(g: android.bluetooth.BluetoothGatt): Boolean = try {
+        g.javaClass.getMethod("refresh").invoke(g) as? Boolean ?: false
+    } catch (_: Throwable) { false }
+
+    fun describe(g: android.bluetooth.BluetoothGatt): String {
+        val list = g.services ?: return "（沒有服務）"
+        if (list.isEmpty()) return "（沒有服務）"
+        fun short(u: java.util.UUID) = u.toString().let { if (it.endsWith("-0000-1000-8000-00805f9b34fb")) it.substring(4, 8).uppercase() else it }
+        return list.joinToString("；") { s -> short(s.uuid) + "[" + s.characteristics.joinToString(",") { c -> short(c.uuid) } + "]" }
+    }
+}

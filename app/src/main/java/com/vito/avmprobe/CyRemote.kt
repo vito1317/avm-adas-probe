@@ -109,6 +109,7 @@ object CyRemote {
     private const val IDLE_MS = 15_000L
     private const val HANDSHAKE_MS = 20_000L
     private var linked = false
+    private var rediscovered = false
 
     @Volatile var status = "未設定"; private set
     private val logLines = ArrayDeque<String>()
@@ -156,7 +157,7 @@ object CyRemote {
         Crumbs.at(Crumbs.OTHER, "cy-connect")
         buf.setLength(0); rand = null; ready = false
         gatt = ad.getRemoteDevice(mac).connectGatt(ctx, false, cb, android.bluetooth.BluetoothDevice.TRANSPORT_LE)   // 指定 BLE（車機預設可能走傳統藍牙）
-        linked = false
+        linked = false; rediscovered = false
         h.postDelayed({
             if (!ready && gatt != null) {
                 note(if (!linked) "連不上模組（選錯裝置？名稱要含 6600121332；或手機 App 在背景連著）" else "連上了但握手沒回應（金鑰不對，或協定不同）")
@@ -208,7 +209,16 @@ object CyRemote {
             h.post {
                 val c = g.getService(SVC)?.getCharacteristic(CH)
                     ?: g.services.firstNotNullOfOrNull { it.getCharacteristic(CH) }
-                if (c == null) { note("找不到 FFE1（不是這個模組？）"); close(); return@post }
+                if (c == null) {
+                    // 車機常留著舊的服務快取：清掉再找一次；還是沒有就把裝置實際有的服務列出來
+                    if (!rediscovered) {
+                        rediscovered = true
+                        note("找不到 FFE1（狀態 $st），清快取重找…")
+                        GattUtil.refresh(g); h.postDelayed({ try { g.discoverServices() } catch (_: Throwable) {} }, 800)
+                        return@post
+                    }
+                    note("找不到 FFE1（狀態 $st）。這個裝置的服務：" + GattUtil.describe(g)); close(); return@post
+                }
                 ch = c
                 g.setCharacteristicNotification(c, true)
                 val d = c.getDescriptor(CCC)
