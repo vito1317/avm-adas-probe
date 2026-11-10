@@ -107,7 +107,8 @@ object CyRemote {
     private val CH = UUID.fromString("0000ffe1-0000-1000-8000-00805f9b34fb")
     private val CCC = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
     private const val IDLE_MS = 15_000L
-    private const val HANDSHAKE_MS = 10_000L
+    private const val HANDSHAKE_MS = 20_000L
+    private var linked = false
 
     @Volatile var status = "未設定"; private set
     private val logLines = ArrayDeque<String>()
@@ -155,7 +156,13 @@ object CyRemote {
         Crumbs.at(Crumbs.OTHER, "cy-connect")
         buf.setLength(0); rand = null; ready = false
         gatt = ad.getRemoteDevice(mac).connectGatt(ctx, false, cb, android.bluetooth.BluetoothDevice.TRANSPORT_LE)   // 指定 BLE（車機預設可能走傳統藍牙）
-        h.postDelayed({ if (!ready && gatt != null) { note("握手逾時（金鑰不對，或模組被手機連著）"); queue.clear(); close() } }, HANDSHAKE_MS)
+        linked = false
+        h.postDelayed({
+            if (!ready && gatt != null) {
+                note(if (!linked) "連不上模組（選錯裝置？名稱要含 6600121332；或手機 App 在背景連著）" else "連上了但握手沒回應（金鑰不對，或協定不同）")
+                queue.clear(); close()
+            }
+        }, HANDSHAKE_MS)
     }
 
     private fun close() {
@@ -193,7 +200,7 @@ object CyRemote {
     private val cb = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(g: BluetoothGatt, st: Int, ns: Int) {
             h.post {
-                if (ns == BluetoothProfile.STATE_CONNECTED) { note("已連線，找服務…"); g.discoverServices() }
+                if (ns == BluetoothProfile.STATE_CONNECTED) { linked = true; note("已連線，找服務…"); g.discoverServices() }
                 else { if (gatt === g) { gatt = null; ch = null; ready = false }; try { g.close() } catch (_: Throwable) {}; if (st != 0) note("斷線（錯誤 $st）") }
             }
         }

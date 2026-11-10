@@ -165,7 +165,8 @@ object Engine360Settings {
         })
         col.addView(Button(act).apply {
             text = "選擇遠端模組（先關掉手機藍牙）"; isAllCaps = false
-            setOnClickListener { pickBle(act, setOf("ffe0", "fff0"), "6600") { mac, name -> prefs.cyMac = mac; prefs.cyName = name; cyRefresh() } }
+            // App 是用「藍牙名稱含裝置 ID」認模組；氛圍燈也廣播 FFE0，不能只看服務
+            setOnClickListener { pickBle(act, emptySet(), "6600121332") { mac, name -> prefs.cyMac = mac; prefs.cyName = name; cyRefresh() } }
         })
         for (row in listOf(listOf(CyProtocol.Cmd.LOCK, CyProtocol.Cmd.UNLOCK, CyProtocol.Cmd.WINDOW_UP, CyProtocol.Cmd.WINDOW_DOWN),
                            listOf(CyProtocol.Cmd.TRUNK_OPEN, CyProtocol.Cmd.TRUNK_CLOSE, CyProtocol.Cmd.AC_ON, CyProtocol.Cmd.AC_OFF))) {
