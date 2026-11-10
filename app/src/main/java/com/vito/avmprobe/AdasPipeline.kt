@@ -283,6 +283,7 @@ class AdasPipeline(
         if ((vs.speedKmh ?: 0f) > 30f) lastFastAt = now
         // 停車場判斷（慢慢開、打 R／P、慢速大角度轉方向盤）：在停車場就不算馬路（從馬路開進來很快停進格子也認得到）
         val gearNow = CanVehicle.info.gear ?: vs.gear
+        gearCur = gearNow
         inLot = lot.update(now, vs.speedKmh, gearNow, vs.steerDeg, lotClues(now))
         onRoad = gearNow != 'R' && gearNow != 'P' && !inLot && lastFastAt > 0L && now - lastFastAt < 90_000L
         // 推論緊貼車身的分隔線只在停車時（R／P 檔，或在停車場、或慢速且不在馬路上）
@@ -360,7 +361,7 @@ class AdasPipeline(
         lcaState = lca.update(
             tracks, now,
             lane?.get(0)?.takeIf { !it.isNaN() }, lane?.get(1)?.takeIf { !it.isNaN() },
-            vs.turn, vs.steerDeg, ego,
+            turnForLaneAids(vs), vs.steerDeg, ego,
             lane?.get(2)?.takeIf { !it.isNaN() }, reverse = vs.gear == 'R'
         )
         val t = tl
@@ -959,7 +960,7 @@ class AdasPipeline(
             // 停車輔助：方向盤指示（照停車路徑）、停正、窄路、停車位置記錄
             p.optJSONObject("park")?.let { pk ->
                 val arr = pk.optJSONArray("pts")
-                if (arr != null) {
+                if (arr != null && gearCur != 'P') {   // P 檔＝已經停好，不再叫人「往前開、打 R 檔」
                     val pts = (0 until arr.length()).map { k -> arr.getJSONArray(k).let { q -> floatArrayOf(q.getDouble(0).toFloat(), q.getDouble(1).toFloat()) } }
                     parkAids.steering(pts, pk.optInt("rev"), vs.gear, vs.steerDeg, pk.optDouble("r", 5.0).toFloat())
                         ?.let { msgs.add(DriverAids.Msg(it.key, it.text, it.level)) }
@@ -1052,7 +1053,7 @@ class AdasPipeline(
         val crossDone = lineCross.update(vs.turn, ldwState)
         val shiftDone = usedShift && lcTarget == null && run { val d = if (vs.turn == 'L') -1 else 1; (d * laneWNow - fusedY) * d < LaneChangeOdometry.ARRIVED_M }
         val odoDone = crossDone || shiftDone || (lcTarget == null && !usedShift && lcOdo.done)
-        if (turnPlan == null && !slowTurn && lcTarget != 0f && !odoDone && (vs.turn == 'L' || vs.turn == 'R')) {
+        if (turnPlan == null && !slowTurn && lcTarget != 0f && !odoDone && turnForLaneAids(vs).let { it == 'L' || it == 'R' }) {
             val dir = if (vs.turn == 'L') -1 else 1
             val st = lcaState
             val w = st?.laneW ?: LaneChangeAssist.LANE_W
@@ -1183,6 +1184,9 @@ class AdasPipeline(
     private val hazardPrompt = HazardPrompt()
     @Volatile private var lastFastAt = 0L
     private val lot = ParkingLotState()
+    @Volatile private var gearCur: Char? = null
+    /** P 檔或在停車場：方向燈不當成要變道（停車場裡打燈、打雙閃不出變道提示、盲點警示） */
+    private fun turnForLaneAids(vs: VehicleState): Char? = if (inLot || gearCur == 'P' || gearCur == 'R') null else vs.turn
     @Volatile private var leadCloseAt = 0L
 
     /**

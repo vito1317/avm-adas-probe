@@ -23,7 +23,7 @@
   <button data-view="top" aria-pressed="false">俯視</button>
   <button data-view="orbit" aria-pressed="false">環繞</button>
 </div>
-<div id="roadWait" class="roadwait" hidden>沒有偵測資料<br><small>360 在背景時相機可能停了；可以點右邊卡片在 360 裡開道路畫面</small></div>
+<div id="roadWait" class="roadwait" hidden>示意畫面：沒有偵測資料（要看到周圍的車，到 360 設定「中控台」勾選背景偵測）</div>
 
 <!-- 上方：警示 -->
 <div id="alerts" class="alerts" aria-live="polite"></div>
@@ -167,7 +167,7 @@
     <label class="f chk"><input id="plateFront" type="checkbox"> <span>前面也掛車牌</span></label>
     <div class="f"><span>車漆</span><div id="paints" class="dots"></div></div>
     <div class="f"><span>中間畫面</span>
-      <select id="viewMode"><option value="auto">行車時自動切成 3D 道路</option><option value="car">一直顯示 3D 車</option><option value="road">一直顯示 3D 道路</option></select>
+      <select id="viewMode"><option value="road">Tesla 式 3D 道路畫面（首頁）</option><option value="auto">停車顯示 3D 車、行車切成 3D 道路</option><option value="car">一直顯示 3D 車</option></select>
     </div>
     <div class="f"><span>下雨動畫</span>
       <select id="rainMode"><option value="auto">自動（雨刷有動就下雨）</option><option value="on">一直開</option><option value="off">關</option></select>

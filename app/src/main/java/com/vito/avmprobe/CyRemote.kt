@@ -143,30 +143,80 @@ object CyRemote {
             if (key() == null) { note("還沒輸入藍牙金鑰"); return@post }
             if (p.cyMac.isEmpty()) { note("還沒選模組"); return@post }
             queue.addLast(cmd)
-            if (ready) flush() else if (gatt == null) connect(p.cyMac)
+            if (ready) flush() else if (gatt == null && scanCb == null) { attempt = 0; connect(p.cyMac) }
             h.removeCallbacks(idle); h.postDelayed(idle, IDLE_MS)
         }
     }
 
     private val idle = Runnable { if (queue.isEmpty()) { close(); note("閒置，已斷開（手機 App 可以連）") } }
 
+    private const val NAME_HINT = "6600121332"
+    private const val SCAN_MS = 10_000L
+    private var scanCb: android.bluetooth.le.ScanCallback? = null
+    private var attempt = 0
+
+    /**
+     * 先掃描找模組再連：這種模組常用隨機位址（直接拿 MAC 連會用錯位址類型，悶著連不上），
+     * 而且手機 App 連著時模組不廣播。掃到廣播（MAC 一樣，或名稱含 6600121332）才連，用掃到的那個裝置物件連。
+     */
     private fun connect(mac: String) {
         val ad = BluetoothAdapter.getDefaultAdapter() ?: run { note("車機沒有藍牙"); return }
         if (!ad.isEnabled) { note("車機藍牙是關的"); return }
-        note("連線中…（手機 App 連著的話會連不上）")
+        val sc = ad.bluetoothLeScanner ?: run { connectTo(ad.getRemoteDevice(mac)); return }
+        ctx?.let { BleDiag.ensureLocation(it) }
+        stopScan()
+        note("掃描模組中…")
+        Crumbs.at(Crumbs.OTHER, "cy-scan")
+        val cbk = object : android.bluetooth.le.ScanCallback() {
+            override fun onScanResult(type: Int, r: android.bluetooth.le.ScanResult) {
+                val d = r.device ?: return
+                val name = r.scanRecord?.deviceName ?: try { d.name } catch (_: Throwable) { null } ?: ""
+                if (!d.address.equals(mac, true) && !name.contains(NAME_HINT)) return
+                h.post {
+                    if (scanCb == null) return@post
+                    stopScan()
+                    val p = prefs
+                    if (p != null && !d.address.equals(p.cyMac, true)) { note("模組位址換了：${p.cyMac} → ${d.address}"); p.cyMac = d.address; if (name.isNotEmpty()) p.cyName = name }
+                    note("找到模組（訊號 ${r.rssi} dBm），連線中…")
+                    attempt = 0
+                    connectTo(d)
+                }
+            }
+            override fun onScanFailed(code: Int) { h.post { stopScan(); note("掃描失敗（$code），直接連…"); connectTo(ad.getRemoteDevice(mac)) } }
+        }
+        scanCb = cbk
+        try { sc.startScan(null, BleDiag.lowLatency(), cbk) } catch (t: Throwable) { scanCb = null; note("不能掃描（${t.message}），直接連…"); connectTo(ad.getRemoteDevice(mac)); return }
+        h.postDelayed({
+            if (scanCb === cbk) {
+                stopScan()
+                note("掃不到模組的廣播：手機 App（亮波）連著時模組不廣播，請把手機藍牙關掉或把 App 完全關閉；也可能熄火後模組休眠")
+                queue.clear()
+            }
+        }, SCAN_MS)
+    }
+
+    private fun stopScan() {
+        val c = scanCb ?: return
+        scanCb = null
+        try { BluetoothAdapter.getDefaultAdapter()?.bluetoothLeScanner?.stopScan(c) } catch (_: Throwable) {}
+    }
+
+    private fun connectTo(dev: android.bluetooth.BluetoothDevice) {
         Crumbs.at(Crumbs.OTHER, "cy-connect")
         buf.setLength(0); rand = null; ready = false
-        gatt = ad.getRemoteDevice(mac).connectGatt(ctx, false, cb, android.bluetooth.BluetoothDevice.TRANSPORT_LE)   // 指定 BLE（車機預設可能走傳統藍牙）
         linked = false; rediscovered = false
+        val g = dev.connectGatt(ctx, false, cb, android.bluetooth.BluetoothDevice.TRANSPORT_LE)   // 指定 BLE（車機預設可能走傳統藍牙）
+        gatt = g
         h.postDelayed({
-            if (!ready && gatt != null) {
-                note(if (!linked) "連不上模組（選錯裝置？名稱要含 6600121332；或手機 App 在背景連著）" else "連上了但握手沒回應（金鑰不對，或協定不同）")
+            if (!ready && gatt === g) {
+                note(if (!linked) "模組有廣播但連不上（藍牙一直沒建立連線；試著把車機藍牙關掉再打開）" else "連上了但握手沒回應（金鑰不對，或協定不同）")
                 queue.clear(); close()
             }
         }, HANDSHAKE_MS)
     }
 
     private fun close() {
+        stopScan()
         try { gatt?.disconnect(); gatt?.close() } catch (_: Throwable) {}
         gatt = null; ch = null; ready = false; rand = null
     }
@@ -202,7 +252,18 @@ object CyRemote {
         override fun onConnectionStateChange(g: BluetoothGatt, st: Int, ns: Int) {
             h.post {
                 if (ns == BluetoothProfile.STATE_CONNECTED) { linked = true; note("已連線，找服務…"); g.discoverServices() }
-                else { if (gatt === g) { gatt = null; ch = null; ready = false }; try { g.close() } catch (_: Throwable) {}; if (st != 0) note("斷線（錯誤 $st）") }
+                else {
+                    val mine = gatt === g
+                    if (mine) { gatt = null; ch = null; ready = false }
+                    try { g.close() } catch (_: Throwable) {}
+                    if (st != 0) note("斷線（錯誤 $st）")
+                    // 133 之類的連線錯誤：還沒連上就斷，重試 2 次（車機藍牙常第一次失敗）
+                    if (mine && !linked && st != 0 && attempt < 2 && queue.isNotEmpty()) {
+                        attempt++
+                        note("重試連線（第 $attempt 次）…")
+                        h.postDelayed({ if (gatt == null) connectTo(g.device) }, 1200)
+                    }
+                }
             }
         }
         override fun onServicesDiscovered(g: BluetoothGatt, st: Int) {

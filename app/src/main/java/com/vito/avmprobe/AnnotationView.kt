@@ -728,7 +728,10 @@ class AnnotationView(context: Context) : View(context) {
             }
         }
         // 盲點／後方來車只在開車（≥ 15 km/h）或打方向燈時顯示（實車：停在格子裡一直「右後來車」）
-        val lcaOn = (vsNow.speedKmh ?: 0f) >= 15f || vsNow.turn == 'L' || vsNow.turn == 'R'
+        // P／R 檔或在停車場時打燈（雙閃、停車場裡轉彎）不算：旁邊停著的車會被當成後方來車
+        val gearV = CanVehicle.info.gear ?: vsNow.gear
+        val turnLca = (vsNow.turn == 'L' || vsNow.turn == 'R') && gearV != 'P' && gearV != 'R' && p.optInt("lot") == 0
+        val lcaOn = (vsNow.speedKmh ?: 0f) >= 15f || turnLca
         p.optJSONObject("lca")?.takeIf { lcaOn }?.let { l ->
             if (l.optInt("L") >= 2) msgs.add("◀ 左後來車" to Color.rgb(220, 40, 40))
             else if (l.optInt("L") == 1) msgs.add("◀ 左側有車" to Color.rgb(230, 140, 20))

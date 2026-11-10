@@ -237,10 +237,11 @@
   // auto：開車（≥ 5 km/h）切成道路；快捷列「道路畫面」手動切換，開始／停止行車時恢復自動
   var override = null, wasDriving = false, road = $('road');
   function updateView() {
-    var mode = pref('viewMode', 'auto'), spd = st.speed || 0, driving = spd >= 5;
+    var mode = pref('centerView', 'road'), spd = st.speed || 0, driving = spd >= 5;
     if (driving !== wasDriving) { override = null; wasDriving = driving; }
     // 自動模式：開車而且真的有偵測資料才切道路（360 在背景預設不偵測，避免閃退）
-    var want = override || (mode === 'road' ? 'road' : mode === 'car' ? 'car' : driving && st.adas ? 'road' : 'car');
+    // 預設（road）：首頁中間一直是 Tesla 式 3D 道路畫面；auto：開車才切；car：一直顯示 3D 車
+    var want = override || (mode === 'car' ? 'car' : mode === 'auto' ? (driving ? 'road' : 'car') : 'road');
     roadOn = want === 'road';
     road.classList.toggle('on', roadOn);
     $('roadFx').classList.toggle('on', roadOn);
@@ -250,13 +251,19 @@
     $('roadWait').hidden = !(roadOn && !st.adas);
     if (roadOn && road.contentWindow) {
       try {
-        if (st.adas) road.contentWindow.postMessage(st.adas, '*');
+        road.contentWindow.postMessage(st.adas || idleRoad(), '*');
         road.contentWindow.postMessage({ __car: { brake: st.brake, turnL: st.turnL, turnR: st.turnR, hazard: st.hazard, lowBeam: st.lowBeam,
           highBeam: st.highBeam, ill: st.ill, fogF: st.fogF, fogR: st.fogR, doors: st.doors } }, '*');
       } catch (e) {}
     }
   }
   setInterval(updateView, 150);
+  // 沒有偵測資料（停車、或 360 背景偵測沒開）時的示意道路：自己車道兩條虛線、外側實線，沒有其他車
+  function idleRoad() {
+    var L = function (k, d, x) { return { k: k, d: d, x1: x, z1: -8, x2: x, z2: 30, c: 0.9, kv: 0 }; };
+    return { objs: [], road: { lines: [L('w', 1, -1.8), L('w', 1, 1.8), L('y', 0, -5.4), L('w', 0, 5.4)], el: -5.6, er: 5.6 },
+      veh: { turn: st.turnL ? 'L' : st.turnR ? 'R' : null, gear: st.gear || 'P', speed: st.speed || 0 } };
+  }
   // 視角：前方斜視（預設）／追車／俯視／環繞，記住上次選的
   function sendView(v) {
     try { road.contentWindow.postMessage({ __view: v }, '*'); } catch (e) {}
@@ -373,10 +380,10 @@
     $('plateFront').checked = pref('plateFront', '1') === '1';
     dotRow($('paints'), PAINTS, pref('paint', PAINTS[0][1]), function (c) { setPref('paint', c); setPaint(c); });
     dotRow($('accents'), ACCENTS, pref('accent', ACCENTS[0]), function (c) { setPref('accent', c); applyAccent(c); });
-    $('viewMode').value = pref('viewMode', 'auto');
+    $('viewMode').value = pref('centerView', 'road');
     $('rainMode').value = pref('rainMode', 'auto');
     $('rainMode').onchange = function () { setPref('rainMode', $('rainMode').value); };
-    $('viewMode').onchange = function () { setPref('viewMode', $('viewMode').value); override = null; };
+    $('viewMode').onchange = function () { setPref('centerView', $('viewMode').value); override = null; };
     show('settings', true);
   };
   $('plate').addEventListener('input', function () {
