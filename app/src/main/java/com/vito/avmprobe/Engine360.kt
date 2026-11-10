@@ -444,6 +444,7 @@ object Engine360 {
             // 記憶體／GPU 撐不住會整個程式消失，連記錄都留不下——實車：ADAS 一啟動就閃退）
             stage(3_000, "讀原廠車速") { FactoryVehicle.start(app); if (!Crumbs.off("canspeed")) CanCarInfo.start(app) }
             stage(4_000, "道路彎度（陀螺儀／GPS）") { MotionCurvature.start(app) }
+            stage(1_000, "桌面連動") { LauncherLink.start(app) }
             stage(7_000, "後擋看板") { if (!Crumbs.off("reardisp")) RearDisplay.start(app, prefs) }
             stage(6_500, "遠端模組") { CyRemote.init(app, prefs) }
             stage(6_000, "氛圍燈") { if (!Crumbs.off("ambient")) AmbientLight.start(app, prefs) }
@@ -549,12 +550,51 @@ object Engine360 {
             setOnClickListener { Engine360Settings.show(act, prefs, av) }
         }
         buttonRef = WeakReference(btn)
+        // Tesla 式道路畫面（原生繪圖，蓋在鏡頭畫面上；按「道路」切換）
+        val road = RoadView(act).apply { visibility = View.GONE; isClickable = true }
+        decor.addView(road, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        roadRef = WeakReference(road)
         decor.addView(btn, FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
             leftMargin = (8 * dp).toInt(); topMargin = (8 * dp).toInt()
         })
+        val roadBtn = TextView(act).apply {
+            text = "道路"
+            textSize = 13f
+            setTextColor(Color.WHITE)
+            setPadding((12 * dp).toInt(), (6 * dp).toInt(), (12 * dp).toInt(), (6 * dp).toInt())
+            background = GradientDrawable().apply {
+                cornerRadius = 16 * dp
+                setColor(Color.argb(170, 20, 30, 45))
+                setStroke((1 * dp).toInt(), Color.argb(200, 183, 33, 255))
+            }
+            setOnClickListener { showRoad(road.visibility != View.VISIBLE) }
+        }
+        roadBtnRef = WeakReference(roadBtn)
+        decor.addView(roadBtn, FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            leftMargin = (78 * dp).toInt(); topMargin = (8 * dp).toInt()
+        })
+        if (pendingRoad) { pendingRoad = false; showRoad(true) }
+    }
+
+    @Volatile private var roadRef: WeakReference<RoadView>? = null
+    @Volatile private var roadBtnRef: WeakReference<TextView>? = null
+    @Volatile private var pendingRoad = false
+
+    /** 切換 Tesla 式道路畫面（桌面的道路卡片也會叫這個）。360 畫面還沒建好就等建好再開。 */
+    fun showRoad(on: Boolean) {
+        main.post {
+            val r = roadRef?.get()
+            if (r == null) { pendingRoad = on; return@post }
+            r.visibility = if (on) View.VISIBLE else View.GONE
+            if (on) r.invalidate()
+            roadBtnRef?.get()?.text = if (on) "鏡頭" else "道路"
+        }
     }
 
     /** 影格執行緒。標注圖層不在畫面上（離開 360 畫面）時不跑偵測，省電也不搶原廠的 CPU。 */
@@ -577,7 +617,7 @@ object Engine360 {
             frameWorker.post {
                 try {
                     Crumbs.step(Crumbs.FRAME, "pipeline") {
-                        pipeline = AdasPipeline(ctx, prefs) { j -> latestPayload = j; view?.get()?.update(j) }.also {
+                        pipeline = AdasPipeline(ctx, prefs) { j -> latestPayload = j; view?.get()?.update(j); roadRef?.get()?.update(j) }.also {
                             it.afterFrame = { pp -> Dashcam.onFrame(pp, latestPayload) }
                         }
                     }

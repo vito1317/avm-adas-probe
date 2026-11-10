@@ -164,7 +164,7 @@ with zipfile.ZipFile(out, "w") as z:
         for f in sorted(os.listdir(assets)):
             src = os.path.join(assets, f)
             if not os.path.isfile(src): continue          # bev3d/ 這種網頁不要：系統 process 不能用 WebView
-            if not (f.endswith(".tflite") or f.endswith(".json") or f.endswith(".txt")): continue
+            if not (f.endswith(".tflite") or f.endswith(".json") or f.endswith(".txt") or f.endswith(".webp")): continue
             n = "assets/" + f
             assert n not in names_o, "跟原廠 assets 撞名：" + n
             zi = zipfile.ZipInfo(n, date_time=(2020,1,1,0,0,0))

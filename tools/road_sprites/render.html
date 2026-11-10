@@ -1,0 +1,50 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>road sprites</title></head>
+<body style="margin:0;background:#000">
+<!-- 產生 Tesla 式道路畫面用的車輛圖：每個模型 16 個方位（每 22.5°），仰角 13°，正交投影，透明背景。
+     用法見 tools/road_sprites/make.py（headless Chrome 跑這頁、把結果寫進 #out）。 -->
+<pre id="out"></pre>
+<script src="/app/src/main/assets/bev3d/lib/three.min.js"></script>
+<script src="/app/src/main/assets/bev3d/lib/GLTFLoader.js"></script>
+<script src="/app/src/main/assets/bev3d/lib/RoomEnvironment.js"></script>
+<script>
+var MODELS = ['e60','car_sedan','car_hatch','car_logan','car_taxi','suv_evoque','suv_generic','van_minivan','van_postvan',
+  'truck','bus','bus_city','scooter_rider','bigbike_rider','bicycle_rider','ped_man','ped_woman','ped_child','ped_worker','cone'];
+var N = 16, S = 192, ELEV = 13 * Math.PI / 180;
+var out = document.getElementById("out"); console.log("start", typeof THREE, typeof THREE.GLTFLoader, typeof THREE.RoomEnvironment);
+var r = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
+r.setSize(S, S); r.setClearColor(0x000000, 0);
+if (r.outputEncoding !== undefined) r.outputEncoding = THREE.sRGBEncoding;
+r.toneMapping = THREE.ACESFilmicToneMapping; r.toneMappingExposure = 1.1;
+var scene = new THREE.Scene();
+var pm = new THREE.PMREMGenerator(r);
+scene.environment = pm.fromScene(new THREE.RoomEnvironment(), 0.04).texture;
+scene.add(new THREE.HemisphereLight(0xdfefff, 0x202830, 0.6));
+var sun = new THREE.DirectionalLight(0xffffff, 1.2); sun.position.set(3, 8, 4); scene.add(sun);
+var loader = new THREE.GLTFLoader();
+var res = {};
+function next(i) {
+  if (i >= MODELS.length) { fetch('/done', { method: 'POST', body: '1' }); document.title = 'done'; return; }
+  var name = MODELS[i];
+  loader.load('/app/src/main/assets/bev3d/models/' + name + '.glb', function (g) {
+    var m = g.scene; scene.add(m);
+    var box = new THREE.Box3().setFromObject(m), size = box.getSize(new THREE.Vector3()), c = box.getCenter(new THREE.Vector3());
+    // 正交相機：畫面涵蓋整台（任何方位）＋邊界；記下畫面對應的公尺數，道路畫面照這個縮放
+    var span = Math.max(size.x, size.z) * 1.08 + 0.2, half = Math.max(span, size.y * 1.6) / 2;
+    var cam = new THREE.OrthographicCamera(-half, half, half, -half, 0.1, 100);
+    var frames = [];
+    for (var k = 0; k < N; k++) {
+      var a = k * 2 * Math.PI / N + Math.PI;           // a = 0（k = 0）從車尾看
+      var R = 30;
+      cam.position.set(c.x + Math.sin(a) * Math.cos(ELEV) * R, c.y + Math.sin(ELEV) * R, c.z + Math.cos(a) * Math.cos(ELEV) * R);
+      cam.lookAt(c); cam.updateProjectionMatrix();
+      r.render(scene, cam);
+      frames.push(r.domElement.toDataURL('image/png'));
+    }
+    var d = { name: name, span: half * 2, cy: c.y, len: size.z, wid: size.x, hgt: size.y, frames: frames };
+    scene.remove(m);
+    fetch('/save', { method: 'POST', body: JSON.stringify(d) }).then(function () { next(i + 1); }, function () { next(i + 1); });
+  }, undefined, function (e) { console.log('ERR', name, String(e && (e.message || e))); res[name] = { error: String(e) }; next(i + 1); });
+}
+next(0);
+</script></body></html>

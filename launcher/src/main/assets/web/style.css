@@ -1,0 +1,129 @@
+/* 車機桌面：深色、霓虹、玻璃質感。車機離線，不用外部字型。 */
+:root{
+  --bg:#04060a; --panel:rgba(14,20,32,.55); --line:rgba(130,180,255,.16); --fg:#eaf3ff; --muted:#8fa3bd;
+  --accent:#38e1ff; --accent2:#b721ff; --red:#ff3d5a; --amber:#ffb020; --green:#3dff9a;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--fg);
+  font-family:system-ui,-apple-system,"Noto Sans TC","PingFang TC",sans-serif;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+/* 背景：慢慢流動的光暈＋透視格線 */
+#bg{position:fixed;inset:0;z-index:0;overflow:hidden;background:radial-gradient(ellipse at 50% 120%,#0c1a33 0%,#04060a 60%)}
+#bg .grid{position:absolute;left:-50%;right:-50%;bottom:-10%;height:70%;transform:perspective(500px) rotateX(70deg);transform-origin:50% 100%;
+  background-image:linear-gradient(rgba(56,225,255,.18) 1px,transparent 1px),linear-gradient(90deg,rgba(56,225,255,.18) 1px,transparent 1px);
+  background-size:60px 60px;animation:gridMove 4s linear infinite;mask-image:linear-gradient(to top,#000 0%,transparent 85%);-webkit-mask-image:linear-gradient(to top,#000 0%,transparent 85%)}
+@keyframes gridMove{to{background-position:0 60px,0 0}}
+#bg .glow{position:absolute;width:60vw;height:60vw;border-radius:50%;filter:blur(90px);opacity:.28;animation:float 14s ease-in-out infinite alternate}
+#bg .g1{left:-15vw;top:-25vw;background:var(--accent2)}
+#bg .g2{right:-20vw;top:-10vw;background:var(--accent);animation-delay:-7s}
+@keyframes float{to{transform:translate(8vw,6vw) scale(1.15)}}
+
+#car3d{position:fixed;inset:0;width:100%;height:100%;z-index:1;display:block}
+#road{position:fixed;inset:0;width:100%;height:100%;border:0;z-index:2;background:#05070b;opacity:0;transition:opacity .6s}
+#road.on{opacity:1}
+.roadwait{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:3;text-align:center;color:var(--muted);
+  background:var(--panel);border:1px solid var(--line);padding:14px 22px;border-radius:14px;backdrop-filter:blur(10px);line-height:1.6}
+
+/* 左右欄 */
+.col{position:fixed;top:18px;bottom:104px;z-index:5;display:flex;flex-direction:column;gap:14px;pointer-events:none}
+.col>*{pointer-events:auto}
+.left{left:20px;width:260px}
+.right{right:20px;width:270px}
+.clock #time{font-size:56px;font-weight:200;letter-spacing:.02em;line-height:1;text-shadow:0 0 18px rgba(56,225,255,.45)}
+.clock #date{color:var(--muted);font-size:15px;margin-top:6px;letter-spacing:.08em}
+
+.gauge{position:relative;width:240px;height:240px}
+.gauge svg{width:100%;height:100%;transform:rotate(135deg)}
+.track{fill:none;stroke:rgba(255,255,255,.07);stroke-width:12;stroke-dasharray:452 603;stroke-linecap:round}
+.track.thin{stroke-width:6;stroke-dasharray:377 503}
+.arc{fill:none;stroke-width:12;stroke-linecap:round;stroke-dasharray:0 603;transition:stroke-dasharray .25s}
+.arc.thin{stroke-width:6}
+.gtext{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center}
+.speed{font-size:76px;font-weight:700;line-height:1;font-variant-numeric:tabular-nums;background:linear-gradient(180deg,#fff,#9fdcff);-webkit-background-clip:text;background-clip:text;color:transparent;filter:drop-shadow(0 0 12px rgba(56,225,255,.5))}
+.unit{color:var(--muted);font-size:14px;letter-spacing:.2em}
+.rpm{margin-top:6px;font-size:13px;color:#ffb98a;font-variant-numeric:tabular-nums}
+.turns{position:absolute;left:0;right:0;bottom:-6px;display:flex;justify-content:space-between;align-items:center;padding:0 20px}
+.arrow{font-size:30px;color:rgba(255,255,255,.12);transition:color .1s,text-shadow .1s}
+.arrow.on{color:#3dff9a;text-shadow:0 0 16px #3dff9a,0 0 30px #3dff9a}
+.gear{font-size:30px;font-weight:800;width:54px;height:54px;border-radius:14px;display:grid;place-items:center;
+  background:linear-gradient(145deg,rgba(56,225,255,.2),rgba(183,33,255,.2));border:1px solid var(--line);box-shadow:0 0 20px rgba(56,225,255,.25) inset}
+.gear.R{color:var(--red);box-shadow:0 0 22px rgba(255,61,90,.5) inset}
+
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{font-size:12px;padding:5px 10px;border-radius:999px;background:var(--panel);border:1px solid var(--line);color:var(--muted);backdrop-filter:blur(8px)}
+.chip.on{color:#bfe9ff;border-color:rgba(56,225,255,.5);box-shadow:0 0 12px rgba(56,225,255,.25)}
+.chip.warn{color:#ffd28a;border-color:rgba(255,176,32,.6);box-shadow:0 0 12px rgba(255,176,32,.3)}
+.chip.bad{color:#ff9aa8;border-color:rgba(255,61,90,.7);box-shadow:0 0 14px rgba(255,61,90,.4);animation:pulse 1s infinite}
+@keyframes pulse{50%{opacity:.55}}
+
+/* 卡片 */
+.card{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:12px 14px;backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+  box-shadow:0 8px 30px rgba(0,0,0,.35),inset 0 1px 0 rgba(255,255,255,.06)}
+.card .k{font-size:12px;color:var(--muted);letter-spacing:.12em}
+.card .v{font-size:26px;font-weight:700;margin-top:2px;font-variant-numeric:tabular-nums}
+.card .v small{font-size:12px;color:var(--muted);margin-left:4px;font-weight:500}
+.card.big .v{font-size:38px;background:linear-gradient(90deg,#fff,var(--accent));-webkit-background-clip:text;background-clip:text;color:transparent}
+.bar{height:6px;border-radius:9px;background:rgba(255,255,255,.08);margin-top:8px;overflow:hidden}
+.bar i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--red),var(--amber),var(--green));border-radius:9px;transition:width .6s}
+.cards{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.mrow{display:flex;gap:6px;margin-top:8px}
+.mrow button{flex:1;height:44px;border-radius:12px;background:rgba(255,255,255,.05);border:1px solid var(--line);font-size:18px}
+.mrow button:active{background:rgba(56,225,255,.2)}
+.mrow .play{flex:1.4;background:linear-gradient(135deg,rgba(56,225,255,.25),rgba(183,33,255,.25))}
+.dots{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+.dots button{width:30px;height:30px;border-radius:50%;border:2px solid rgba(255,255,255,.25);box-shadow:0 0 12px var(--c)}
+.dots button[aria-pressed="true"]{border-color:#fff;transform:scale(1.12)}
+
+/* 警示 */
+.alerts{position:fixed;top:16px;left:50%;transform:translateX(-50%);z-index:8;display:flex;flex-direction:column;gap:6px;align-items:center;pointer-events:none}
+.alert{padding:8px 18px;border-radius:999px;font-weight:700;letter-spacing:.06em;backdrop-filter:blur(10px);white-space:nowrap}
+.alert.l0{background:rgba(56,225,255,.16);border:1px solid rgba(56,225,255,.55);color:#bfefff}
+.alert.l1{background:rgba(255,176,32,.18);border:1px solid rgba(255,176,32,.7);color:#ffd99a}
+.alert.l2{background:rgba(255,61,90,.22);border:1px solid rgba(255,61,90,.85);color:#ffb3bf;animation:pulse .8s infinite}
+
+/* 快捷列 */
+.dock{position:fixed;left:50%;bottom:16px;transform:translateX(-50%);z-index:6;display:flex;gap:6px;padding:8px;border-radius:22px;
+  background:rgba(10,14,24,.6);border:1px solid var(--line);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);box-shadow:0 10px 40px rgba(0,0,0,.5)}
+.dock button{display:flex;flex-direction:column;align-items:center;gap:3px;width:88px;padding:8px 0;border-radius:14px;color:var(--muted);transition:background .2s,color .2s}
+.dock button b{font-size:22px;color:var(--fg);text-shadow:0 0 12px rgba(56,225,255,.6)}
+.dock button span{font-size:12px}
+.dock button:active,.dock button[aria-pressed="true"]{background:linear-gradient(145deg,rgba(56,225,255,.22),rgba(183,33,255,.22));color:#fff}
+
+/* 抽屜／設定 */
+.sheet{position:fixed;inset:0;z-index:20;background:rgba(2,4,8,.65);backdrop-filter:blur(6px);display:grid;place-items:center}
+.sheet[hidden]{display:none}
+.sheet-in{width:min(1100px,92vw);max-height:84vh;overflow:auto;background:rgba(14,20,32,.92);border:1px solid var(--line);border-radius:22px;padding:18px 22px}
+.sheet-in.narrow{width:min(560px,92vw)}
+.sheet header{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
+.sheet h2{margin:0;font-size:18px;letter-spacing:.12em}
+.x{width:40px;height:40px;border-radius:12px;background:rgba(255,255,255,.06)}
+.appgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(104px,1fr));gap:10px}
+.appgrid button{display:flex;flex-direction:column;align-items:center;gap:6px;padding:10px 4px;border-radius:14px}
+.appgrid button:active{background:rgba(56,225,255,.15)}
+.appgrid img{width:54px;height:54px;border-radius:14px;background:rgba(255,255,255,.05)}
+.appgrid span{font-size:12px;color:#cfe0f5;text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;width:100%}
+.f{display:flex;align-items:center;gap:12px;margin:14px 0}
+.f>span{width:84px;color:var(--muted);flex:none}
+.f input:not([type]),.f select,.f input[type=text]{flex:1;font:inherit;font-size:20px;letter-spacing:.12em;padding:10px 12px;border-radius:12px;border:1px solid var(--line);background:rgba(0,0,0,.35);color:var(--fg)}
+.f select{font-size:15px;letter-spacing:0}
+.f.chk{gap:8px}
+.f.chk input{width:22px;height:22px;accent-color:var(--accent)}
+.credit{font-size:11px;color:var(--muted);line-height:1.6;margin-top:18px;border-top:1px solid var(--line);padding-top:10px}
+
+/* 窄螢幕（直立或小車機）：卡片縮小 */
+@media (max-width:1100px){.right{width:220px}.left{width:220px}.gauge{width:200px;height:200px}.speed{font-size:60px}.dock button{width:70px}}
+@media (max-height:620px){.clock #time{font-size:40px}.gauge{width:190px;height:190px}.card.big .v{font-size:30px}}
+@media (prefers-reduced-motion:reduce){#bg .grid,#bg .glow{animation:none}}
+
+/* 道路畫面卡片（插件）：點了開原廠 360 並切到道路畫面 */
+.card.road{text-align:left;width:100%;cursor:pointer;background:linear-gradient(160deg,rgba(56,225,255,.14),rgba(183,33,255,.14))}
+.card.road:active{transform:scale(.98)}
+.rv{position:relative;height:74px;margin-top:8px;border-radius:12px;overflow:hidden;background:linear-gradient(180deg,#0b1424,#18263a);perspective:120px}
+.rv .lane{position:absolute;bottom:-10px;width:3px;height:120px;background:repeating-linear-gradient(to top,#dff3ff 0 12px,transparent 12px 24px);animation:laneMove .8s linear infinite}
+.rv .lane.l{left:38%;transform:rotate(14deg)} .rv .lane.r{right:38%;transform:rotate(-14deg)}
+@keyframes laneMove{to{background-position:0 24px}}
+.rv .mini{position:absolute;left:50%;bottom:8px;width:22px;height:32px;margin-left:-11px;border-radius:7px 7px 5px 5px;background:linear-gradient(#e8f6ff,#9fb6cc);box-shadow:0 0 16px rgba(56,225,255,.8)}
+.card.road .go{margin-top:8px;font-size:13px;color:#bfefff}

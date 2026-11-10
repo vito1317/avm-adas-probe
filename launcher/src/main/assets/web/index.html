@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>中控台</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="bg"><div class="grid"></div><div class="glow g1"></div><div class="glow g2"></div></div>
+
+<!-- 3D 車子展示（停車時） -->
+<canvas id="car3d"></canvas>
+
+<!-- 上方：警示 -->
+<div id="alerts" class="alerts" aria-live="polite"></div>
+
+<!-- 左：時間、儀表 -->
+<section class="col left">
+  <div class="clock"><div id="time">--:--</div><div id="date"></div></div>
+  <div class="gauge">
+    <svg viewBox="0 0 220 220" aria-hidden="true">
+      <defs>
+        <linearGradient id="gSpd" x1="0" y1="1" x2="1" y2="0"><stop offset="0" stop-color="#21d4fd"/><stop offset="1" stop-color="#b721ff"/></linearGradient>
+        <linearGradient id="gRpm" x1="0" y1="1" x2="1" y2="0"><stop offset="0" stop-color="#ffb347"/><stop offset="1" stop-color="#ff3d5a"/></linearGradient>
+        <filter id="neon"><feGaussianBlur stdDeviation="3" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+      </defs>
+      <circle class="track" cx="110" cy="110" r="96"/>
+      <circle id="arcSpd" class="arc" cx="110" cy="110" r="96" stroke="url(#gSpd)" filter="url(#neon)"/>
+      <circle class="track thin" cx="110" cy="110" r="80"/>
+      <circle id="arcRpm" class="arc thin" cx="110" cy="110" r="80" stroke="url(#gRpm)" filter="url(#neon)"/>
+    </svg>
+    <div class="gtext">
+      <div id="speed" class="speed">0</div>
+      <div class="unit">km/h</div>
+      <div id="rpm" class="rpm">— rpm</div>
+    </div>
+    <div class="turns">
+      <span id="tL" class="arrow l" aria-label="左方向燈">◀</span>
+      <span id="gear" class="gear">P</span>
+      <span id="tR" class="arrow r" aria-label="右方向燈">▶</span>
+    </div>
+  </div>
+  <div id="chips" class="chips"></div>
+</section>
+
+<!-- 右：車況卡片 -->
+<section class="col right">
+  <div class="card big"><div class="k">續航</div><div class="v"><span id="range">—</span><small>km</small></div><div class="bar"><i id="fuelBar"></i></div></div>
+  <div class="cards">
+    <div class="card"><div class="k">水溫</div><div class="v"><span id="water">—</span><small>°C</small></div></div>
+    <div class="card"><div class="k">車外</div><div class="v"><span id="out">—</span><small>°C</small></div></div>
+    <div class="card"><div class="k">電壓</div><div class="v"><span id="volt">—</span><small>V</small></div></div>
+    <div class="card"><div class="k">里程</div><div class="v"><span id="odo">—</span><small>km</small></div></div>
+  </div>
+  <div class="card media">
+    <div class="k">音樂</div>
+    <div class="mrow">
+      <button data-media="prev" aria-label="上一首">⏮</button>
+      <button data-media="play" class="play" aria-label="播放／暫停">⏯</button>
+      <button data-media="next" aria-label="下一首">⏭</button>
+      <button data-vol="-1" aria-label="小聲">－</button>
+      <button data-vol="1" aria-label="大聲">＋</button>
+    </div>
+  </div>
+  <button id="roadCard" class="card road">
+    <div class="k">道路畫面</div>
+    <div class="rv"><span class="lane l"></span><span class="lane r"></span><span class="mini"></span></div>
+    <div class="go">開啟 Tesla 式道路畫面 ›</div>
+  </button>
+  <div class="card amb">
+    <div class="k">氛圍燈</div>
+    <div class="dots" id="ambDots"></div>
+  </div>
+</section>
+
+<!-- 下：快捷列 -->
+<nav class="dock">
+  <button data-open="360"><b>◎</b><span>360 環景</span></button>
+  <button id="viewBtn"><b>⛛</b><span>道路畫面</span></button>
+  <button data-open="nav"><b>➤</b><span>導航</span></button>
+  <button data-open="music"><b>♫</b><span>音樂</span></button>
+  <button data-open="phone"><b>✆</b><span>電話</span></button>
+  <button data-open="trip"><b>⌁</b><span>行車電腦</span></button>
+  <button id="appsBtn"><b>⊞</b><span>所有 App</span></button>
+  <button id="setBtn"><b>⚙</b><span>設定</span></button>
+</nav>
+
+<!-- 所有 App -->
+<div id="drawer" class="sheet" hidden>
+  <div class="sheet-in">
+    <header><h2>所有 App</h2><button class="x" data-close aria-label="關閉">✕</button></header>
+    <div id="appGrid" class="appgrid"></div>
+  </div>
+</div>
+
+<!-- 設定 -->
+<div id="settings" class="sheet" hidden>
+  <div class="sheet-in narrow">
+    <header><h2>設定</h2><button class="x" data-close aria-label="關閉">✕</button></header>
+    <label class="f"><span>車牌</span><input id="plate" maxlength="10" placeholder="ABC-1234" autocomplete="off"></label>
+    <label class="f chk"><input id="plateFront" type="checkbox"> <span>前面也掛車牌</span></label>
+    <div class="f"><span>車漆</span><div id="paints" class="dots"></div></div>
+    <div class="f"><span>強調色</span><div id="accents" class="dots"></div></div>
+    <p class="credit">3D 車模：「BMW 5 Series 525i MK5 (E60) 2003-2010」by szymonpasterczyk（Sketchfab），CC BY 4.0，已修改。<br>
+    道路使用者模型署名見 bev3d/models/CREDITS.md。BMW 為 BMW AG 的商標，本程式與 BMW 無關。<br>3D 引擎：three.js（MIT）。</p>
+  </div>
+</div>
+
+<script src="bev3d/lib/three.min.js"></script>
+<script src="bev3d/lib/GLTFLoader.js"></script>
+<script src="bev3d/lib/OrbitControls.js"></script>
+<script src="bev3d/lib/RoomEnvironment.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
