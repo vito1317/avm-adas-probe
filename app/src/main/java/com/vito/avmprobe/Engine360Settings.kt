@@ -186,7 +186,7 @@ object Engine360Settings {
         check("停好車（P 檔＋手煞車）問要不要升窗、鎖車", { prefs.cyParkPrompt }) { prefs.cyParkPrompt = it }
 
         section("後擋 LED 看板（iPixel；先用 iPixel App 把要顯示的字存進看板，這裡選每個情境播第幾則）")
-        check("啟用：急煞／雙閃、倒車、跟車太近、路邊停車時切換看板", { prefs.rdOn }) { v -> prefs.rdOn = v; if (v) RearDisplay.start(act, prefs) }
+        check("啟用：急煞／雙閃、倒車、方向燈、跟車太近、路邊停車時切換看板", { prefs.rdOn }) { v -> prefs.rdOn = v; if (v) RearDisplay.start(act, prefs) }
         val rdInfo = TextView(act).apply { textSize = 12f }
         fun rdRefresh() { rdInfo.text = "看板：" + (if (prefs.rdMac.isEmpty()) "還沒選" else "${prefs.rdName}（${prefs.rdMac}）") + "\n狀態：" + RearDisplay.status }
         rdRefresh(); col.addView(rdInfo)
@@ -197,6 +197,8 @@ object Engine360Settings {
         for ((label, get, set) in listOf<Triple<String, () -> Int, (Int) -> Unit>>(
             Triple("急煞／雙閃", { prefs.rdSlotBrake }, { v -> prefs.rdSlotBrake = v }),
             Triple("倒車", { prefs.rdSlotReverse }, { v -> prefs.rdSlotReverse = v }),
+            Triple("左轉燈", { prefs.rdSlotLeft }, { v -> prefs.rdSlotLeft = v }),
+            Triple("右轉燈", { prefs.rdSlotRight }, { v -> prefs.rdSlotRight = v }),
             Triple("跟車太近", { prefs.rdSlotFollow }, { v -> prefs.rdSlotFollow = v }),
             Triple("路邊停車", { prefs.rdSlotPark }, { v -> prefs.rdSlotPark = v }),
             Triple("平常（警示結束回到）", { prefs.rdSlotIdle }, { v -> prefs.rdSlotIdle = v }))) {

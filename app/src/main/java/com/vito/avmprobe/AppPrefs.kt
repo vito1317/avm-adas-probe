@@ -255,6 +255,12 @@ class AppPrefs(context: Context) {
     var rdSlotReverse: Int
         get() = sp.getInt("rdSlotReverse", 0)
         set(v) = sp.edit().putInt("rdSlotReverse", v).apply()
+    var rdSlotLeft: Int
+        get() = sp.getInt("rdSlotLeft", 0)
+        set(v) = sp.edit().putInt("rdSlotLeft", v).apply()
+    var rdSlotRight: Int
+        get() = sp.getInt("rdSlotRight", 0)
+        set(v) = sp.edit().putInt("rdSlotRight", v).apply()
     var rdSlotFollow: Int
         get() = sp.getInt("rdSlotFollow", 0)
         set(v) = sp.edit().putInt("rdSlotFollow", v).apply()

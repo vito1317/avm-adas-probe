@@ -24,12 +24,14 @@ object RearDisplayProtocol {
     fun brightness(level: Int): ByteArray = byteArrayOf(5, 0, 4, 0x80.toByte(), level.coerceIn(1, 100).toByte())
     fun power(on: Boolean): ByteArray = byteArrayOf(5, 0, 7, 1, if (on) 1 else 0)
 
-    enum class Event(val label: String) { BRAKE("急煞／雙閃"), REVERSE("倒車"), FOLLOW("跟車太近"), PARK("準備停車"), IDLE("平常") }
+    enum class Event(val label: String) { BRAKE("急煞／雙閃"), REVERSE("倒車"), LEFT("左轉燈"), RIGHT("右轉燈"), FOLLOW("跟車太近"), PARK("準備停車"), IDLE("平常") }
 
-    /** 現在該顯示哪個情境（優先順序：急煞／雙閃 > 倒車 > 跟車太近 > 停車 > 平常）。 */
-    fun pick(hazardOrBrake: Boolean, reverse: Boolean, tooClose: Boolean, parking: Boolean): Event = when {
+    /** 現在該顯示哪個情境（優先順序：急煞／雙閃 > 倒車 > 方向燈 > 跟車太近 > 停車 > 平常）。 */
+    fun pick(hazardOrBrake: Boolean, reverse: Boolean, tooClose: Boolean, parking: Boolean, turn: Char? = null): Event = when {
         hazardOrBrake -> Event.BRAKE
         reverse -> Event.REVERSE
+        turn == 'L' -> Event.LEFT
+        turn == 'R' -> Event.RIGHT
         tooClose -> Event.FOLLOW
         parking -> Event.PARK
         else -> Event.IDLE
@@ -124,20 +126,23 @@ object RearDisplay {
     private fun slotOf(p: AppPrefs, e: RearDisplayProtocol.Event): Int = when (e) {
         RearDisplayProtocol.Event.BRAKE -> p.rdSlotBrake
         RearDisplayProtocol.Event.REVERSE -> p.rdSlotReverse
+        RearDisplayProtocol.Event.LEFT -> p.rdSlotLeft
+        RearDisplayProtocol.Event.RIGHT -> p.rdSlotRight
         RearDisplayProtocol.Event.FOLLOW -> p.rdSlotFollow
         RearDisplayProtocol.Event.PARK -> p.rdSlotPark
         RearDisplayProtocol.Event.IDLE -> p.rdSlotIdle
     }
 
     /** 每輪偵測呼叫：情境變了（而且舊的至少顯示 3 秒）就切換到那一則；沒設定的情境不動。 */
-    fun onState(hazardOrBrake: Boolean, reverse: Boolean, tooClose: Boolean, parking: Boolean) {
+    fun onState(hazardOrBrake: Boolean, reverse: Boolean, tooClose: Boolean, parking: Boolean, turn: Char? = null) {
         val p = prefs ?: return
         if (!p.rdOn || !ready) return
-        val e = RearDisplayProtocol.pick(hazardOrBrake, reverse, tooClose, parking)
+        val e = RearDisplayProtocol.pick(hazardOrBrake, reverse, tooClose, parking, turn)
         if (e == shown) return
         val now = SystemClock.elapsedRealtime()
-        // 急煞馬上切；其他情境至少維持 3 秒，避免一直跳
-        if (e != RearDisplayProtocol.Event.BRAKE && now - shownAt < HOLD_MS) return
+        // 急煞、方向燈馬上切；其他情境至少維持 3 秒，避免一直跳
+        val instant = e == RearDisplayProtocol.Event.BRAKE || e == RearDisplayProtocol.Event.LEFT || e == RearDisplayProtocol.Event.RIGHT
+        if (!instant && now - shownAt < HOLD_MS) return
         val slot = slotOf(p, e)
         shown = e; shownAt = now
         if (slot <= 0) return

@@ -415,7 +415,8 @@ class AdasPipeline(
                 hazardOrBrake = vs.turn == 'H' || "hazbrake" in aidKeys || (v > 30f && decel > 4f),
                 reverse = vs.gear == 'R',
                 tooClose = "headway" in aidKeys,
-                parking = vs.turn == 'H' && v <= 25f
+                parking = vs.turn == 'H' && v <= 25f,
+                turn = vs.turn?.takeIf { it == 'L' || it == 'R' }
             )
         } catch (t: Throwable) { Log.w(TAG, "rear display", t) }
         if (!prefs.alertSound) return

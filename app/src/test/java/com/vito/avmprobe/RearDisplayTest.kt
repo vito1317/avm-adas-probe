@@ -15,5 +15,7 @@ class RearDisplayTest {
         assertEquals(RearDisplayProtocol.Event.REVERSE, RearDisplayProtocol.pick(false, true, true, false))
         assertEquals(RearDisplayProtocol.Event.FOLLOW, RearDisplayProtocol.pick(false, false, true, true))
         assertEquals(RearDisplayProtocol.Event.IDLE, RearDisplayProtocol.pick(false, false, false, false))
+        assertEquals(RearDisplayProtocol.Event.LEFT, RearDisplayProtocol.pick(false, false, true, false, 'L'))
+        assertEquals("倒車優先於方向燈", RearDisplayProtocol.Event.REVERSE, RearDisplayProtocol.pick(false, true, false, false, 'R'))
     }
 }
