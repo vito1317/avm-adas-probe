@@ -17,6 +17,9 @@ class RearDisplayTest {
         assertEquals(RearDisplayProtocol.Event.REVERSE, RearDisplayProtocol.pick(false, true, true, false))
         assertEquals(RearDisplayProtocol.Event.FOLLOW, RearDisplayProtocol.pick(false, false, true, true))
         assertEquals(RearDisplayProtocol.Event.IDLE, RearDisplayProtocol.pick(false, false, false, false))
+        assertEquals(RearDisplayProtocol.Event.START, RearDisplayProtocol.pick(false, false, true, false, null, start = true, wait = true))
+        assertEquals(RearDisplayProtocol.Event.WAIT, RearDisplayProtocol.pick(false, false, true, false, null, wait = true))
+        assertEquals("方向燈優先於起步", RearDisplayProtocol.Event.LEFT, RearDisplayProtocol.pick(false, false, false, false, 'L', start = true))
         assertEquals(RearDisplayProtocol.Event.LEFT, RearDisplayProtocol.pick(false, false, true, false, 'L'))
         assertEquals("倒車優先於方向燈", RearDisplayProtocol.Event.REVERSE, RearDisplayProtocol.pick(false, true, false, false, 'R'))
     }

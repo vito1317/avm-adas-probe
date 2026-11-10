@@ -411,12 +411,24 @@ class AdasPipeline(
         // 後擋看板：急煞／雙閃、倒車、跟車太近、路邊停車各切到看板裡存好的那一則
         if (!Crumbs.off("reardisp")) try {
             val v = vs.speedKmh ?: 0f
+            // 紅燈停等：在馬路上（或看到紅燈）停下來 3 秒以上；起步：停等中轉綠燈／前車起步，或剛起步的 3 秒
+            val tlNow = tl?.takeIf { now - it.at < TL_TTL_MS }?.s
+            val stopped = v < 2f && vs.gear != 'R' && vs.gear != 'P' && (onRoad || tlNow == "red")
+            if (stopped) { if (rdStopAt == 0L) rdStopAt = now } else {
+                if (rdStopAt != 0L && now - rdStopAt >= 3000L && v >= 3f) rdStartUntil = now + 3000L
+                rdStopAt = 0L
+            }
+            val waiting = rdStopAt != 0L && now - rdStopAt >= 3000L
+            val st = startState
+            val go = (waiting && (tlNow == "green" || (st != null && (st.lead || st.green)))) || now < rdStartUntil
             RearDisplay.onState(
                 hazardOrBrake = vs.turn == 'H' || "hazbrake" in aidKeys || (v > 30f && decel > 4f),
                 reverse = vs.gear == 'R',
                 tooClose = "headway" in aidKeys,
                 parking = vs.turn == 'H' && v <= 25f,
-                turn = vs.turn?.takeIf { it == 'L' || it == 'R' }
+                turn = vs.turn?.takeIf { it == 'L' || it == 'R' },
+                start = go,
+                wait = waiting && !go
             )
         } catch (t: Throwable) { Log.w(TAG, "rear display", t) }
         if (!prefs.alertSound) return
@@ -1160,6 +1172,8 @@ class AdasPipeline(
     private val hazardPrompt = HazardPrompt()
     @Volatile private var lastFastAt = 0L
     @Volatile private var aidKeys: Set<String> = emptySet()
+    private var rdStopAt = 0L
+    private var rdStartUntil = 0L
     @Volatile private var onRoad = false
     private val parkAids = ParkingAids()
     private var lastEventLock = 0L
