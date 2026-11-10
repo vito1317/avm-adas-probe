@@ -200,8 +200,7 @@ object Engine360Settings {
             Triple("左轉燈", { prefs.rdSlotLeft }, { v -> prefs.rdSlotLeft = v }),
             Triple("右轉燈", { prefs.rdSlotRight }, { v -> prefs.rdSlotRight = v }),
             Triple("跟車太近", { prefs.rdSlotFollow }, { v -> prefs.rdSlotFollow = v }),
-            Triple("路邊停車", { prefs.rdSlotPark }, { v -> prefs.rdSlotPark = v }),
-            Triple("平常（警示結束回到）", { prefs.rdSlotIdle }, { v -> prefs.rdSlotIdle = v }))) {
+            Triple("路邊停車", { prefs.rdSlotPark }, { v -> prefs.rdSlotPark = v }))) {
             col.addView(LinearLayout(act).apply {
                 orientation = LinearLayout.HORIZONTAL
                 fun txt() = "$label：" + (if (get() <= 0) "不切換" else "第 ${get()} 則")
@@ -214,6 +213,22 @@ object Engine360Settings {
                 addView(Button(act).apply { text = "試播"; isAllCaps = false; setOnClickListener { if (get() > 0) RearDisplay.test(get()); rdInfo.postDelayed({ rdRefresh() }, 800) } })
             })
         }
+
+        // 平常：可以填好幾則輪播（例如 1,2,3）；一定要設，不然警示結束會停在警示那則
+        col.addView(LinearLayout(act).apply {
+            orientation = LinearLayout.HORIZONTAL
+            fun cur() = RearDisplayProtocol.parseList(prefs.rdIdleList).ifEmpty { listOfNotNull(prefs.rdSlotIdle.takeIf { it > 0 }) }
+            fun txt() = "平常（警示結束回到）：" + (cur().takeIf { it.isNotEmpty() }?.let { "第 ${it.joinToString("、")} 則" + (if (it.size > 1) "輪播" else "") } ?: "沒設（警示結束會停在警示那則）")
+            val b = Button(act).apply { text = txt(); isAllCaps = false }
+            b.setOnClickListener {
+                val et = android.widget.EditText(act).apply { hint = "例：3 或 1,2,3（好幾則就輪播）"; setText(cur().joinToString(",")) }
+                AlertDialog.Builder(act).setTitle("平常要播的動畫").setView(et).setPositiveButton("儲存") { _, _ ->
+                    prefs.rdIdleList = RearDisplayProtocol.parseList(et.text.toString()).joinToString(","); prefs.rdSlotIdle = 0; b.text = txt()
+                }.setNegativeButton("取消", null).show()
+            }
+            addView(b)
+            addView(Button(act).apply { text = "試播"; isAllCaps = false; setOnClickListener { RearDisplay.testList(cur()); rdInfo.postDelayed({ rdRefresh() }, 800) } })
+        })
 
         section("氛圍燈連動（藍牙，AmbientLight 那款）")
         check("啟用：危險紅色閃、偏離橘色、前車起步綠色（警示結束恢復原本顏色）", { prefs.ambientOn }) { v ->

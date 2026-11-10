@@ -20,7 +20,17 @@ import java.util.UUID
  * 中文字要自己算點陣圖再送，太重；改成你先用 App 把要顯示的字存進看板，車機只負責切換第幾則。
  */
 object RearDisplayProtocol {
-    fun play(slot: Int): ByteArray = byteArrayOf(7, 0, 8, 0x80.toByte(), 1, 0, slot.coerceIn(1, 255).toByte())
+    fun play(slot: Int): ByteArray = playList(listOf(slot))
+
+    /** 輪播好幾則（App 的節目清單：長度、08 80、數量、00、各則編號）。 */
+    fun playList(slots: List<Int>): ByteArray {
+        val s = slots.filter { it in 1..255 }.take(40)
+        require(s.isNotEmpty())
+        return byteArrayOf((6 + s.size).toByte(), 0, 8, 0x80.toByte(), s.size.toByte(), 0) + ByteArray(s.size) { s[it].toByte() }
+    }
+
+    /** "1,2,3" → [1,2,3]（逗號、空白、頓號都可以）。 */
+    fun parseList(t: String): List<Int> = t.split(',', '，', '、', ' ').mapNotNull { it.trim().toIntOrNull() }.filter { it in 1..255 }
     fun brightness(level: Int): ByteArray = byteArrayOf(5, 0, 4, 0x80.toByte(), level.coerceIn(1, 100).toByte())
     fun power(on: Boolean): ByteArray = byteArrayOf(5, 0, 7, 1, if (on) 1 else 0)
 
@@ -143,13 +153,24 @@ object RearDisplay {
         // 急煞、方向燈馬上切；其他情境至少維持 3 秒，避免一直跳
         val instant = e == RearDisplayProtocol.Event.BRAKE || e == RearDisplayProtocol.Event.LEFT || e == RearDisplayProtocol.Event.RIGHT
         if (!instant && now - shownAt < HOLD_MS) return
-        val slot = slotOf(p, e)
         shown = e; shownAt = now
-        if (slot <= 0) return
-        h?.post { if (write(RearDisplayProtocol.play(slot))) status = "已連線：顯示第 $slot 則（${e.label}）" }
+        // 平常可以是好幾則輪播
+        val list = if (e == RearDisplayProtocol.Event.IDLE) RearDisplayProtocol.parseList(p.rdIdleList).ifEmpty { listOfNotNull(p.rdSlotIdle.takeIf { it > 0 }) }
+                   else listOfNotNull(slotOf(p, e).takeIf { it > 0 })
+        if (list.isEmpty()) return
+        h?.post { if (write(RearDisplayProtocol.playList(list))) status = "已連線：顯示第 ${list.joinToString("、")} 則（${e.label}）" }
     }
 
     /** 設定裡測試：播放第 [slot] 則。 */
+    fun testList(list: List<Int>) {
+        h?.post {
+            if (!ready) { status = "還沒連上，沒辦法測試"; return@post }
+            if (list.isEmpty()) return@post
+            status = if (write(RearDisplayProtocol.playList(list))) "測試：輪播第 ${list.joinToString("、")} 則" else "送不出去"
+            shown = null
+        }
+    }
+
     fun test(slot: Int) {
         h?.post {
             if (!ready) { status = "還沒連上，沒辦法測試"; return@post }

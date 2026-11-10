@@ -8,6 +8,8 @@ class RearDisplayTest {
         assertArrayEquals(byteArrayOf(7, 0, 8, 0x80.toByte(), 1, 0, 3), RearDisplayProtocol.play(3))
         assertArrayEquals(byteArrayOf(5, 0, 4, 0x80.toByte(), 50), RearDisplayProtocol.brightness(50))
         assertArrayEquals(byteArrayOf(5, 0, 7, 1, 0), RearDisplayProtocol.power(false))
+        assertArrayEquals(byteArrayOf(9, 0, 8, 0x80.toByte(), 3, 0, 1, 2, 5), RearDisplayProtocol.playList(listOf(1, 2, 5)))
+        assertEquals(listOf(1, 2, 3), RearDisplayProtocol.parseList("1, 2、3"))
     }
 
     @Test fun priority() {

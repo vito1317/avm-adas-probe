@@ -267,6 +267,10 @@ class AppPrefs(context: Context) {
     var rdSlotPark: Int
         get() = sp.getInt("rdSlotPark", 0)
         set(v) = sp.edit().putInt("rdSlotPark", v).apply()
+    /** 平常輪播的幾則，例如 "1,2,3"（空的就用 [rdSlotIdle]）。 */
+    var rdIdleList: String
+        get() = sp.getString("rdIdleList", "") ?: ""
+        set(v) = sp.edit().putString("rdIdleList", v).apply()
     var rdSlotIdle: Int
         get() = sp.getInt("rdSlotIdle", 0)
         set(v) = sp.edit().putInt("rdSlotIdle", v).apply()
