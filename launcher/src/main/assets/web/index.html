@@ -11,6 +11,17 @@
 
 <!-- 3D 車子展示（停車時） -->
 <canvas id="car3d"></canvas>
+<!-- 3D 道路畫面（行車時；之前 App 的 3D 面板，資料來自 360 裡的 ADAS 引擎） -->
+<iframe id="road" src="bev3d/index.html" title="3D 道路畫面"></iframe>
+<div id="roadFx" class="roadfx" aria-hidden="true"></div>
+<!-- 道路畫面視角切換 -->
+<div id="views" class="views" role="group" aria-label="道路畫面視角">
+  <button data-view="front" aria-pressed="true">前方斜視</button>
+  <button data-view="chase" aria-pressed="false">追車</button>
+  <button data-view="top" aria-pressed="false">俯視</button>
+  <button data-view="orbit" aria-pressed="false">環繞</button>
+</div>
+<div id="roadWait" class="roadwait" hidden>沒有偵測資料<br><small>360 在背景時相機可能停了；可以點右邊卡片在 360 裡開道路畫面</small></div>
 
 <!-- 上方：警示 -->
 <div id="alerts" class="alerts" aria-live="polite"></div>
@@ -66,7 +77,7 @@
   <button id="roadCard" class="card road">
     <div class="k">道路畫面</div>
     <div class="rv"><span class="lane l"></span><span class="lane r"></span><span class="mini"></span></div>
-    <div class="go">開啟 Tesla 式道路畫面 ›</div>
+    <div class="go">在 360 裡開道路畫面 ›</div>
   </button>
   <div class="card amb">
     <div class="k">氛圍燈</div>
@@ -101,6 +112,9 @@
     <label class="f"><span>車牌</span><input id="plate" maxlength="10" placeholder="ABC-1234" autocomplete="off"></label>
     <label class="f chk"><input id="plateFront" type="checkbox"> <span>前面也掛車牌</span></label>
     <div class="f"><span>車漆</span><div id="paints" class="dots"></div></div>
+    <div class="f"><span>中間畫面</span>
+      <select id="viewMode"><option value="auto">行車時自動切成 3D 道路</option><option value="car">一直顯示 3D 車</option><option value="road">一直顯示 3D 道路</option></select>
+    </div>
     <div class="f"><span>強調色</span><div id="accents" class="dots"></div></div>
     <p class="credit">3D 車模：「BMW 5 Series 525i MK5 (E60) 2003-2010」by szymonpasterczyk（Sketchfab），CC BY 4.0，已修改。<br>
     道路使用者模型署名見 bev3d/models/CREDITS.md。BMW 為 BMW AG 的商標，本程式與 BMW 無關。<br>3D 引擎：three.js（MIT）。</p>

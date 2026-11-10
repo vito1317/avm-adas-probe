@@ -607,7 +607,8 @@ object Engine360 {
         val v = view?.get()
         val visible = v != null && v.isAttachedToWindow
         val recording = Dashcam.recorder?.running == true
-        if (!prefs.annotEnabled || (!visible && !recording)) return
+        // 中控台開著（有送心跳）也要跑：中控台的 3D 道路畫面要偵測結果
+        if (!prefs.annotEnabled || (!visible && !recording && !LauncherLink.watching())) return
         // 上一幀還在算 → 這幀丟掉（Image 由呼叫端馬上還給相機）
         if (frameBusy) return
         val p = pipeline
@@ -617,7 +618,7 @@ object Engine360 {
             frameWorker.post {
                 try {
                     Crumbs.step(Crumbs.FRAME, "pipeline") {
-                        pipeline = AdasPipeline(ctx, prefs) { j -> latestPayload = j; view?.get()?.update(j); roadRef?.get()?.update(j) }.also {
+                        pipeline = AdasPipeline(ctx, prefs) { j -> latestPayload = j; view?.get()?.update(j); roadRef?.get()?.update(j); LauncherLink.onPayload(j) }.also {
                             it.afterFrame = { pp -> Dashcam.onFrame(pp, latestPayload) }
                         }
                     }

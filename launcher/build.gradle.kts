@@ -56,11 +56,32 @@ dependencies {
     implementation("androidx.webkit:webkit:1.11.0")
 }
 
-// 3D 車子展示用 app 的 bev3d 裡的 three.js 與 E60 模型（已轉成公尺、車頭朝 +Z、車燈材質有命名），建置時複製進來
+// 3D 道路畫面直接用 app 的 3D 面板（bev3d：three.js、道路使用者模型、E60），建置時複製進來（不在版控放兩份）。
+// index.html 注入兩件事：收中控台用 postMessage 送來的每幀偵測結果；藏起它自己的按鈕與面板（中控台有自己的儀表）。
 val bev3dOut = layout.buildDirectory.dir("generated/bev3dAssets")
 val copyBev3d by tasks.registering(Copy::class) {
-    from(rootProject.file("app/src/main/assets/bev3d")) { include("lib/**", "models/e60.glb", "models/CREDITS.md") }
+    from(rootProject.file("app/src/main/assets/bev3d")) { exclude("map-demo.json", "*-demo.html", "models.html") }
     into(bev3dOut.map { it.dir("web/bev3d") })
+    inputs.file(project.buildFile)          // 改了注入內容也要重新複製
+    outputs.upToDateWhen { false }
+    filesMatching("index.html") {
+        filter { line ->
+            // 寬螢幕時它會把右邊讓給地圖；中控台右邊是自己的卡片 → 3D 佔滿整個寬度
+            line.replace("var wide = w / h > WIDE_AR;", "var wide = false;")
+                // 加一個「車頭朝自己的斜視」視角（預設），並讓中控台可以切換視角
+                .replace("chase: { pos: [0, 7.5, 10.5], tgt: [0, 0, -1.5], rot: false },",
+                    "front: { pos: [-6.8, 3.6, -10], tgt: [0, 0.6, 2], rot: false }, chase: { pos: [0, 7.5, 10.5], tgt: [0, 0, -1.5], rot: false },")
+                .replace("function setView(name) {", "window.__setView = function (n) { autoView = null; userView = n; setView(n); }; function setView(name) {")
+                .replace("var curView = 'chase', userView = 'chase', autoView = null;", "var curView = 'front', userView = 'front', autoView = null;")
+                .replace("setView('chase');", "setView('front');")
+                .replace("</body>",
+                "<style>.panel,.dock,.topbtn,.cal,#stat,.tl{display:none!important}</style>" +
+                "<script>window.addEventListener('message',function(e){try{var d=e.data;if(!d)return;if(d.__view){if(window.__setView)window.__setView(d.__view);return;}if(window.setFrame)window.setFrame(d)}catch(x){}});" +
+                // 預設是「實景」地面（要鏡頭畫面），中控台沒有 → 換成 Tesla 式的虛擬道路、追車視角
+                "window.addEventListener('load',function(){var b=document.querySelector('#dock button[data-ground=virtual]');" +
+                "if(b&&b.getAttribute('aria-pressed')!=='true')b.click();});</script></body>")
+        }
+    }
 }
 android.sourceSets["main"].assets.srcDir(bev3dOut)
 tasks.named("preBuild") { dependsOn(copyBev3d) }

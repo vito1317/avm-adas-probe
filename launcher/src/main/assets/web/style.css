@@ -24,6 +24,7 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid 
 #car3d{position:fixed;inset:0;width:100%;height:100%;z-index:1;display:block}
 #road{position:fixed;inset:0;width:100%;height:100%;border:0;z-index:2;background:#05070b;opacity:0;transition:opacity .6s}
 #road.on{opacity:1}
+#road:not(.on){pointer-events:none}
 .roadwait{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:3;text-align:center;color:var(--muted);
   background:var(--panel);border:1px solid var(--line);padding:14px 22px;border-radius:14px;backdrop-filter:blur(10px);line-height:1.6}
 
@@ -78,7 +79,7 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid 
 .dots button[aria-pressed="true"]{border-color:#fff;transform:scale(1.12)}
 
 /* 警示 */
-.alerts{position:fixed;top:16px;left:50%;transform:translateX(-50%);z-index:8;display:flex;flex-direction:column;gap:6px;align-items:center;pointer-events:none}
+.alerts{position:fixed;top:70px;left:50%;transform:translateX(-50%);z-index:8;display:flex;flex-direction:column;gap:6px;align-items:center;pointer-events:none}
 .alert{padding:8px 18px;border-radius:999px;font-weight:700;letter-spacing:.06em;backdrop-filter:blur(10px);white-space:nowrap}
 .alert.l0{background:rgba(56,225,255,.16);border:1px solid rgba(56,225,255,.55);color:#bfefff}
 .alert.l1{background:rgba(255,176,32,.18);border:1px solid rgba(255,176,32,.7);color:#ffd99a}
@@ -127,3 +128,19 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid 
 @keyframes laneMove{to{background-position:0 24px}}
 .rv .mini{position:absolute;left:50%;bottom:8px;width:22px;height:32px;margin-left:-11px;border-radius:7px 7px 5px 5px;background:linear-gradient(#e8f6ff,#9fb6cc);box-shadow:0 0 16px rgba(56,225,255,.8)}
 .card.road .go{margin-top:8px;font-size:13px;color:#bfefff}
+
+/* 道路畫面：暗角＋底部強調色光，看起來像儀表螢幕 */
+.roadfx{position:fixed;inset:0;z-index:3;pointer-events:none;opacity:0;transition:opacity .6s;
+  background:radial-gradient(ellipse at 50% 55%,transparent 45%,rgba(2,4,8,.75) 100%),linear-gradient(to top,rgba(56,225,255,.2) 0,transparent 18%);
+  background:radial-gradient(ellipse at 50% 55%,transparent 45%,rgba(2,4,8,.75) 100%),
+             linear-gradient(to top,color-mix(in srgb,var(--accent) 22%,transparent) 0,transparent 18%)}
+.roadfx.on{opacity:1}
+/* 視角切換：霓虹膠囊 */
+.views{position:fixed;top:16px;left:50%;transform:translateX(-50%) translateY(-8px);z-index:7;display:flex;gap:4px;padding:5px;border-radius:999px;
+  background:rgba(10,14,24,.6);border:1px solid var(--line);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+  opacity:0;pointer-events:none;transition:opacity .4s,transform .4s;box-shadow:0 6px 26px rgba(0,0,0,.45)}
+.views.on{opacity:1;pointer-events:auto;transform:translateX(-50%)}
+.views button{padding:9px 18px;border-radius:999px;font-size:14px;font-weight:600;color:var(--muted);transition:background .25s,color .25s,box-shadow .25s}
+.views button[aria-pressed="true"]{color:#fff;background:linear-gradient(135deg,rgba(56,225,255,.5),rgba(183,33,255,.5));box-shadow:0 0 18px rgba(56,225,255,.55)}
+.views button[aria-pressed="true"]{background:linear-gradient(135deg,color-mix(in srgb,var(--accent) 55%,transparent),color-mix(in srgb,var(--accent2) 55%,transparent));
+  box-shadow:0 0 18px color-mix(in srgb,var(--accent) 60%,transparent)}

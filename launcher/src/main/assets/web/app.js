@@ -14,7 +14,12 @@
         var t = (Date.now() - t0) / 1000, spd = Math.max(0, Math.round(60 + 50 * Math.sin(t / 6)));
         return JSON.stringify({ can: true, speed: spd, rpm: 800 + spd * 28, gear: spd > 0 ? 'D' : 'P', lowBeam: true, highBeam: false,
           handbrake: false, belt: true, brake: Math.sin(t / 2) > 0.85, turnL: (t % 12) < 4, turnR: false, hazard: false,
-          range: 412, water: 88, out: 23.5, volt: 14.1, odo: 238513, fuel: 18, doors: { fl: (t % 20) > 17, fr: false, rl: false, rr: false, trunk: false, hood: false } });
+          range: 412, water: 88, out: 23.5, volt: 14.1, odo: 238513, fuel: 18, doors: { fl: (t % 20) > 17, fr: false, rl: false, rr: false, trunk: false, hood: false },
+          adas: { objs: [{ t: 'car', x: 0.2, z: 16 - (t % 8), c: .9, id: 1, yaw: 0 }, { t: 'car', x: 3.6, z: 6, c: .9, id: 2, yaw: 0 }, { t: 'truck', x: -3.5, z: 24, c: .9, id: 3, yaw: 0 },
+              { t: 'moto', x: 3.2, z: -3, c: .9, id: 4, yaw: 0 }, { t: 'bus', x: -3.6, z: 45, c: .9, id: 5, yaw: Math.PI }],
+            road: { lines: [{ k: 'w', d: 1, x1: -1.8, z1: -6, x2: -1.8, z2: 7, c: .9, kv: 0 }, { k: 'w', d: 1, x1: 1.8, z1: -6, x2: 1.8, z2: 7, c: .9, kv: 0 },
+              { k: 'y', d: 0, x1: -5.4, z1: -6, x2: -5.4, z2: 7, c: .9, kv: 0 }, { k: 'w', d: 0, x1: 5.4, z1: -6, x2: 5.4, z2: 7, c: .9, kv: 0 }], el: -5.6, er: 5.6 },
+            veh: { turn: null, gear: 'D', speed: spd } } });
       },
       apps: function () { return JSON.stringify([{ label: 'Google 地圖', pkg: 'a' }, { label: 'YouTube Music', pkg: 'b' }, { label: '設定', pkg: 'c' }]); },
       icon: function () { return ''; }, launch: function () {}, open: function () {}, media: function () {}, volume: function () {},
@@ -63,7 +68,7 @@
     scene = new T.Scene();
     scene.fog = new T.Fog(0x04060a, 14, 34);
     camera = new T.PerspectiveCamera(30, 1, 0.1, 100);
-    camera.position.set(7.2, 2.6, -6.2);
+    camera.position.set(6.4, 2.4, 6.6);              // 車頭朝自己的斜前方（車頭朝 +Z，+X 是車的左邊）
     if (T.RoomEnvironment) {
       var pm = new T.PMREMGenerator(renderer);
       scene.environment = pm.fromScene(new T.RoomEnvironment(), 0.04).texture;
@@ -180,7 +185,7 @@
   }
 
   // ───────── 每幀 ─────────
-  var st = {}, lastFrame = 0;
+  var st = {}, lastFrame = 0, roadOn = false;
   function loop(now) {
     requestAnimationFrame(loop);
     now = now || 0;
@@ -191,7 +196,7 @@
     var pulse = 0.5 + 0.5 * Math.sin(now / 700);
     if (ring) { ring.material.opacity = 0.35 + 0.35 * pulse; ring.userData.r2.material.opacity = 0.12 + 0.15 * (1 - pulse); }
     if (car) lights(now);
-    renderer.render(scene, camera);
+    if (!roadOn) renderer.render(scene, camera);            // 道路畫面蓋著時不畫 3D 車，省 GPU
   }
   function lights(now) {
     var blink = Math.floor(now / 400) % 2 === 0, hz = !!st.hazard;
@@ -246,12 +251,40 @@
   }
   setInterval(poll, 150); poll();
 
+  // ───────── 中間畫面：3D 車 ／ 3D 道路 ─────────
+  // auto：開車（≥ 5 km/h）切成道路；快捷列「道路畫面」手動切換，開始／停止行車時恢復自動
+  var override = null, wasDriving = false, road = $('road');
+  function updateView() {
+    var mode = pref('viewMode', 'auto'), spd = st.speed || 0, driving = spd >= 5;
+    if (driving !== wasDriving) { override = null; wasDriving = driving; }
+    var want = override || (mode === 'road' ? 'road' : mode === 'car' ? 'car' : driving ? 'road' : 'car');
+    roadOn = want === 'road';
+    road.classList.toggle('on', roadOn);
+    $('roadFx').classList.toggle('on', roadOn);
+    $('views').classList.toggle('on', roadOn);
+    if (roadOn && !road._viewSent && road.contentWindow) { road._viewSent = true; sendView(pref('roadView', 'front')); }
+    $('viewBtn').setAttribute('aria-pressed', String(roadOn));
+    $('roadWait').hidden = !(roadOn && !st.adas);
+    if (roadOn && st.adas && road.contentWindow) { try { road.contentWindow.postMessage(st.adas, '*'); } catch (e) {} }
+  }
+  setInterval(updateView, 150);
+  // 視角：前方斜視（預設）／追車／俯視／環繞，記住上次選的
+  function sendView(v) {
+    try { road.contentWindow.postMessage({ __view: v }, '*'); } catch (e) {}
+    document.querySelectorAll('#views button').forEach(function (b) { b.setAttribute('aria-pressed', String(b.dataset.view === v)); });
+  }
+  document.querySelectorAll('#views button').forEach(function (b) {
+    b.onclick = function () { setPref('roadView', b.dataset.view); sendView(b.dataset.view); };
+  });
+  road.addEventListener('load', function () { road._viewSent = false; });
+
   // ───────── 按鈕 ─────────
   document.querySelectorAll('[data-open]').forEach(function (b) { b.onclick = function () { try { Car.open(b.dataset.open); } catch (e) {} }; });
   document.querySelectorAll('[data-media]').forEach(function (b) { b.onclick = function () { try { Car.media(b.dataset.media); } catch (e) {} }; });
   document.querySelectorAll('[data-vol]').forEach(function (b) { b.onclick = function () { try { Car.volume(+b.dataset.vol); } catch (e) {} }; });
   function openRoad() { try { Car.roadView(); } catch (e) {} }
-  $('viewBtn').onclick = openRoad; $('roadCard').onclick = openRoad;
+  $('viewBtn').onclick = function () { override = roadOn ? 'car' : 'road'; updateView(); };
+  $('roadCard').onclick = openRoad;
   dotRow($('ambDots'), [['紅', '#ff2a2a'], ['橘', '#ff7a1a'], ['黃', '#ffd21a'], ['綠', '#2aff6a'], ['青', '#2ae0ff'], ['藍', '#2a5cff'], ['紫', '#b02aff'], ['白', '#ffffff']], '',
     function (col) { try { Car.engine('ambient', col.slice(1)); } catch (e) {} });
 
@@ -279,6 +312,8 @@
     $('plateFront').checked = pref('plateFront', '1') === '1';
     dotRow($('paints'), PAINTS, pref('paint', PAINTS[0][1]), function (c) { setPref('paint', c); setPaint(c); });
     dotRow($('accents'), ACCENTS, pref('accent', ACCENTS[0]), function (c) { setPref('accent', c); applyAccent(c); });
+    $('viewMode').value = pref('viewMode', 'auto');
+    $('viewMode').onchange = function () { setPref('viewMode', $('viewMode').value); override = null; };
     show('settings', true);
   };
   $('plate').addEventListener('input', function () {
