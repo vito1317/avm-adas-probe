@@ -73,6 +73,8 @@ class ParkingSlotDetector {
         private const val CROSS_REACH_EGO = 1.8
         /** 跟自車平行、貼著自車側邊（外框外 0.5 m 內）的線 → 視為跟自車共用、被車身擋住的分隔線。 */
         private const val EGO_ADJ_OUT = 0.5
+        /** 車身範圍內看得到這麼多就算整條看得到、不補。 */
+        const val EGO_SEEN_FULL = 0.85
         private const val EGO_ADJ_IN = 0.15
         private val COS_EGO_PAR = cos(8.0 * PI / 180.0)
         private const val GLYPH_M = 0.60      // 遮罩元件兩個方向都小於此值 → 字形（車位號碼、箭頭、污漬）
@@ -1082,12 +1084,21 @@ class ParkingSlotDetector {
             val out = if (left) edge - x0 else x0 - edge          // 在外框外多遠（負 = 伸進外框）
             if (out < -EGO_ADJ_IN || out > EGO_ADJ_OUT) continue
             val t0 = (ego[1] - l.cz) / l.uz; val t1 = (ego[3] - l.cz) / l.uz
-            // 只有真的被擋住（車身範圍內看得到的不到一半）才補；整條看得到的線不動
+            // 只有真的被擋住（車身範圍內看得到的不到 85%）才補；整條看得到的線不動
+            // （實車 2026-11-10 夜間停車場：兩側分隔線各只看得到車身旁 52～53%，以前門檻 50% 剛好不補 → 自己這格湊不起來）
             val lo = min(t0, t1); val hi = max(t0, t1)
             var seen = 0.0
             k = 0
             while (k < l.pieces.size) { seen += max(0.0, min(hi, l.pieces[k + 1]) - max(lo, l.pieces[k])); k += 2 }
-            if (seen >= 0.5 * (hi - lo)) continue
+            if (seen >= EGO_SEEN_FULL * (hi - lo)) continue
+            if (seen >= 0.5 * (hi - lo)) {
+                // 看得到一半以上：只有車身旁是完整連續的一段（另一頭被車身擋住）才補；
+                // 地磚、雜紋那種碎成好幾段的不補（不然格子假設暴增，地磚場景慢到 100 ms）
+                var segs = 0
+                k = 0
+                while (k < l.pieces.size) { if (min(hi, l.pieces[k + 1]) - max(lo, l.pieces[k]) > 0.05) segs++; k += 2 }
+                if (segs != 1 || seen < 1.5) continue
+            }
             // 延伸到整個車身長度
             val add = doubleArrayOf(min(t0, t1).toDouble(), max(t0, t1).toDouble())
             val all = l.pieces + add

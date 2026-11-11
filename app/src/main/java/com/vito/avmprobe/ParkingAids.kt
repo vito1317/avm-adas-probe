@@ -109,14 +109,19 @@ class ParkingAids(private val geo: VehicleGeometry = VehicleGeometry()) {
     private var lastReverseAt = -1L
     private var stoppedAt = -1L
     private var snapped = false
+    private var lastGear: Char? = null
+    private var lastSnapAt = -1L
 
     fun shouldSnapshot(now: Long, speedKmh: Float?, gear: Char?): Boolean {
-        if (gear == 'R') { lastReverseAt = now; snapped = false }
+        // 只有「剛打進 R」才重新允許拍；以前在 R 檔停著不動每一幀都重置 → 一秒存好幾張（實車一次存了 900 張）
+        if (gear == 'R') { lastReverseAt = now; if (lastGear != 'R') snapped = false }
+        lastGear = gear
+        if (lastSnapAt >= 0L && now - lastSnapAt < 60_000L) return false
         val stopped = (speedKmh ?: 0f) < 0.5f
         if (!stopped) { stoppedAt = -1L; return false }
         if (stoppedAt < 0L) stoppedAt = now
         val recentlyParked = lastReverseAt >= 0L && now - lastReverseAt < 3 * 60_000L
-        if (!snapped && recentlyParked && now - stoppedAt >= SNAP_AFTER_MS) { snapped = true; return true }
+        if (!snapped && recentlyParked && now - stoppedAt >= SNAP_AFTER_MS) { snapped = true; lastSnapAt = now; return true }
         return false
     }
 }

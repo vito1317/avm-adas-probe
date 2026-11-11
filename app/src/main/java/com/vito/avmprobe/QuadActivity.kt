@@ -745,7 +745,7 @@ class QuadActivity : AppCompatActivity(), CameraQuadSource.Listener {
                 slotsAt = now
                 if (mode == AppPrefs.GROUND_VIRTUAL) {
                     road = roadTrack.update(
-                        roadEx.extract(buf, bw, bh, mpp, cx, cy, excl, g.ipmValidMask()), now)
+                        roadEx.extract(buf, bw, bh, mpp, cx, cy, excl, g.roadValidMask()), now)
                     roadAt = now
                 }
                 if (mode == AppPrefs.GROUND_REAL) {

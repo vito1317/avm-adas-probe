@@ -877,7 +877,7 @@ class AdasPipeline(
                 slotsAt = now
                 Crumbs.at(Crumbs.GROUND, "road")
                 if (mode == AppPrefs.GROUND_VIRTUAL) {
-                    road = roadTrack.update(roadEx.extract(buf, bw, bh, mpp, cx, cy, excl, g.ipmValidMask()), now); roadAt = now
+                    road = roadTrack.update(steepFilter(roadEx.extract(buf, bw, bh, mpp, cx, cy, excl, g.roadValidMask()), VehicleBus.signals.snapshot().speedKmh), now); roadAt = now
                 }
                 if (mode == AppPrefs.GROUND_REAL) {
                     var bmp = bevBmp
@@ -1193,6 +1193,16 @@ class AdasPipeline(
     private val hazardPrompt = HazardPrompt()
     @Volatile private var lastFastAt = 0L
     private val lot = ParkingLotState()
+
+    /**
+     * 開快（≥ 40 km/h）時車子不可能斜斜地壓過車道線：跟車頭方向差超過 25° 的「線」都是假的
+     * （接縫、反光、旁車的影子），不拿來畫也不拿來做偏離／壓線警示（實車 120 km/h：兩條斜線穿過車身成 X，左右偏離一起叫）。
+     */
+    private fun steepFilter(r: RoadResult, kmh: Float?): RoadResult {
+        if ((kmh ?: 0f) < 40f) return r
+        val keep = r.lines.filter { l -> val dx = abs(l.x2 - l.x1); val dz = abs(l.z2 - l.z1); dx <= dz * 0.466f }   // tan 25°
+        return if (keep.size == r.lines.size) r else r.copy(lines = keep)
+    }
     @Volatile private var gearCur: Char? = null
     /** P 檔或在停車場：方向燈不當成要變道（停車場裡打燈、打雙閃不出變道提示、盲點警示） */
     private fun turnForLaneAids(vs: VehicleState): Char? = if (inLot || gearCur == 'P' || gearCur == 'R') null else vs.turn

@@ -157,7 +157,7 @@ object FactoryVehicle {
         if (useClean >= 0f) {
             lastValidAt = now
             // 車機 CAN 有真車速時用它（原廠 360 的車速只是 GPS）
-            if (!CanCarInfo.fresh()) VehicleBus.signals.reportSpeed(useClean)
+            if (!CanCarInfo.owns()) VehicleBus.signals.reportSpeed(useClean)
         }
         status = "原廠車速 ${if (kmh >= 0f) "%.0f km/h".format(kmh) else "—"}；GPS ${if (gps >= 0f) "%.0f km/h".format(gps) else "—"}；方向燈 ${if (left == true) "左" else ""}${if (right == true) "右" else ""}${if (left != true && right != true) "無" else ""}；前輪角 ${wheel?.let { "%.1f°".format(it) } ?: "—"}（${if (steerSign > 0) "正值右轉" else "正值左轉"}）；檔位碼 ${gear ?: "—"}"
         if (now - lastLog > 30_000) { lastLog = now; Engine360.log(status) }

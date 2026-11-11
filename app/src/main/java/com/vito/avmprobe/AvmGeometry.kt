@@ -92,7 +92,69 @@ class AvmGeometry(val cams: List<CamParams>, val bev: BevSpec, val carLength: Do
     private var ipmCache: BooleanArray? = null
     private var ipmCacheDeg = Double.NaN
 
+    /**
+     * 抓道路線用的遮罩：[ipmValidMask] 再挖掉鏡頭拼接接縫兩側 [SEAM_BAND_M]。
+     * 俯視圖從車子四個角斜斜往外有接縫，兩邊是不同鏡頭、亮度顏色不同，那條「邊」會被當成白線抓出來，
+     * 畫面上再把線延長 → 車子底下出現 X 形的假道路線（實車 2026-11）。真的車道線是縱向的，跨過接縫只少一小段。
+     */
+    fun roadValidMask(): BooleanArray {
+        roadCache?.let { return it }
+        val w = bev.width; val h = bev.height
+        val own = ownerMap()
+        val seam = BooleanArray(w * h)
+        for (j in 0 until h) for (i in 0 until w) {
+            val p = j * w + i; val o = own[p]
+            if (o < 0) continue
+            if (i + 1 < w && own[p + 1] >= 0 && own[p + 1] != o) { seam[p] = true; seam[p + 1] = true }
+            if (j + 1 < h && own[p + w] >= 0 && own[p + w] != o) { seam[p] = true; seam[p + w] = true }
+        }
+        val r = kotlin.math.ceil(SEAM_BAND_M / bev.mpp).toInt()
+        // 先橫向、再縱向擴張（方形鄰域）
+        val tmp = BooleanArray(w * h)
+        for (j in 0 until h) { var last = -100000
+            for (i in 0 until w) { if (seam[j * w + i]) last = i; if (i - last <= r) tmp[j * w + i] = true }
+            last = 100000
+            for (i in w - 1 downTo 0) { if (seam[j * w + i]) last = i; if (last - i <= r) tmp[j * w + i] = true } }
+        val band = BooleanArray(w * h)
+        for (i in 0 until w) { var last = -100000
+            for (j in 0 until h) { if (tmp[j * w + i]) last = j; if (j - last <= r) band[j * w + i] = true }
+            last = 100000
+            for (j in h - 1 downTo 0) { if (tmp[j * w + i]) last = j; if (last - j <= r) band[j * w + i] = true } }
+        val ipm = ipmValidMask()
+        val out = BooleanArray(w * h) { ipm[it] && !band[it] }
+        roadCache = out
+        return out
+    }
+    private var roadCache: BooleanArray? = null
+
+    /** 每個俯視圖像素用哪顆鏡頭（跟 [buildBevLut] 同一套選法）；車身範圍或沒鏡頭看得到 = -1。 */
+    fun ownerMap(): IntArray {
+        val bw = bev.width; val bh = bev.height
+        val order = cams.sortedBy { it.quad }
+        val hw = carWidth / 2 + EGO_MARGIN; val hl = carLength / 2 + EGO_MARGIN
+        val tmp = DoubleArray(3)
+        val out = IntArray(bw * bh)
+        // 用一個假的 1920x1080 畫面大小判斷有沒有落在象限內（只要相對位置，跟真實解析度無關）
+        val qw = 960; val qh = 540
+        for (j in 0 until bh) {
+            val gz = bev.zMax - (j + 0.5) * bev.mpp
+            for (i in 0 until bw) {
+                val gx = bev.xMin + (i + 0.5) * bev.mpp
+                var best = -1
+                if (!(abs(gz) <= hl && abs(gx) <= hw)) {
+                    var bestTh = Double.POSITIVE_INFINITY
+                    for (k in order.indices) if (project(order[k], gx, gz, qw, qh, tmp) && tmp[2] < bestTh) { bestTh = tmp[2]; best = k }
+                }
+                out[j * bw + i] = best
+            }
+        }
+        return out
+    }
+
     companion object {
+        /** 接縫兩側各挖掉多寬（公尺），抓道路線時不用。 */
+        const val SEAM_BAND_M = 0.2
+
         /** 讀 avm_calib.json 的內容。cams 依 quad 排序。 */
         fun fromJson(text: String): AvmGeometry {
             val root = JSONObject(text)

@@ -61,6 +61,14 @@ object CanCarInfo {
     /** CAN 車速可用（讀到過非 0、最近 1 秒內有讀到）。 */
     fun fresh(): Boolean = trusted && SystemClock.elapsedRealtime() - lastAt < 1000
 
+    /**
+     * 車速一律用 CAN（使用者要求）：這台車讀到過一次 CAN 車速就記住（存在設定裡，重開也算數），
+     * 之後只要 CAN 服務還連著，其他來源（原廠 VehicleState、車機廣播、GPS）都不報車速；
+     * CAN 服務連續失敗停掉了才讓備援接手。
+     */
+    fun owns(): Boolean = trusted && binder != null
+    private var prefs: android.content.SharedPreferences? = null
+
     private val conn = object : ServiceConnection {
         override fun onServiceConnected(n: ComponentName?, b: IBinder?) {
             val desc = try { b?.interfaceDescriptor } catch (_: Throwable) { null }
@@ -75,6 +83,8 @@ object CanCarInfo {
         try { CanVehicle.init(ctx) } catch (_: Throwable) {}
         started = true
         val app = ctx.applicationContext ?: ctx
+        prefs = try { app.getSharedPreferences("can_vehicle", Context.MODE_PRIVATE) } catch (_: Throwable) { null }
+        if (prefs?.getBoolean("speedTrusted", false) == true) trusted = true
         try {
             val ok = app.bindService(Intent(ACTION).setPackage(PKG), conn, Context.BIND_AUTO_CREATE)
             status = if (ok) "連線中" else "車機沒有這個服務"
@@ -107,7 +117,7 @@ object CanCarInfo {
             val spd = arr[2]; val r = arr[3]
             if (spd !in 0..300) return true
             speedKmh = spd; rpm = r; lastAt = SystemClock.elapsedRealtime()
-            if (spd > 0 && !trusted) { trusted = true; Engine360.log("讀到車機 CAN 車速（$spd km/h），改用它當車速") }
+            if (spd > 0 && !trusted) { trusted = true; prefs?.edit()?.putBoolean("speedTrusted", true)?.apply(); Engine360.log("讀到車機 CAN 車速（$spd km/h），之後一律用它當車速") }
             if (trusted) VehicleBus.signals.reportSpeed(spd.toFloat())
             status = "CAN 車速 $spd km/h、轉速 $r" + (if (trusted) "（使用中）" else "（還沒讀到非 0，暫不採用）")
             return true

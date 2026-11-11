@@ -62,4 +62,16 @@ class ParkingAidsTest {
         repeat(40) { if (p.shouldSnapshot(t, 0f, null)) shots++; t += 500 }
         assertEquals(1, shots)
     }
+
+    @Test
+    fun stoppedInReverseSnapsOnlyOnce() {
+        // 實車：倒車停好還在 R 檔不動 → 以前每一幀都存一張（一次 900 張）
+        val p = ParkingAids()
+        var t = 0L
+        repeat(10) { p.shouldSnapshot(t, 3f, 'R'); t += 500 }
+        var shots = 0
+        repeat(200) { if (p.shouldSnapshot(t, 0f, 'R')) shots++; t += 100 }
+        repeat(100) { if (p.shouldSnapshot(t, 0f, 'P')) shots++; t += 500 }
+        assertEquals(1, shots)
+    }
 }
