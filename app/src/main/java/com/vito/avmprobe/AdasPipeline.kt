@@ -129,6 +129,9 @@ class AdasPipeline(
     val laneSegMs: Long get() = laneSeg?.lastMs ?: -1L
     @Volatile private var cws: List<CrosswalkDetector.Crosswalk> = emptyList()
     @Volatile private var cwAt = 0L
+    private val bjDet = BoxJunctionDetector()
+    @Volatile private var bjs: List<BoxJunctionDetector.Box> = emptyList()
+    @Volatile private var bjAt = 0L
     private val roadTrack = RoadTracker()
     private val coneDet = ConeDetector()
     private val slotDet = ParkingSlotDetector()
@@ -941,6 +944,9 @@ class AdasPipeline(
                 if (!Crumbs.off("crosswalk")) Crumbs.step(Crumbs.GROUND, "crosswalk") {
                     cws = cwDet.detect(buf, bw, bh, mpp, cx, cy, g.ipmValidMask(), excl); cwAt = now
                 }
+                if (!Crumbs.off("boxjunc")) Crumbs.step(Crumbs.GROUND, "boxjunc") {
+                    bjs = bjDet.detect(buf, bw, bh, mpp, cx, cy, g.ipmValidMask(), excl); bjAt = now
+                }
                 if (mode == AppPrefs.GROUND_VIRTUAL) {
                     // 有車道線模型、四顆鏡頭都有新結果 → 用模型決定哪裡是漆；否則照舊用亮度規則
                     val paint = laneSeg?.takeIf { prefs.laneModel && it.ready(now) }?.let { ls ->
@@ -1041,6 +1047,13 @@ class AdasPipeline(
                 .put("ux", r2(c.ux)).put("uz", r2(c.uz)))
             p.put("cw", a)
         }
+        // 黃色網狀線（禁止臨時停車區）
+        val bjNow = if (now - bjAt < BEV_TTL_MS && !inLot) bjs else emptyList()
+        if (bjNow.isNotEmpty()) {
+            val a = JSONArray()
+            for (b in bjNow) a.put(JSONObject().put("p", JSONArray().apply { for (v in b.p) put(r2(v)) }))
+            p.put("bj", a)
+        }
         // 開車（> 20 km/h）不顯示停車格：旁邊車道的標線會被湊成格子（實車）
         if (now - slotsAt < BEV_TTL_MS && slots.isNotEmpty() && (vs.speedKmh ?: 0f) <= 20f && !onRoad) {
             // 倒車時打方向燈 → 自動選那一側最近的空格
@@ -1094,6 +1107,14 @@ class AdasPipeline(
                     val near = kotlin.math.abs(x) < 4.5f && kotlin.math.abs(z) < 8f
                     msgs.add(DriverAids.Msg("sideblink", "${where}車輛打方向燈", if (near) 1 else 0))
                 }
+            }
+            // 網狀線：慢下來（< 8 km/h、D 檔）時自車壓在上面或車頭前 2 m 內 → 提醒不可停車
+            if ((vs.speedKmh ?: 99f) < 8f && gearCur != 'R' && gearCur != 'P') {
+                val hit = (if (now - bjAt < BEV_TTL_MS && !inLot) bjs else emptyList()).any { b ->
+                    val xs = (0 until 4).map { b.p[it * 2] }; val zs = (0 until 4).map { b.p[it * 2 + 1] }
+                    xs.min() < 1.0f && xs.max() > -1.0f && zs.min() < 2.57f + 2f && zs.max() > -2.57f
+                }
+                if (hit) msgs.add(DriverAids.Msg("boxjunc", "網狀線區，不可停車", 1))
             }
             // 斑馬線：前方 6 m 內（含正壓在上面）→ 提示；上面有行人 → 警示
             if ((vs.speedKmh ?: 0f) >= 3f && gearCur != 'R' && gearCur != 'P') {

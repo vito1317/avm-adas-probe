@@ -174,6 +174,7 @@ class AnnotationView(context: Context) : View(context) {
         if (p != null) {
             if (drawRoad) p.optJSONObject("road")?.optJSONArray("lines")?.let { drawRoad(c, m, it) }
             if (drawRoad) p.optJSONArray("cw")?.let { drawCrosswalks(c, m, it) }
+            p.optJSONArray("bj")?.let { drawBoxJunctions(c, m, it) }
             p.optJSONArray("slots")?.let { drawSlots(c, m, it) }
             p.optJSONObject("park")?.let { drawParkPath(c, m, it) }
             p.optJSONObject("turn")?.let { drawTurnPath(c, m, it) }
@@ -413,6 +414,19 @@ class AnnotationView(context: Context) : View(context) {
             c.drawLine(m.sx(x1, z1), m.sy(x1, z1), m.sx(x2, z2), m.sy(x2, z2), stroke)
         }
         stroke.pathEffect = null
+    }
+
+    /** 黃色網狀線：半透明黃色框＋粗外框。 */
+    private fun drawBoxJunctions(c: Canvas, m: AnnotationMapper, a: JSONArray) {
+        for (i in 0 until a.length()) {
+            val q = a.optJSONObject(i)?.optJSONArray("p") ?: continue
+            if (q.length() < 8) continue
+            path.reset()
+            for (k in 0 until 4) { val x = q.optDouble(k * 2).toFloat(); val z = q.optDouble(k * 2 + 1).toFloat(); if (k == 0) path.moveTo(m.sx(x, z), m.sy(x, z)) else path.lineTo(m.sx(x, z), m.sy(x, z)) }
+            path.close()
+            fill.color = Color.rgb(255, 200, 40); fill.alpha = 55; c.drawPath(path, fill); fill.alpha = 255
+            stroke.color = Color.rgb(255, 200, 40); c.drawPath(path, stroke)
+        }
     }
 
     /** 斑馬線：一條一條半透明白條＋淡框。 */

@@ -17,7 +17,7 @@ import java.nio.channels.FileChannel
 object Crumbs {
     const val HEALTHY_MS = 60_000L
     /** 足跡裡標明是哪一版（跟發佈的版號一致）。 */
-    const val BUILD = "m-v100"
+    const val BUILD = "m-v101"
     private const val SLOT = 96
     private const val SLOTS = 7
     private const val HEAD = 16
@@ -30,7 +30,7 @@ object Crumbs {
         "tts" to "語音提示（初始化）", "speak" to "語音提示（念）", "slotbev" to "停車格大範圍俯視圖",
         "aids" to "駕駛／停車輔助", "turnopen" to "轉彎轉進空地", "vshift" to "周圍車輛判斷變道",
         "vyaw" to "前方畫面轉向", "cutin" to "切入偵測", "lead" to "前車燈號", "door" to "車門狀態",
-        "evlock" to "事件自動存影片", "parkshot" to "停車位置記錄", "canspeed" to "車機 CAN 車速", "dashcam" to "行車記錄器", "train" to "收集訓練資料", "crosswalk" to "斑馬線", "laneseg" to "車道線模型", "sideblink" to "周圍車輛方向燈", "ambient" to "氛圍燈連動", "cyremote" to "遠端模組", "reardisp" to "後擋看板"
+        "evlock" to "事件自動存影片", "parkshot" to "停車位置記錄", "canspeed" to "車機 CAN 車速", "dashcam" to "行車記錄器", "train" to "收集訓練資料", "crosswalk" to "斑馬線", "laneseg" to "車道線模型", "sideblink" to "周圍車輛方向燈", "boxjunc" to "網狀線", "ambient" to "氛圍燈連動", "cyremote" to "遠端模組", "reardisp" to "後擋看板"
     )
 
     @Volatile private var buf: MappedByteBuffer? = null

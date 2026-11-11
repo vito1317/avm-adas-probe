@@ -291,6 +291,29 @@ class RoadView(context: Context) : View(context) {
         fill.shader = LinearGradient(0f, cy, 0f, h, Color.rgb(16, 24, 38), Color.rgb(28, 40, 58), Shader.TileMode.CLAMP)
         c.drawPath(path, fill); fill.shader = null
 
+        // 黃色網狀線：外框＋交叉斜線
+        p?.optJSONArray("bj")?.let { bj ->
+            for (i in 0 until bj.length()) {
+                val q = bj.optJSONObject(i)?.optJSONArray("p") ?: continue
+                if (q.length() < 8) continue
+                val x0 = q.optDouble(0).toFloat(); val z0 = q.optDouble(1).toFloat(); val x1 = q.optDouble(4).toFloat(); val z1 = q.optDouble(5).toFloat()
+                stroke.color = Color.rgb(255, 200, 40); stroke.strokeWidth = 3f; stroke.pathEffect = null
+                fun seg(ax: Float, az: Float, bx: Float, bz: Float) { if (proj(ax, 0f, az)) { val sx = tmp[0]; val sy = tmp[1]; if (proj(bx, 0f, bz)) c.drawLine(sx, sy, tmp[0], tmp[1], stroke) } }
+                seg(x0, z0, x1, z0); seg(x1, z0, x1, z1); seg(x1, z1, x0, z1); seg(x0, z1, x0, z0)
+                // 斜線：每 1 m 一條，兩個方向，裁在框內
+                var d = -(z1 - z0) - (x1 - x0)
+                while (d <= (z1 - z0) + (x1 - x0)) {
+                    for (sgn in listOf(1f, -1f)) {
+                        // 線：z − z0 = sgn·(x − x0) + d，取跟框的交點
+                        val pts = ArrayList<FloatArray>()
+                        for (xx in listOf(x0, x1)) { val zz = z0 + sgn * (xx - x0) + d; if (zz in z0..z1) pts.add(floatArrayOf(xx, zz)) }
+                        for (zz in listOf(z0, z1)) { val xx = x0 + (zz - z0 - d) / sgn; if (xx in x0..x1) pts.add(floatArrayOf(xx, zz)) }
+                        if (pts.size >= 2) seg(pts[0][0], pts[0][1], pts[1][0], pts[1][1])
+                    }
+                    d += 1f
+                }
+            }
+        }
         // 斑馬線：貼地的白條
         p?.optJSONArray("cw")?.let { cw ->
             for (i in 0 until cw.length()) {

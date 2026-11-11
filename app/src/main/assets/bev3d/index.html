@@ -828,6 +828,31 @@
   var cwMat = new THREE.MeshBasicMaterial({ color: 0xf2f6ff, transparent: true, opacity: 0.85, toneMapped: false, depthWrite: false, side: THREE.DoubleSide,
     polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
   var cwAt = -1e9, CW_TTL = 1500, CW_Y = 0.03;
+  // ---------- 黃色網狀線：黃色半透明面＋交叉斜線 ----------
+  var bjGroup = new THREE.Group(); scene.add(bjGroup);
+  var bjFill = new THREE.MeshBasicMaterial({ color: 0xffc828, transparent: true, opacity: 0.18, toneMapped: false, depthWrite: false, side: THREE.DoubleSide });
+  var bjLine = new THREE.LineBasicMaterial({ color: 0xffc828, transparent: true, opacity: 0.9, toneMapped: false, depthWrite: false });
+  var bjAt = -1e9;
+  function drawBoxJunctions(list) {
+    while (bjGroup.children.length) { var o = bjGroup.children.pop(); o.geometry.dispose(); }
+    (list || []).forEach(function (b) {
+      var p = b.p; if (!p || p.length < 8) return;
+      var x0 = p[0], z0 = p[1], x1 = p[4], z1 = p[5], Y = 0.025;
+      var g = new THREE.PlaneGeometry(x1 - x0, z1 - z0); var m = new THREE.Mesh(g, bjFill);
+      m.rotation.x = -Math.PI / 2; m.position.set((x0 + x1) / 2, Y, -(z0 + z1) / 2); bjGroup.add(m);
+      var v = [x0, z0, x1, z0, x1, z0, x1, z1, x1, z1, x0, z1, x0, z1, x0, z0];
+      for (var d = -(z1 - z0) - (x1 - x0); d <= (z1 - z0) + (x1 - x0); d += 1) [1, -1].forEach(function (s) {
+        var pts = [];
+        [x0, x1].forEach(function (xx) { var zz = z0 + s * (xx - x0) + d; if (zz >= z0 && zz <= z1) pts.push([xx, zz]); });
+        [z0, z1].forEach(function (zz) { var xx = x0 + (zz - z0 - d) / s; if (xx >= x0 && xx <= x1) pts.push([xx, zz]); });
+        if (pts.length >= 2) v.push(pts[0][0], pts[0][1], pts[1][0], pts[1][1]);
+      });
+      var pos = []; for (var i = 0; i < v.length; i += 2) pos.push(v[i], Y + 0.005, -v[i + 1]);
+      var lg = new THREE.BufferGeometry(); lg.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+      bjGroup.add(new THREE.LineSegments(lg, bjLine));
+    });
+  }
+
   function drawCrosswalks(list) {
     while (cwGroup.children.length) { var o = cwGroup.children.pop(); o.geometry.dispose(); }
     (list || []).forEach(function (c) {
@@ -1269,6 +1294,7 @@
     lastLca = p.lca || null;
     if (p.slots) { slotsAt = now; drawSlots(p.slots); }
     if (p.cw) { cwAt = now; drawCrosswalks(p.cw); }
+    if (p.bj) { bjAt = now; drawBoxJunctions(p.bj); }
     if (p.lot) showLot(p, now);
     if (p.obs) { obsAt = now; drawObs(p.obs); }
     if (p.park) { parkAt = now; drawPark(p.park); }
@@ -1567,6 +1593,7 @@
     // 停車格：來源停送就收起來
     if (slotsAt > 0 && now - slotsAt > SLOT_TTL) { drawSlots(null); slotsAt = -1e9; }
     if (cwAt > 0 && now - cwAt > CW_TTL) { drawCrosswalks(null); cwAt = -1e9; }
+    if (bjAt > 0 && now - bjAt > CW_TTL) { drawBoxJunctions(null); bjAt = -1e9; }
     var inLot = now - lotAt < LOT_TTL;
     lotGroup.visible = inLot; lotTag.style.display = inLot ? 'block' : 'none';
     if (obsAt > 0 && now - obsAt > OBS_TTL) { drawObs(null); obsAt = -1e9; }
