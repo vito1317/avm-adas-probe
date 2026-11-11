@@ -435,10 +435,9 @@ class AnnotationView(context: Context) : View(context) {
     private fun drawSlots(c: Canvas, m: AnnotationMapper, a: JSONArray) {
         for (i in 0 until a.length()) {
             val s = a.optJSONObject(i) ?: continue
-            // 只畫空車位：有車的格子在原廠影像上本來就看得到，畫紅框只會一閃一閃地添亂
-            // 只畫空車位（有車的格子原廠影像上就看得到）；自車停的那格例外：標「目前車格」
+            // 有車的格子也畫（淡灰細框），看得出整排格子；自車停的那格標「目前車格」
             val own = s.optInt("own") == 1
-            if (s.optInt("o") == 1 && !own) continue
+            val occ = s.optInt("o") == 1 && !own
             val q = s.optJSONArray("p") ?: continue
             if (q.length() < 8) continue
             path.reset()
@@ -448,12 +447,13 @@ class AnnotationView(context: Context) : View(context) {
             }
             path.close()
             val sel = s.optInt("sel") == 1
-            val col = if (sel) Color.rgb(60, 150, 255) else if (own) Color.rgb(40, 225, 255) else if (s.optInt("o") == 1) Color.rgb(255, 90, 70) else Color.rgb(80, 230, 120)
-            fill.color = col; fill.alpha = if (sel) 80 else 45
+            // 有車的格子：淡灰細框（原廠影像上看得到車，只要看得出格子在哪就好）
+            val col = if (sel) Color.rgb(60, 150, 255) else if (own) Color.rgb(40, 225, 255) else if (occ) Color.rgb(170, 178, 190) else Color.rgb(80, 230, 120)
+            fill.color = col; fill.alpha = if (sel) 80 else if (occ) 18 else 45
             c.drawPath(path, fill)
             stroke.color = col
             val old = stroke.strokeWidth
-            if (sel) stroke.strokeWidth = 5f * dp
+            if (sel) stroke.strokeWidth = 5f * dp else if (occ) { stroke.strokeWidth = 1.5f * dp; stroke.color = Color.argb(150, 170, 178, 190) }
             c.drawPath(path, stroke)
             stroke.strokeWidth = old
             if (sel || own) {

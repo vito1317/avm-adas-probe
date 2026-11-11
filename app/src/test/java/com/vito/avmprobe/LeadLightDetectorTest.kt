@@ -54,4 +54,26 @@ class LeadLightDetectorTest {
         assertFalse(s.hazard)
         assertEquals('R', s.turn)
     }
+
+    @Test
+    fun brakeWithOverexposedPinkLampsOnGreyCar() {
+        // 實車：灰色車煞車燈中心過曝成白偏粉紅（以前只數「很紅」的像素，偵測不到；只有紅色車才偵測得到）
+        val PINK = (0xFF shl 24) or (255 shl 16) or (175 shl 8) or 170
+        val d = LeadLightDetector()
+        var s = upd(d, 0, DIM_RED, DIM_RED)
+        for (t in 1..10) s = upd(d, t * 100L, DIM_RED, DIM_RED)
+        assertFalse(s.brake)
+        s = upd(d, 1200, PINK, PINK)
+        assertTrue("過曝的煞車燈也要偵測到", s.brake)
+    }
+
+    @Test
+    fun redCarBodyAloneIsNotBraking() {
+        // 紅色車：整個車尾（含燈區）都是暗紅色車漆，燈沒亮 → 不是煞車
+        val BODY = (0xFF shl 24) or (150 shl 16) or (25 shl 8) or 30
+        val d = LeadLightDetector()
+        var s = upd(d, 0, BODY, BODY)
+        for (t in 1..30) s = upd(d, t * 100L, BODY, BODY)
+        assertFalse(s.brake)
+    }
 }

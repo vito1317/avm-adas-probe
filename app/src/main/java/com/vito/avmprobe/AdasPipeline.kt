@@ -676,7 +676,18 @@ class AdasPipeline(
         }
         emaInfer = ema(emaInfer, inf.toFloat())
         val now = SystemClock.elapsedRealtime()
-        for (d in dets) if (d.type == ObjTypes.LIGHT) considerTrafficLightVirtual(v, argb, d, now)
+        // 同一個畫面裡的車（方位、仰角範圍，往上多留半個車高）：紅點落在車上 = 煞車燈，不是紅燈
+        //（實車：高速上前車煞車被當成紅燈；大車、上坡時煞車燈會高過「地平線上方 4°」那條線）
+        vehAngles = dets.filter { ObjTypes.group(it.type) == "veh" }.map { d ->
+            val a = angles(v, d.rect.left, d.rect.top); val b = angles(v, d.rect.right, d.rect.bottom)
+            val elLo = minOf(a[1], b[1]); val elHi = maxOf(a[1], b[1])
+            floatArrayOf(minOf(a[0], b[0]) - 1f, maxOf(a[0], b[0]) + 1f, elLo, elHi + (elHi - elLo) * 0.5f)
+        }
+        for (d in dets) if (d.type == ObjTypes.LIGHT) {
+            val c = angles(v, d.rect.centerX(), d.rect.centerY())
+            if (onVehicle(c)) continue
+            considerTrafficLightVirtual(v, argb, d, now)
+        }
         // 模型這次沒抓到 → 高解析畫面找燈點（遠處燈頭只有幾個像素，模型看不到）
         val cur = tl
         if ((cur == null || now - cur.at > 400) && now - tlBlobAt >= 500) {
@@ -684,6 +695,9 @@ class AdasPipeline(
             val hv = virtualView(g, "tl:hi", TL_HI_SIZE) ?: return
             val hargb = renderVirtual(hv, "tl:hi")
             val l = tlBlobs.update(hargb, hv.size) ?: return
+            if (onVehicle(angles(hv, l.x, l.y))) return
+            // 高速（≥ 80 km/h）只有找燈點看到的紅燈不採用：國道沒有紅綠燈，多半是前車煞車燈
+            if (l.state == "red" && (VehicleBus.signals.snapshot().speedKmh ?: 0f) >= 80f) return
             val ray = hv.rayAt(l.x.toDouble(), l.y.toDouble())
             tl = TlResult(now, l.state, l.conf * 0.8f, Math.toDegrees(atan2(ray[0], ray[2])).toFloat(),
                 RectF(l.x - 4f, l.y - 4f, l.x + 4f, l.y + 4f))
@@ -691,6 +705,13 @@ class AdasPipeline(
     }
 
     private val tlBlobs = TrafficLightBlobs()
+    @Volatile private var vehAngles: List<FloatArray> = emptyList()
+    /** 畫面上一點 → (方位角, 仰角)（度）。 */
+    private fun angles(v: VirtualView, x: Float, y: Float): FloatArray {
+        val r = v.rayAt(x.toDouble(), y.toDouble())
+        return floatArrayOf(Math.toDegrees(atan2(r[0], r[2])).toFloat(), Math.toDegrees(atan2(r[1], hypot(r[0], r[2]))).toFloat())
+    }
+    private fun onVehicle(a: FloatArray): Boolean = vehAngles.any { a[0] in it[0]..it[1] && a[1] in it[2]..it[3] }
     private var tlBlobAt = 0L
 
     private fun considerTrafficLightVirtual(v: VirtualView, argb: IntArray, d: Detection, now: Long) {
@@ -1009,11 +1030,15 @@ class AdasPipeline(
             // 倒車時打方向燈 → 自動選那一側最近的空格
             val tn = vs.turn
             if (vs.gear == 'R' && (tn == 'L' || tn == 'R')) slotSelection.autoPick(slots, tn, now)
-            val sj = slotsJson(slots, false)
-            for (i in slots.indices) {
-                if (slotSelection.isSelected(slots[i])) sj.getJSONObject(i).put("sel", 1)
+            // 有車的格子常被車身擋住湊不出來 → 用認出來的格子當尺，停著的車在同一排、整數格距上就補一格（只顯示）
+            val cars = currentObjects(now).filter { it.t == "car" || it.t == "van" || it.t == "truck" || it.t == "bus" }
+                .map { SlotRowFiller.Car(it.x, it.z) }
+            val shown = slots + (if (cars.isNotEmpty()) SlotRowFiller.fill(slots, cars) else emptyList())
+            val sj = slotsJson(shown, false)
+            for (i in shown.indices) {
+                if (slotSelection.isSelected(shown[i])) sj.getJSONObject(i).put("sel", 1)
                 // 自車停在裡面的那格（有車所以是「佔用」，但要畫出來：目前車格）
-                if (SlotSelection.contains(slots[i], 0f, 0f)) sj.getJSONObject(i).put("own", 1)
+                if (SlotSelection.contains(shown[i], 0f, 0f)) sj.getJSONObject(i).put("own", 1)
             }
             p.put("slots", sj)
             // 停好車：打 P，或已經停在選的那格裡（格子中心離自車中心 0.8 m 內、停住）→ 清掉選擇，路徑跟著消失

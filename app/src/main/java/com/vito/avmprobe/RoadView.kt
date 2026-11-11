@@ -141,6 +141,28 @@ class RoadView(context: Context) : View(context) {
      * 畫車款圖：照「相機在物件的哪個方位」挑 16 格中的一格，照物件的深度縮放。
      * 圖是正交投影算的，中心是模型的中心（離地 cy 公尺），寬高都是 span 公尺。
      */
+    // 最近一次畫的圖：用哪一張方位、畫在哪、多大（車燈要對到圖上的位置）
+    private var lastK = 0; private var lastN = 16; private var lastSpan = 1f; private var lastCy = 0f
+    private var lastSx = 0f; private var lastSy = 0f; private var lastSize = 0f
+
+    /**
+     * 車模型上一點（模型座標：x 往車的左邊、y 往上、z 往車頭，公尺）→ 畫在最近那張車子圖上的位置。
+     * 圖是正交相機、仰角 13° 算的（tools/road_sprites/render.html），照同一個投影算才會剛好落在車燈上
+     * （以前用 3D 透視投影另外算，燈飄在車子旁邊）。回傳 null = 這一面背對鏡頭（看不到）。
+     */
+    private fun onSprite(mx: Float, my: Float, mz: Float, facing: Float): FloatArray? {
+        val a = lastK * 2 * Math.PI / lastN + Math.PI
+        val e = Math.toRadians(13.0)
+        val dx = sin(a) * cos(e); val dz = cos(a) * cos(e)                 // 相機方向（從車往相機）
+        if (facing != 0f && facing * dz < -0.15) return null              // facing: +1 車頭那面、-1 車尾那面
+        if (facing == 0f && (abs(dx) < 0.45 || dx * mx < 0)) return null   // 側燈：要從那一側看過去才看得到
+        val px = mx.toDouble(); val py = (my - lastCy).toDouble(); val pz = mz.toDouble()
+        val u = px * cos(a) - pz * sin(a)                                   // 相機的右方 = (cos a, 0, −sin a)
+        val v = -px * sin(e) * sin(a) + py * cos(e) - pz * sin(e) * cos(a)  // 相機的上方
+        val k = lastSize / lastSpan
+        return floatArrayOf((lastSx + u * k).toFloat(), (lastSy - v * k).toFloat())
+    }
+
     private fun drawSprite(c: Canvas, name: String, x: Float, z: Float, yaw: Float, alpha: Float): Boolean {
         val sp = sprite(name) ?: return false
         val vx = -x; val vz = -camBack - z                       // 物件 → 相機（地面上）
@@ -154,6 +176,7 @@ class RoadView(context: Context) : View(context) {
         if (size < 2f) return true
         srcR.set(k * sp.px, 0, (k + 1) * sp.px, sp.px)
         dstR.set(tmp[0] - size / 2, tmp[1] - size / 2, tmp[0] + size / 2, tmp[1] + size / 2)
+        lastK = k; lastN = sp.n; lastSpan = sp.span; lastCy = sp.cy; lastSx = tmp[0]; lastSy = tmp[1]; lastSize = size
         bmpPaint.alpha = (255 * alpha).toInt().coerceIn(0, 255)
         c.drawBitmap(sp.bmp, srcR, dstR, bmpPaint)
         return true
@@ -483,21 +506,31 @@ class RoadView(context: Context) : View(context) {
             fill.shader = RadialGradient(tmp[0], tmp[1], r, Color.argb(150, 56, 225, 255), Color.TRANSPARENT, Shader.TileMode.CLAMP)
             c.drawCircle(tmp[0], tmp[1], r, fill); fill.shader = null
         }
-        if (!drawSprite(c, "e60", 0f, 0f, 0f, 1f))
+        val haveSprite = drawSprite(c, "e60", 0f, 0f, 0f, 1f) && sprite("e60") != null
+        if (!haveSprite)
             drawBox(c, 0f, 0f, 0f, floatArrayOf(0.93f, 2.42f, 0.95f, 0.5f), Color.rgb(225, 240, 255), 1f, true)
-        // 煞車燈：車尾兩點紅光
-        if (egoBrake) {
-            glow.color = Color.rgb(255, 30, 30); glow.alpha = 255
-            for (sx in listOf(-0.62f, 0.62f)) if (proj(sx, 0.75f, -2.38f)) c.drawCircle(tmp[0], tmp[1], (focal * 0.28f / tmp[2]).coerceAtLeast(4f), glow)
+        // 燈的位置（模型座標，跟中控台 carfx.js 一樣：x 往車的左邊）：照車子圖的投影畫，才會在車燈上
+        fun lamp(mx: Float, my: Float, mz: Float, facing: Float, col: Int, r: Float) {
+            val pt = if (haveSprite) onSprite(mx, my, mz, facing) else if (proj(-mx, my, mz)) floatArrayOf(tmp[0], tmp[1]) else null
+            pt ?: return
+            glow.color = col; glow.alpha = 255
+            c.drawCircle(pt[0], pt[1], (lastSize * r).coerceAtLeast(3f), glow)
         }
-        // 方向燈：自車四角閃
+        // 煞車燈：車尾兩點＋第三煞車燈
+        if (egoBrake) {
+            val red = Color.rgb(255, 30, 30)
+            lamp(0.6f, 0.78f, -2.38f, -1f, red, 0.045f); lamp(-0.6f, 0.78f, -2.38f, -1f, red, 0.045f); lamp(0f, 1.12f, -1.95f, -1f, red, 0.03f)
+        }
+        // 方向燈：前、側（葉子板）、後，打哪邊閃哪邊；雙閃兩邊
         val turn = VehicleBus.signals.snapshot().turn?.toString()
         val on = (now / 400) % 2 == 0L
         if (on && (turn == "L" || turn == "R" || turn == "H")) {
-            glow.color = Color.rgb(255, 176, 32); glow.alpha = 255
-            for (sx in listOf(-0.95f, 0.95f)) {
-                if (turn == "L" && sx > 0) continue; if (turn == "R" && sx < 0) continue
-                for (sz in listOf(-2.4f, 2.4f)) if (proj(sx, 0.7f, sz)) c.drawCircle(tmp[0], tmp[1], (focal * 0.22f / tmp[2]).coerceAtLeast(3f), glow)
+            val amb = Color.rgb(255, 176, 32)
+            for (side in listOf(1f, -1f)) {                                  // +1 = 車的左邊
+                if (turn == "L" && side < 0) continue; if (turn == "R" && side > 0) continue
+                lamp(0.74f * side, 0.82f, -2.3f, -1f, amb, 0.04f)
+                lamp(0.72f * side, 0.62f, 2.25f, 1f, amb, 0.04f)
+                lamp(0.96f * side, 0.78f, 1.55f, 0f, amb, 0.025f)
             }
         }
     }
