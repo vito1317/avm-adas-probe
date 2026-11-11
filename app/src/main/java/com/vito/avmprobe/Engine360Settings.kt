@@ -185,6 +185,11 @@ object Engine360Settings {
         }
         check("停好車（P 檔＋手煞車）問要不要升窗、鎖車", { prefs.cyParkPrompt }) { prefs.cyParkPrompt = it }
 
+        section("溫度（太熱自動降速，避免車機過熱重開機）")
+        val thInfo = TextView(act).apply { setTextColor(0xFFB0B8C4.toInt()); textSize = 13f; text = ThermalGovernor.status() }
+        col.addView(thInfo)
+        thInfo.postDelayed(object : Runnable { override fun run() { ThermalGovernor.poll(); thInfo.text = ThermalGovernor.status(); if (thInfo.isAttachedToWindow) thInfo.postDelayed(this, 2000) } }, 500)
+
         section("第一人稱畫面（前／後鏡頭展開）")
         check("原廠畫面跟著方向盤轉時（動態輔助線），標注也跟著轉", { prefs.fpvFollowWheel }) { prefs.fpvFollowWheel = it; FactoryViews.followWheel = it }
         check("標注轉的方向跟畫面相反時勾這個", { prefs.fpvWheelFlip }) { prefs.fpvWheelFlip = it; FactoryViews.wheelFlip = it }

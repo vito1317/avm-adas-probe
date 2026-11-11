@@ -39,12 +39,14 @@ class Deploy(nn.Module):
 
 def main():
     ap = argparse.ArgumentParser(); ap.add_argument("--ckpt", required=True); ap.add_argument("--out", required=True)
+    ap.add_argument("--size", default="480x272", help="輸入 寬x高（跟訓練一樣，要能被 16 整除）")
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
     net = T.LaneNet(pretrained=False); net.load_state_dict(torch.load(a.ckpt, map_location="cpu")); net.eval()
     m = Deploy(net).eval()
     onnx_path = os.path.join(a.out, "lane.onnx")
-    torch.onnx.export(m, torch.zeros(1, 3, 272, 480), onnx_path, input_names=["image"], output_names=["logits"], opset_version=17, dynamo=False)
+    W, H = (int(v) for v in a.size.split("x"))
+    torch.onnx.export(m, torch.zeros(1, 3, H, W), onnx_path, input_names=["image"], output_names=["logits"], opset_version=17, dynamo=False)
     tf_dir = os.path.join(a.out, "tf")
     shutil.rmtree(tf_dir, ignore_errors=True)
     # onnx2tf 會下載一份測試影像驗證轉換；網路下載常壞掉，先在工作目錄放一份自己的（20x128x128x3）

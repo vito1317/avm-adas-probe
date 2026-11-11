@@ -116,6 +116,7 @@ class AdasPipeline(
     private var laneSegFailed = false
     @Volatile private var segBusy = false
     private var segBev: FloatArray? = null
+    private var segCounter = 0L
     private val segThread by lazy { android.os.Handler(android.os.HandlerThread("lane-seg").apply { start() }.looper) }
     private fun laneSegOrNull(): LaneSeg? {
         if (!prefs.laneModel || laneSegFailed || Crumbs.off("laneseg")) return null
@@ -889,7 +890,7 @@ class AdasPipeline(
         frame.sampleLut(table, bevArgb)
         // 車道線模型：取下一顆鏡頭的畫面（幾毫秒），丟到自己的執行緒跑
         laneSegOrNull()?.let { ls ->
-            if (!segBusy) {
+            if (!segBusy && ThermalGovernor.laneModelAllowed(segCounter++)) {
                 Crumbs.at(Crumbs.FRAME, "laneseg")
                 val q = ls.grab(frame)
                 segBusy = true
@@ -900,7 +901,7 @@ class AdasPipeline(
             }
         }
         // 停車格專用的大範圍俯視圖（左右 9.5 m、前後 9 m，每格 5 cm；像素數跟一般俯視圖差不多）
-        if (!Crumbs.off("slotbev")) try {
+        if (!Crumbs.off("slotbev") && ThermalGovernor.farSlotsAllowed) try {
             Crumbs.at(Crumbs.FRAME, "slotbev")
             val sg = slotGeo ?: AvmGeometry(g.cams, BevSpec(-9.5, 9.5, -9.0, 9.0, 0.05), g.carLength, g.carWidth).also {
                 slotGeo = it; slotTrack.viewX = 9.5f; slotTrack.viewZ = 9f
@@ -949,7 +950,7 @@ class AdasPipeline(
                 }
                 if (mode == AppPrefs.GROUND_VIRTUAL) {
                     // 有車道線模型、四顆鏡頭都有新結果 → 用模型決定哪裡是漆；否則照舊用亮度規則
-                    val paint = laneSeg?.takeIf { prefs.laneModel && it.ready(now) }?.let { ls ->
+                    val paint = laneSeg?.takeIf { prefs.laneModel && ThermalGovernor.level < 2 && it.ready(now) }?.let { ls ->
                         val a = segBev?.takeIf { it.size == bw * bh } ?: FloatArray(bw * bh).also { segBev = it }
                         ls.bevProb(table, frame.width, a, now); a
                     }

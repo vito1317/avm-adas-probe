@@ -20,6 +20,7 @@ TOL = 3
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--data", required=True); ap.add_argument("--ckpt", required=True); ap.add_argument("--out", required=True)
+    ap.add_argument("--size", default=None, help="模型的輸入尺寸 寬x高（跟訓練一樣）")
     ap.add_argument("--thr", type=float, default=0.5); ap.add_argument("--show", type=int, default=8)
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
@@ -27,21 +28,24 @@ def main():
     net = T.LaneNet(pretrained=False); net.load_state_dict(torch.load(a.ckpt, map_location="cpu")); net.to(dev).eval()
     items = json.load(open(os.path.join(a.data, "index.json")))
     _, va = T.split(items)
-    ds = T.DS(a.data, va, False)
+    sz = tuple(int(v) for v in a.size.split("x")) if a.size else None
+    ds = T.DS(a.data, va, False, sz)
+    full = T.DS(a.data, va, False, None)      # 評分一律在原尺寸（480x272）比，縮小版放大回去，容許偏差才一樣
     st = np.zeros(4)          # tp_p, n_p, tp_r, n_r
     shown = 0
     rng = np.random.RandomState(0); show_idx = set(rng.choice(len(va), min(a.show, len(va)), replace=False).tolist())
     for i in range(len(va)):
-        x, m = ds[i]
+        x, _ = ds[i]; _, m = full[i]
         with torch.no_grad():
-            pr = torch.softmax(net(x.unsqueeze(0).to(dev)), 1)[0, 1].cpu().numpy()
+            pr = torch.softmax(net(x.unsqueeze(0).to(dev)), 1)[:, 1:2]
+            pr = torch.nn.functional.interpolate(pr, size=tuple(m.shape), mode="bilinear", align_corners=False)[0, 0].cpu().numpy()
         m = m.numpy(); pred = pr >= a.thr
         gt = m == 1; valid = m != 255
         near_gt = ndimage.binary_dilation(gt, iterations=TOL); near_pr = ndimage.binary_dilation(pred, iterations=TOL)
         pv = pred & valid
         st += [(pv & near_gt).sum(), pv.sum(), (gt & near_pr).sum(), gt.sum()]
         if i in show_idx:
-            img = np.asarray(Image.open(os.path.join(a.data, "img", va[i]["name"] + ".jpg")).convert("RGB")).copy()
+            img = np.asarray(Image.open(os.path.join(a.data, "img", va[i]["name"] + ".jpg")).convert("RGB").resize((m.shape[1], m.shape[0]))).copy()
             img[gt] = [255, 40, 40]; img[pred] = [40, 255, 40]; img[pred & gt] = [255, 255, 0]
             img[~valid] = (img[~valid] * 0.45).astype(np.uint8)
             Image.fromarray(img).save(os.path.join(a.out, va[i]["name"] + ".jpg")); shown += 1

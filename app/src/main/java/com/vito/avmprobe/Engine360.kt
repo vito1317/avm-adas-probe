@@ -43,6 +43,7 @@ object Engine360 {
     internal val main = Handler(Looper.getMainLooper())
     @Volatile private var view: WeakReference<AnnotationView>? = null
     @Volatile private var pipeline: AdasPipeline? = null
+    private var lastProcAt = 0L
     /** 設定頁顯示：車道線模型每顆鏡頭花幾毫秒（沒跑 = -1）。 */
     fun pipelineLaneSegMs(): Long = pipeline?.laneSegMs ?: -1L
     /** 中控台點了停車格（格子中心，車身座標）。 */
@@ -616,6 +617,12 @@ object Engine360 {
         if (!prefs.annotEnabled || (!visible && !recording && !bgForLauncher)) return
         // 上一幀還在算 → 這幀丟掉（Image 由呼叫端馬上還給相機）
         if (frameBusy) return
+        // 依 CPU 溫度降速：太熱就拉長兩幀的間隔（實車：過熱 thermal_reboot 一直重開機）
+        ThermalGovernor.poll()
+        val gap = ThermalGovernor.minIntervalMs
+        val tNow = SystemClock.elapsedRealtime()
+        if (gap > 0 && tNow - lastProcAt < gap) return
+        lastProcAt = tNow
         val p = pipeline
         if (p == null) {
             // 建管線（載設定、對位、開執行緒）也放到偵測執行緒，不卡相機

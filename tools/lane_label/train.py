@@ -38,15 +38,27 @@ class LaneNet(nn.Module):
 
 
 class DS(torch.utils.data.Dataset):
-    def __init__(self, root, items, aug):
-        self.root, self.items, self.aug = root, items, aug
+    def __init__(self, root, items, aug, size=None):
+        self.root, self.items, self.aug, self.size = root, items, aug, size   # size = (寬, 高)；None = 原本 480x272
 
     def __len__(self): return len(self.items)
 
     def __getitem__(self, i):
         it = self.items[i]
-        img = np.asarray(Image.open(os.path.join(self.root, "img", it["name"] + ".jpg")).convert("RGB"), np.float32) / 255.0
-        m = np.asarray(Image.open(os.path.join(self.root, "mask", it["name"] + ".png")), np.int64)
+        root = it.get("root", self.root)
+        im = Image.open(os.path.join(root, "img", it["name"] + ".jpg")).convert("RGB")
+        mk = Image.open(os.path.join(root, "mask", it["name"] + ".png"))
+        if self.size:
+            # 縮小：影像雙線性；遮罩先把「線」加粗一點再最近鄰縮，細線才不會縮到消失
+            im = im.resize(self.size, Image.BILINEAR)
+            ma = np.asarray(mk)
+            line = Image.fromarray(((ma == 1) * 255).astype(np.uint8)).resize(self.size, Image.BILINEAR)
+            ign = Image.fromarray(((ma == 255) * 255).astype(np.uint8)).resize(self.size, Image.NEAREST)
+            m2 = np.zeros((self.size[1], self.size[0]), np.uint8)
+            m2[np.asarray(ign) > 127] = 255; m2[np.asarray(line) > 60] = 1
+            mk = Image.fromarray(m2)
+        img = np.asarray(im, np.float32) / 255.0
+        m = np.asarray(mk, np.int64)
         if self.aug:
             # 亮度／對比／色偏（夜間、路燈），小量雜訊；不做翻轉（左右鏡頭幾何不對稱，翻了線的位置就不對）
             img = img * random.uniform(0.6, 1.4) + random.uniform(-0.1, 0.1)
@@ -81,6 +93,9 @@ def metrics(logits, m):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--data", required=True); ap.add_argument("--out", required=True)
+    ap.add_argument("--extra", default=None, help="額外的訓練資料夾（全部拿來訓練、不進驗證），例：細化後的 WoodScape")
+    ap.add_argument("--repeat", type=int, default=1, help="自己的訓練資料重複幾次（跟大量的 --extra 混時平衡用）")
+    ap.add_argument("--size", default=None, help="訓練尺寸 寬x高（例 224x128；要能被 16 整除）")
     ap.add_argument("--init", default=None, help="從這個權重接著訓練（例：WoodScape 預訓練的 best.pt）")
     ap.add_argument("--epochs", type=int, default=40); ap.add_argument("--bs", type=int, default=16); ap.add_argument("--lr", type=float, default=2e-3)
     a = ap.parse_args()
@@ -88,9 +103,15 @@ def main():
     dev = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
     items = json.load(open(os.path.join(a.data, "index.json")))
     tr, va = split(items)
+    tr = tr * a.repeat
+    if a.extra:
+        ex = json.load(open(os.path.join(a.extra, "index.json")))
+        for it in ex: it["root"] = a.extra
+        tr = tr + ex
     print(f"訓練 {len(tr)}、驗證 {len(va)} 張（裝置 {dev}）")
-    dl = torch.utils.data.DataLoader(DS(a.data, tr, True), batch_size=a.bs, shuffle=True, num_workers=2, drop_last=True)
-    dv = torch.utils.data.DataLoader(DS(a.data, va, False), batch_size=a.bs, num_workers=2)
+    sz = tuple(int(v) for v in a.size.split("x")) if a.size else None
+    dl = torch.utils.data.DataLoader(DS(a.data, tr, True, sz), batch_size=a.bs, shuffle=True, num_workers=6, drop_last=True)
+    dv = torch.utils.data.DataLoader(DS(a.data, va, False, sz), batch_size=a.bs, num_workers=6)
     net = LaneNet()
     if a.init:
         net.load_state_dict(torch.load(a.init, map_location="cpu")); print("從", a.init, "接著訓練")
