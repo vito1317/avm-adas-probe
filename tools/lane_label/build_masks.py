@@ -24,11 +24,15 @@ import avm_geometry as ag   # noqa: E402
 OW, OH = 480, 272            # 每顆鏡頭輸出大小（960x540 縮一半，下面補 2 列）
 FAR_M = 3.0                  # 離鏡頭多遠以內的地面才當成「有標」（規則在 3 m 內最可靠；更遠有線也可能沒被標）
 LINE_W = 4                   # 線寬（輸出像素）
-CLS = {"w": 1, "y": 2}
+# 第一版不分顏色：夜間尾燈／路燈把白線照成黃橘色，審查者也分不準（同一段路兩批標成不同顏色）。
+# 模型只學「哪裡有線」（1），顏色交給後面的程式在線上取色判斷。要分顏色時改回 {"w": 1, "y": 2}。
+CLS = {"w": 1, "y": 1}
 
 
 def known_region(geo):
-    """每顆鏡頭（quad）在輸出解析度下，哪些像素的地面點在 FAR_M 以內（有標註的範圍）。"""
+    """每顆鏡頭（quad）在輸出解析度下：哪些像素是「遠處的地面」（不知道有沒有線 → 不計分）。
+    其他地方都當確定沒有線：近處地面（審查過）、天空／建築（射線打不到地面）、魚眼外圈黑邊、車身。
+    第一版把天空也設成不計分，結果模型在天空、建築上一律畫線（實測一大片綠）。"""
     out = {}
     qw, qh = 960, 540
     us = (np.arange(OW) + 0.5) * (qw / OW)
@@ -38,7 +42,20 @@ def known_region(geo):
         gx, gz, ok, _ = ag.pixel_to_ground(cam, U.ravel(), V.ravel(), qw, qh)
         gx = gx.reshape(OH, OW); gz = gz.reshape(OH, OW); ok = ok.reshape(OH, OW) & (V < qh)
         d = np.hypot(gx - cam.px, gz - cam.pz)
-        out[cam.quad] = ok & (d <= FAR_M)
+        out[cam.quad] = ok & (d > FAR_M)          # True = 遠處地面（不計分）
+    return out
+
+
+def ground_region(geo):
+    """每顆鏡頭：哪些像素的射線打到地面（不管遠近，車身範圍除外）。"""
+    out = {}
+    us = (np.arange(OW) + 0.5) * 2.0; vs = (np.arange(OH) + 0.5) * 2.0
+    U, V = np.meshgrid(us, vs)
+    for cam in geo.cams:
+        gx, gz, ok, _ = ag.pixel_to_ground(cam, U.ravel(), V.ravel(), 960, 540)
+        gx = gx.reshape(OH, OW); gz = gz.reshape(OH, OW)
+        body = (np.abs(gx) <= geo.car_width / 2) & (np.abs(gz) <= geo.car_length / 2)
+        out[cam.quad] = ok.reshape(OH, OW) & (V < 540) & ~body
     return out
 
 
@@ -55,7 +72,7 @@ def main():
             if line:
                 try: labels.append(json.loads(line))
                 except Exception: pass
-    geo_cache, known_cache = {}, {}
+    geo_cache, known_cache, ground_cache = {}, {}, {}
     index = []
     for L in labels:
         base = L["img"][:-4]
@@ -65,6 +82,7 @@ def main():
         if sess not in geo_cache:
             geo_cache[sess] = ag.Geometry(json.load(open(os.path.join(sd, "session.json")))["calib"])
             known_cache[sess] = known_region(geo_cache[sess])
+            ground_cache[sess] = ground_region(geo_cache[sess])
         geo, known = geo_cache[sess], known_cache[sess]
         frame = Image.open(os.path.join(sd, "f_%05d.jpg" % fr)).convert("RGB")
         byid = {str(c["id"]): c for c in cand["cands"]}
@@ -74,9 +92,12 @@ def main():
             ox, oy = (q % 2) * 960, (q // 2) * 540
             img = frame.crop((ox, oy, ox + 960, oy + 540)).resize((OW, 270), Image.BILINEAR)
             canvas = Image.new("RGB", (OW, OH)); canvas.paste(img, (0, 0))
-            m = np.where(known[q], 0, 255).astype(np.uint8)
+            far = known[q]
+            m = np.where(far, 255, 0).astype(np.uint8)
             if partial:
-                m[:] = 255
+                # 有漏標：整片地面都不計分（不能把漏標的線當成沒有線）；天空、車身、黑邊仍是確定沒有線
+                gnd = ground_cache[sess][q]
+                m[gnd] = 255
             mi = Image.fromarray(m); d = ImageDraw.Draw(mi)
             for cid, kind in L.get("keep", {}).items():
                 c = byid.get(str(cid))

@@ -35,3 +35,7 @@ tools/__pycache__/
 *.pyc
 .venv/
 yolovenv/
+app/src/test/java/com/vito/avmprobe/LocalSlotProbeTest.kt
+
+# 車道線模型（實車資料訓練；用 WoodScape 預訓練的不得散布）只放私有 release
+app/src/main/assets/lane_seg.tflite

@@ -292,6 +292,10 @@ class AppPrefs(context: Context) {
         get() = sp.getString("ambientName", "") ?: ""
         set(v) = sp.edit().putString("ambientName", v).apply()
     /** 中控台開著時 360 在背景也跑偵測（中控台的 3D 道路畫面才有資料）。實驗：實車會讓 360 閃退，預設關。 */
+    /** 用自己訓練的車道線模型找線（有模型檔才有效）；關掉 = 原本的亮度規則。 */
+    var laneModel: Boolean
+        get() = sp.getBoolean("laneModel", true)
+        set(v) = sp.edit().putBoolean("laneModel", v).apply()
     var trainCollect: Boolean
         get() = sp.getBoolean("trainCollect", false)
         set(v) = sp.edit().putBoolean("trainCollect", v).apply()

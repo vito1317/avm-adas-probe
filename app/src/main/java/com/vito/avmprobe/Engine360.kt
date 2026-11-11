@@ -43,6 +43,8 @@ object Engine360 {
     internal val main = Handler(Looper.getMainLooper())
     @Volatile private var view: WeakReference<AnnotationView>? = null
     @Volatile private var pipeline: AdasPipeline? = null
+    /** 設定頁顯示：車道線模型每顆鏡頭花幾毫秒（沒跑 = -1）。 */
+    fun pipelineLaneSegMs(): Long = pipeline?.laneSegMs ?: -1L
     private var signalsAttached = false
     private var ticking = false
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 魚眼道路線分割模型（第一版）：MobileNetV3-Small 編碼器（ImageNet 預訓練）＋ 簡單 U-Net 解碼器。
-輸入一顆鏡頭 480x272 RGB，輸出 3 類（背景／白線／黃線）同尺寸機率圖。遮罩 255 = 不計分。
+輸入一顆鏡頭 480x272 RGB，輸出 2 類（背景／車道線，第一版不分顏色）同尺寸機率圖。遮罩 255 = 不計分。
 
 切分：同一段路不能同時出現在訓練和驗證（以影格號每 150 張一段分組，整段分到同一邊）。
 用法：
@@ -19,7 +19,7 @@ STD = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1)
 
 
 class LaneNet(nn.Module):
-    def __init__(self, n_cls=3, pretrained=True):
+    def __init__(self, n_cls=2, pretrained=True):
         super().__init__()
         f = mobilenet_v3_small(weights=MobileNet_V3_Small_Weights.DEFAULT if pretrained else None).features
         # 取 1/2、1/4、1/8、1/16 四層輸出當 skip
@@ -72,7 +72,7 @@ def metrics(logits, m):
     p = logits.argmax(1)
     valid = m != 255
     out = {}
-    for c, n in [(1, "white"), (2, "yellow")]:
+    for c, n in [(1, "line")]:
         tp = ((p == c) & (m == c) & valid).sum().item(); fp = ((p == c) & (m != c) & valid).sum().item(); fn = ((p != c) & (m == c)).sum().item()
         out[n] = (tp, fp, fn)
     return out
@@ -81,6 +81,7 @@ def metrics(logits, m):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--data", required=True); ap.add_argument("--out", required=True)
+    ap.add_argument("--init", default=None, help="從這個權重接著訓練（例：WoodScape 預訓練的 best.pt）")
     ap.add_argument("--epochs", type=int, default=40); ap.add_argument("--bs", type=int, default=16); ap.add_argument("--lr", type=float, default=2e-3)
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
@@ -90,10 +91,13 @@ def main():
     print(f"訓練 {len(tr)}、驗證 {len(va)} 張（裝置 {dev}）")
     dl = torch.utils.data.DataLoader(DS(a.data, tr, True), batch_size=a.bs, shuffle=True, num_workers=2, drop_last=True)
     dv = torch.utils.data.DataLoader(DS(a.data, va, False), batch_size=a.bs, num_workers=2)
-    net = LaneNet().to(dev)
+    net = LaneNet()
+    if a.init:
+        net.load_state_dict(torch.load(a.init, map_location="cpu")); print("從", a.init, "接著訓練")
+    net = net.to(dev)
     opt = torch.optim.AdamW(net.parameters(), lr=a.lr, weight_decay=1e-4)
     sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=a.lr, total_steps=a.epochs * max(1, len(dl)))
-    wts = torch.tensor([1.0, 8.0, 8.0], device=dev)       # 線很細、很少：加權
+    wts = torch.tensor([1.0, 8.0], device=dev)       # 線很細、很少：加權
     best, log = -1.0, []
     for ep in range(a.epochs):
         net.train(); t0 = time.time(); tl = 0.0
@@ -102,7 +106,7 @@ def main():
             lo = net(x)
             loss = F.cross_entropy(lo, m, weight=wts, ignore_index=255)
             opt.zero_grad(); loss.backward(); opt.step(); sched.step(); tl += loss.item()
-        net.eval(); agg = {"white": [0, 0, 0], "yellow": [0, 0, 0]}
+        net.eval(); agg = {"line": [0, 0, 0]}
         with torch.no_grad():
             for x, m in dv:
                 r = metrics(net(x.to(dev)).cpu(), m)
@@ -110,10 +114,10 @@ def main():
         f1 = {}
         for k, (tp, fp, fn) in agg.items():
             pr = tp / max(1, tp + fp); rc = tp / max(1, tp + fn); f1[k] = (2 * pr * rc / max(1e-9, pr + rc), pr, rc)
-        score = f1["white"][0] * 0.7 + f1["yellow"][0] * 0.3
+        score = f1["line"][0]
         log.append(dict(epoch=ep + 1, loss=tl / max(1, len(dl)), f1=f1))
-        print(f"ep {ep + 1:3d} loss {tl / max(1, len(dl)):.3f}  白 F1 {f1['white'][0]:.3f}（P {f1['white'][1]:.2f} R {f1['white'][2]:.2f}）"
-              f"  黃 F1 {f1['yellow'][0]:.3f}  {time.time() - t0:.0f}s", flush=True)
+        print(f"ep {ep + 1:3d} loss {tl / max(1, len(dl)):.3f}  線 F1 {f1['line'][0]:.3f}（精確 {f1['line'][1]:.2f}、召回 {f1['line'][2]:.2f}）"
+              f"  {time.time() - t0:.0f}s", flush=True)
         if score > best:
             best = score; torch.save(net.state_dict(), os.path.join(a.out, "best.pt"))
     json.dump(log, open(os.path.join(a.out, "log.json"), "w"), ensure_ascii=False, indent=1)

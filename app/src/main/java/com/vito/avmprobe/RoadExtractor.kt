@@ -49,6 +49,8 @@ data class RoadResult(val lines: List<RoadLine>, val edgeL: Float?, val edgeR: F
 class RoadExtractor {
 
     companion object {
+        /** 車道線模型的機率超過這個才算漆。 */
+        const val PAINT_PROB = 0.5f
         const val EGO_HX = 0.925
         const val EGO_HZ = 2.42
         private const val EGO_MARGIN = 0.15        // 自車外擴一圈不找標線（螢幕模式的車子圖示、後照鏡）
@@ -258,7 +260,9 @@ class RoadExtractor {
      */
     fun extract(
         argb: IntArray, w: Int, h: Int, mpp: Float, cx: Float, cy: Float,
-        exclude: List<FloatArray>, ipmValid: BooleanArray? = null
+        exclude: List<FloatArray>, ipmValid: BooleanArray? = null,
+        /** 車道線模型拼出來的俯視圖機率（[LaneSeg.bevProb]）；給了就用它決定哪些像素是漆，取代亮度規則。 */
+        paint: FloatArray? = null
     ): RoadResult {
         val t0 = System.nanoTime()
         ensure(w, h)
@@ -311,6 +315,14 @@ class RoadExtractor {
             val r = (c shr 16) and 255
             val g = (c shr 8) and 255
             val b = c and 255
+            if (paint != null) {
+                // 模型說是線 → 白或黃看顏色（黃：明顯偏黃）；模型說不是 → 不是候選
+                if (paint[p] >= PAINT_PROB) {
+                    cls[p] = if (r >= 90 && g >= 70 && r - b >= 45 && g - b >= 30 && abs(r - g) <= 80) 2 else 1
+                    nCand++
+                }
+                continue
+            }
             val mx = max(r, max(g, b))
             val mn = min(r, min(g, b))
             val y = lum[p]

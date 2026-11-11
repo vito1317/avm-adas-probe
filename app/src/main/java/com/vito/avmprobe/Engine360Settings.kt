@@ -185,6 +185,13 @@ object Engine360Settings {
         }
         check("停好車（P 檔＋手煞車）問要不要升窗、鎖車", { prefs.cyParkPrompt }) { prefs.cyParkPrompt = it }
 
+        section("車道線模型（實驗）")
+        val segInfo = TextView(act).apply { setTextColor(0xFFB0B8C4.toInt()); textSize = 13f }
+        fun segText() = if (!LaneSeg.available(act)) "這版沒有附模型檔" else Engine360.pipelineLaneSegMs().let { ms -> if (ms >= 0) "每顆鏡頭約 $ms ms" else "還沒跑（要在 360 畫面、地面模式為虛擬道路）" }
+        check("用自己訓練的模型找車道線（關掉＝原本的亮度規則）", { prefs.laneModel }) { prefs.laneModel = it }
+        segInfo.text = segText(); col.addView(segInfo)
+        segInfo.postDelayed(object : Runnable { override fun run() { segInfo.text = segText(); if (segInfo.isAttachedToWindow) segInfo.postDelayed(this, 1000) } }, 1000)
+
         section("收集訓練資料（魚眼道路線模型）")
         val trainInfo = TextView(act).apply { setTextColor(0xFFB0B8C4.toInt()); textSize = 13f; text = TrainCollector.status }
         check("開車時每秒存一張原始影格＋車況到「下載/avm-adas/train_…」（停著每 10 秒一張；360 畫面要開著才收得到；每張約 0.4 MB，一小時約 1.4 GB）",

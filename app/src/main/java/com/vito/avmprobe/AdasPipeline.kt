@@ -111,6 +111,22 @@ class AdasPipeline(
     private var bevArgb = IntArray(0)
     private val roadEx = RoadExtractor()
     private val cwDet = CrosswalkDetector()
+    // 車道線模型（自己訓練的魚眼分割模型）：四顆鏡頭輪流在自己的執行緒跑，結果拼成俯視圖給 RoadExtractor
+    private var laneSeg: LaneSeg? = null
+    private var laneSegFailed = false
+    @Volatile private var segBusy = false
+    private var segBev: FloatArray? = null
+    private val segThread by lazy { android.os.Handler(android.os.HandlerThread("lane-seg").apply { start() }.looper) }
+    private fun laneSegOrNull(): LaneSeg? {
+        if (!prefs.laneModel || laneSegFailed || Crumbs.off("laneseg")) return null
+        laneSeg?.let { return it }
+        return try {
+            if (!LaneSeg.available(ctx)) { laneSegFailed = true; null }
+            else LaneSeg(ctx).also { laneSeg = it; Engine360.log("車道線模型已載入") }
+        } catch (t: Throwable) { laneSegFailed = true; Engine360.log("車道線模型載入失敗：${t.message}"); null }
+    }
+    /** 最近一次模型跑一顆鏡頭花幾毫秒（設定頁顯示）。 */
+    val laneSegMs: Long get() = laneSeg?.lastMs ?: -1L
     @Volatile private var cws: List<CrosswalkDetector.Crosswalk> = emptyList()
     @Volatile private var cwAt = 0L
     private val roadTrack = RoadTracker()
@@ -837,6 +853,18 @@ class AdasPipeline(
             }
         }
         frame.sampleLut(table, bevArgb)
+        // 車道線模型：取下一顆鏡頭的畫面（幾毫秒），丟到自己的執行緒跑
+        laneSegOrNull()?.let { ls ->
+            if (!segBusy) {
+                Crumbs.at(Crumbs.FRAME, "laneseg")
+                val q = ls.grab(frame)
+                segBusy = true
+                segThread.post {
+                    try { Crumbs.step(Crumbs.OTHER, "laneseg") { ls.infer(q) } }
+                    catch (t: Throwable) { Log.w(TAG, "車道線模型失敗", t) } finally { segBusy = false }
+                }
+            }
+        }
         // 停車格專用的大範圍俯視圖（左右 9.5 m、前後 9 m，每格 5 cm；像素數跟一般俯視圖差不多）
         if (!Crumbs.off("slotbev")) try {
             Crumbs.at(Crumbs.FRAME, "slotbev")
@@ -883,7 +911,12 @@ class AdasPipeline(
                     cws = cwDet.detect(buf, bw, bh, mpp, cx, cy, g.ipmValidMask(), excl); cwAt = now
                 }
                 if (mode == AppPrefs.GROUND_VIRTUAL) {
-                    road = roadTrack.update(steepFilter(roadEx.extract(buf, bw, bh, mpp, cx, cy, excl, g.roadValidMask()), VehicleBus.signals.snapshot().speedKmh), now); roadAt = now
+                    // 有車道線模型、四顆鏡頭都有新結果 → 用模型決定哪裡是漆；否則照舊用亮度規則
+                    val paint = laneSeg?.takeIf { prefs.laneModel && it.ready(now) }?.let { ls ->
+                        val a = segBev?.takeIf { it.size == bw * bh } ?: FloatArray(bw * bh).also { segBev = it }
+                        ls.bevProb(table, frame.width, a, now); a
+                    }
+                    road = roadTrack.update(steepFilter(roadEx.extract(buf, bw, bh, mpp, cx, cy, excl, g.roadValidMask(), paint), VehicleBus.signals.snapshot().speedKmh), now); roadAt = now
                 }
                 if (mode == AppPrefs.GROUND_REAL) {
                     var bmp = bevBmp
