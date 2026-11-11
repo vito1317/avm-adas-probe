@@ -90,7 +90,7 @@ class RoadView(context: Context) : View(context) {
     fun update(p: JSONObject) { payload = p; payloadAt = SystemClock.elapsedRealtime() }
 
     /** 物件平滑：同一個 track id 的位置／方向用指數平滑，看起來是在滑動而不是跳。 */
-    private class Smooth(var x: Float, var z: Float, var yaw: Float, var t: String, var seen: Long, var alpha: Float = 0f, var id: Int = 0)
+    private class Smooth(var x: Float, var z: Float, var yaw: Float, var t: String, var seen: Long, var alpha: Float = 0f, var id: Int = 0, var blink: Boolean = false)
     private val tracks = HashMap<String, Smooth>()
 
     // ───── 畫筆 ─────
@@ -413,8 +413,8 @@ class RoadView(context: Context) : View(context) {
             val x = o.optDouble("x").toFloat(); val z = o.optDouble("z").toFloat()
             val yaw = if (o.has("yaw")) o.optDouble("yaw").toFloat() else 0f
             val s = tracks[key]
-            if (s == null) tracks[key] = Smooth(x, z, yaw, t, now, id = o.optInt("id", i))
-            else { s.x += (x - s.x) * 0.35f; s.z += (z - s.z) * 0.35f; s.yaw += (yaw - s.yaw) * 0.3f; s.t = t; s.seen = now }
+            if (s == null) tracks[key] = Smooth(x, z, yaw, t, now, id = o.optInt("id", i)).also { it.blink = o.optInt("blink") == 1 }
+            else { s.x += (x - s.x) * 0.35f; s.z += (z - s.z) * 0.35f; s.yaw += (yaw - s.yaw) * 0.3f; s.t = t; s.seen = now; s.blink = o.optInt("blink") == 1 }
         }
         // 淡入淡出，消失 0.6 秒後移除
         val it = tracks.entries.iterator()
@@ -439,6 +439,11 @@ class RoadView(context: Context) : View(context) {
             }
             if (!drawSprite(c, modelFor(s.t, s.id), s.x, s.z, s.yaw, s.alpha))
                 drawBox(c, s.x, s.z, s.yaw, dims(s.t), if (danger) Color.rgb(255, 61, 90) else colorOf(s.t), s.alpha, false)
+            // 這台在打方向燈：車上閃琥珀色光
+            if (s.blink && (now / 400) % 2 == 0L && proj(s.x, 0.8f, s.z)) {
+                glow.color = Color.rgb(255, 176, 32); glow.alpha = (255 * s.alpha).toInt()
+                c.drawCircle(tmp[0], tmp[1], (focal * 0.5f / tmp[2]).coerceAtLeast(5f), glow)
+            }
         }
     }
 

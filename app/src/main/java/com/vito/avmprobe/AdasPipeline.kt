@@ -372,6 +372,15 @@ class AdasPipeline(
             if (v > qh * 0.97f && d.rect.width() > side * 0.85f) continue
             val w = toWorld(g, camP, u.toDouble(), v.toDouble(), qw, qh, d.type) ?: continue
             objs.add(WObj(d.type, w[0], w[1], d.score, w[2]))
+            // 周圍車輛的方向燈：數車框裡亮琥珀色的像素（縮成最多 64x48 取樣）
+            if (ObjTypes.group(d.type) == "veh" && !Crumbs.off("sideblink")) {
+                val bw = d.rect.width().toInt().coerceIn(8, 64); val bh = d.rect.height().toInt().coerceIn(6, 48)
+                if (blinkBuf.size < bw * bh) blinkBuf = IntArray(64 * 48)
+                frame.cropArgb(d.rect.left.toInt(), d.rect.top.toInt(), d.rect.right.toInt(), d.rect.bottom.toInt(), bw, bh, blinkBuf)
+                var amber = 0
+                for (k in 0 until bw * bh) if (SideBlinkWatcher.isAmber(blinkBuf[k])) amber++
+                sideBlink.observe(now, w[0], w[1], amber, bw * bh)
+            }
             if (w[3] > 0f) tDets.add(Det(d.type, w[0], w[1], d.score, cam = name, atMs = atMs))
             boxes.add(QuadOverlayView.Box(RectF(d.rect), "${NAMES[d.type] ?: d.label} ${"%.1f".format(w[2])}m", w[2] < 1.2f))
         }
@@ -993,6 +1002,13 @@ class AdasPipeline(
             objs.put(j)
         }
         stabilizer.prune(now)
+        // 周圍車輛打方向燈：標在物件上（道路畫面閃琥珀色）
+        val blinks = if (Crumbs.off("sideblink")) emptyList() else sideBlink.blinking(now)
+        if (blinks.isNotEmpty()) for (i in 0 until objs.length()) {
+            val j = objs.getJSONObject(i)
+            val x = j.optDouble("x").toFloat(); val z = j.optDouble("z").toFloat()
+            if (blinks.any { hypot(it[0] - x, it[1] - z) < SideBlinkWatcher.MATCH_M }) j.put("blink", 1)
+        }
         if (now - conesAt < BEV_TTL_MS) for (c in cones) {
             if (coneOut.any { hypot(it.x - c.x, it.z - c.z) < 1f }) continue
             objs.put(JSONObject().put("t", "cone").put("x", r2(c.x)).put("z", r2(c.z)).put("c", r2(c.conf)))
@@ -1070,6 +1086,15 @@ class AdasPipeline(
                 (if (now - obstaclesAt < OBS_TTL_MS) obstacles.map { ParkingAids.Thing(it.x, it.z, it.w / 2f) } else emptyList())
             parkAids.narrowGap(things, vs.speedKmh, vs.gear)?.let { msgs.add(DriverAids.Msg(it.key, it.text, it.level)) }
             if (parkAids.shouldSnapshot(now, vs.speedKmh, vs.gear) && !Crumbs.off("parkshot")) { Crumbs.at(Crumbs.FRAME, "parkshot"); saveParkedSnapshot() }
+            // 周圍車輛打方向燈（開車時）：最近那台，旁邊車道近距離的用黃色
+            if ((vs.speedKmh ?: 0f) >= 15f) sideBlink.blinking(now).minByOrNull { hypot(it[0], it[1]) }?.let { b ->
+                val (x, z) = b[0] to b[1]
+                if (kotlin.math.abs(x) < 8f && kotlin.math.abs(z) < 15f) {
+                    val where = (if (x < 0) "左" else "右") + when { z > 2.5f -> "前方"; z < -2.5f -> "後方"; else -> "側" }
+                    val near = kotlin.math.abs(x) < 4.5f && kotlin.math.abs(z) < 8f
+                    msgs.add(DriverAids.Msg("sideblink", "${where}車輛打方向燈", if (near) 1 else 0))
+                }
+            }
             // 斑馬線：前方 6 m 內（含正壓在上面）→ 提示；上面有行人 → 警示
             if ((vs.speedKmh ?: 0f) >= 3f && gearCur != 'R' && gearCur != 'P') {
                 val front = 2.57f
@@ -1372,7 +1397,12 @@ class AdasPipeline(
             egoYaw += dyaw
         }
         stabilizer.egoMotion(v * dt, dyaw)
+        sideBlink.egoMotion(v * dt, dyaw)
     }
+
+    /** 周圍車輛打方向燈（側邊、後方鏡頭）。 */
+    private val sideBlink = SideBlinkWatcher()
+    private var blinkBuf = IntArray(64 * 48)
 
     /** 停著的車在畫面上釘住不飄（只影響畫的位置；警示照用即時偵測）。 */
     private val stabilizer = StaticStabilizer()
