@@ -45,6 +45,8 @@ object Engine360 {
     @Volatile private var pipeline: AdasPipeline? = null
     /** 設定頁顯示：車道線模型每顆鏡頭花幾毫秒（沒跑 = -1）。 */
     fun pipelineLaneSegMs(): Long = pipeline?.laneSegMs ?: -1L
+    /** 中控台點了停車格（格子中心，車身座標）。 */
+    fun tapSlot(x: Float, z: Float): Boolean = pipeline?.tapSlot(x, z) ?: false
     private var signalsAttached = false
     private var ticking = false
 
@@ -553,7 +555,7 @@ object Engine360 {
         }
         buttonRef = WeakReference(btn)
         // Tesla 式道路畫面（原生繪圖，蓋在鏡頭畫面上；按「道路」切換）
-        val road = RoadView(act).apply { visibility = View.GONE; isClickable = true }
+        val road = RoadView(act).apply { visibility = View.GONE; isClickable = true; onTapSlot = { x, z -> pipeline?.tapSlot(x, z) ?: false } }
         decor.addView(road, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         roadRef = WeakReference(road)
         decor.addView(btn, FrameLayout.LayoutParams(

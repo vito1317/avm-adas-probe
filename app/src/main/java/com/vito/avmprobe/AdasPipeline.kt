@@ -1003,6 +1003,10 @@ class AdasPipeline(
                 if (SlotSelection.contains(slots[i], 0f, 0f)) sj.getJSONObject(i).put("own", 1)
             }
             p.put("slots", sj)
+            // 停好車：打 P，或已經停在選的那格裡（格子中心離自車中心 0.8 m 內、停住）→ 清掉選擇，路徑跟著消失
+            slotSelection.center?.let { c ->
+                if (gearCur == 'P' || (hypot(c[0], c[1]) < 0.8f && (vs.speedKmh ?: 0f) < 1f)) slotSelection.clear()
+            }
             if (spd(vs)) parkPathJson(slots)?.let { p.put("park", it) }
         }
         roadsideAndShoulder(p, vs, now)
@@ -1409,10 +1413,10 @@ class AdasPipeline(
         slotSelection.tap(slots, x, z, SystemClock.elapsedRealtime())
 
     private fun parkPathJson(list: List<ParkingSlot>): JSONObject? {
-        // 使用者選了格子：只規劃到那一格
-        val chosen = slotSelection.track(list, SystemClock.elapsedRealtime())
-        val free = (if (chosen != null) listOf(chosen) else list.filter { !it.occupied })
-            .filter { it.kind == 'p' || it.kind == 'a' }
+        // 只有「選了格子」才畫停車路徑：使用者在畫面上點的，或倒車打方向燈自動找的那一格。
+        // 沒選就不畫（以前會自動挑最近的空格畫路徑，停車場裡一直有路徑晃來晃去）
+        val chosen = slotSelection.track(list, SystemClock.elapsedRealtime()) ?: return null
+        val free = listOf(chosen).filter { it.kind == 'p' || it.kind == 'a' }
             .sortedBy { s -> (0 until 4).minOf { hypot(s.p[it * 2], s.p[it * 2 + 1]) } }
         for (s in free.take(3)) {
             val plan = ParkingPathPlanner.plan(s) ?: continue

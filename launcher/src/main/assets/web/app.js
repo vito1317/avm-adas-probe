@@ -282,6 +282,11 @@
     b.onclick = function () { setPref('roadView', b.dataset.view); sendView(b.dataset.view); };
   });
   road.addEventListener('load', function () { road._viewSent = false; });
+  // 3D 道路畫面裡點停車格 → 交給 360 引擎選格（選了才畫停車路徑；再點一次取消）
+  window.addEventListener('message', function (e) {
+    var t = e.data && e.data.__slotTap;
+    if (t && t.length === 2) control('slot_tap', Number(t[0]).toFixed(2) + ',' + Number(t[1]).toFixed(2));
+  });
 
   // ───────── 按鈕 ─────────
   document.querySelectorAll('[data-open]').forEach(function (b) { b.onclick = function () { try { Car.open(b.dataset.open); } catch (e) {} }; });

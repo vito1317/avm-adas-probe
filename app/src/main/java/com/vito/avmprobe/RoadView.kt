@@ -56,6 +56,36 @@ class RoadView(context: Context) : View(context) {
 
     // ───── 資料（每幀 payload）─────
     @Volatile private var payload: JSONObject? = null
+    /** 點到停車格：傳格子中心 (x, z)，回傳有沒有選到（[AdasPipeline.tapSlot]）。 */
+    var onTapSlot: ((Float, Float) -> Boolean)? = null
+
+    /** 點畫面上的停車格 → 選它當目標（再點一次取消）。用投影到畫面的四邊形判斷點到哪格。 */
+    override fun onTouchEvent(e: android.view.MotionEvent): Boolean {
+        if (e.actionMasked != android.view.MotionEvent.ACTION_UP) return true
+        val a = payload?.optJSONArray("slots") ?: return super.onTouchEvent(e)
+        val sx = e.x; val sy = e.y
+        for (i in 0 until a.length()) {
+            val s = a.optJSONObject(i) ?: continue
+            if (s.optInt("o") == 1) continue
+            val q = s.optJSONArray("p") ?: continue
+            if (q.length() < 8) continue
+            val px = FloatArray(4); val py = FloatArray(4); var ok = true; var mx = 0f; var mz = 0f
+            for (k in 0 until 4) {
+                val x = q.optDouble(k * 2).toFloat(); val z = q.optDouble(k * 2 + 1).toFloat(); mx += x / 4; mz += z / 4
+                if (!proj(x, 0f, z)) { ok = false; break }
+                px[k] = tmp[0]; py[k] = tmp[1]
+            }
+            if (!ok) continue
+            var inside = false; var j = 3
+            for (k in 0 until 4) {
+                if ((py[k] > sy) != (py[j] > sy) && sx < (px[j] - px[k]) * (sy - py[k]) / (py[j] - py[k]) + px[k]) inside = !inside
+                j = k
+            }
+            if (inside) { onTapSlot?.invoke(mx, mz); performClick(); return true }
+        }
+        return super.onTouchEvent(e)
+    }
+    override fun performClick(): Boolean = super.performClick()
     @Volatile private var payloadAt = 0L
     fun update(p: JSONObject) { payload = p; payloadAt = SystemClock.elapsedRealtime() }
 
@@ -179,7 +209,53 @@ class RoadView(context: Context) : View(context) {
         return out
     }
 
+    /** 停車場：深灰地板＋淡淡的 2.5 m 格線（沒有車道線、路緣）。 */
+    private fun drawLotGround(c: Canvas, h: Float) {
+        path.reset(); var first = true
+        for ((x, z) in listOf(-14f to -8f, -14f to 45f, 14f to 45f, 14f to -8f)) if (proj(x, 0f, z)) { if (first) path.moveTo(tmp[0], tmp[1]) else path.lineTo(tmp[0], tmp[1]); first = false }
+        path.close()
+        fill.shader = LinearGradient(0f, cy, 0f, h, Color.rgb(20, 24, 30), Color.rgb(34, 38, 46), Shader.TileMode.CLAMP)
+        c.drawPath(path, fill); fill.shader = null
+        stroke.color = Color.argb(28, 200, 215, 235); stroke.strokeWidth = 1.5f; stroke.pathEffect = null
+        var gx = -12.5f
+        while (gx <= 12.5f) { if (proj(gx, 0f, -8f)) { val x0 = tmp[0]; val y0 = tmp[1]; if (proj(gx, 0f, 40f)) c.drawLine(x0, y0, tmp[0], tmp[1], stroke) }; gx += 2.5f }
+        var gz = -7.5f
+        while (gz <= 40f) { if (proj(-14f, 0f, gz)) { val x0 = tmp[0]; val y0 = tmp[1]; if (proj(14f, 0f, gz)) c.drawLine(x0, y0, tmp[0], tmp[1], stroke) }; gz += 2.5f }
+    }
+
+    /** 停車格：空格綠、有車灰、自己停的那格青（標「目前車格」）、選中的藍。 */
+    private fun drawSlots(c: Canvas, h: Float, p: JSONObject) {
+        val a = p.optJSONArray("slots") ?: return
+        for (i in 0 until a.length()) {
+            val s = a.optJSONObject(i) ?: continue
+            val q = s.optJSONArray("p") ?: continue
+            if (q.length() < 8) continue
+            val own = s.optInt("own") == 1; val sel = s.optInt("sel") == 1; val occ = s.optInt("o") == 1
+            val col = when { sel -> Color.rgb(60, 150, 255); own -> Color.rgb(40, 225, 255); occ -> Color.rgb(120, 130, 145); else -> Color.rgb(70, 230, 120) }
+            path.reset(); var ok = true; var mx = 0f; var mz = 0f
+            for (k in 0 until 4) {
+                val x = q.optDouble(k * 2).toFloat(); val z = q.optDouble(k * 2 + 1).toFloat(); mx += x / 4; mz += z / 4
+                if (!proj(x, 0f, z)) { ok = false; break }
+                if (k == 0) path.moveTo(tmp[0], tmp[1]) else path.lineTo(tmp[0], tmp[1])
+            }
+            if (!ok) continue
+            path.close()
+            fill.color = col; fill.alpha = if (occ && !own) 40 else if (sel) 110 else 70
+            c.drawPath(path, fill); fill.alpha = 255
+            stroke.color = col; stroke.strokeWidth = if (sel || own) 5f else 3f; stroke.pathEffect = null
+            c.drawPath(path, stroke)
+            if ((own || sel || !occ) && proj(mx, 0f, mz)) {
+                text.textAlign = Paint.Align.CENTER; text.textSize = h * (if (own) 0.04f else 0.032f); text.color = Color.WHITE
+                text.setShadowLayer(8f, 0f, 0f, col)
+                c.drawText(if (own) "目前車格" else if (sel) "選定" else "P", tmp[0], tmp[1], text)
+                text.clearShadowLayer()
+            }
+        }
+    }
+
     private fun drawGround(c: Canvas, w: Float, h: Float, p: JSONObject?) {
+        // 停車場：換成停車場地板＋停車格，不畫車道線
+        if (p?.optInt("lot") == 1) { drawLotGround(c, h); drawSlots(c, h, p); return }
         // 路面：左右邊界（偵測到的路緣，否則預設三線道）之間
         val road = p?.optJSONObject("road")
         val el = road?.takeIf { !it.isNull("el") }?.optDouble("el")?.toFloat() ?: -5.3f
@@ -207,6 +283,7 @@ class RoadView(context: Context) : View(context) {
                 }
             }
         }
+        if (p != null) drawSlots(c, h, p)
         val lines = road?.optJSONArray("lines")
         if (lines == null || lines.length() == 0) {
             // 沒偵測到線：畫預設的淡淡車道線，看得出路
@@ -460,6 +537,17 @@ class RoadView(context: Context) : View(context) {
                 c.drawRoundRect(w / 2 - tw, y - h * 0.045f, w / 2 + tw, y + h * 0.017f, h * 0.03f, h * 0.03f, fill)
                 text.color = col; c.drawText(m.optString("t"), w / 2, y, text)
             }
+        }
+        // 停車場：右上角標「停車場・空位 N 格」
+        if (p?.optInt("lot") == 1) {
+            val sl = p.optJSONArray("slots")
+            val free = if (sl == null) 0 else (0 until sl.length()).count { sl.optJSONObject(it)?.let { o -> o.optInt("o") == 0 && o.optInt("own") == 0 } == true }
+            val t = "停車場・空位 $free 格"
+            text.textAlign = Paint.Align.RIGHT; text.textSize = h * 0.045f
+            val tw = text.measureText(t)
+            val x1 = w - pad - (if (p.optJSONObject("tl") != null) h * 0.1f else 0f); val y = pad + h * 0.06f
+            fill.color = Color.argb(170, 10, 40, 50); c.drawRoundRect(x1 - tw - h * 0.03f, y - h * 0.05f, x1 + h * 0.015f, y + h * 0.018f, h * 0.03f, h * 0.03f, fill)
+            text.color = Color.rgb(40, 225, 255); c.drawText(t, x1, y, text)
         }
         if (p == null) {
             text.textAlign = Paint.Align.CENTER; text.textSize = h * 0.035f; text.color = Color.argb(180, 160, 190, 220)

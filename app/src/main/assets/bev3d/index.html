@@ -770,7 +770,27 @@
   // ---------- 停車格 ----------
   // payload.slots 已是車身座標公尺（Kotlin 端已套用 flip），空格綠色、有車灰色，入口邊較亮。
   var SLOT_MAX = 16, SLOT_Y = 0.035, SLOT_TTL = 1500;
-  var slotCol = { free: srgb(COL.green), used: srgb(0x8b97a4), mouth: srgb(0xd8ffe6) };
+  var slotCol = { free: srgb(COL.green), used: srgb(0x8b97a4), mouth: srgb(0xd8ffe6), own: srgb(0x28e1ff), sel: srgb(0x3c96ff) };
+  // ---------- 停車場模式：深灰地板＋2.5 m 格線、右上角「停車場・空位 N 格」 ----------
+  var lotGroup = new THREE.Group(); lotGroup.visible = false; scene.add(lotGroup);
+  (function () {
+    var floor = new THREE.Mesh(new THREE.PlaneGeometry(30, 56), new THREE.MeshBasicMaterial({ color: srgb(0x1a1e25), toneMapped: false,
+      polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 }));
+    floor.rotation.x = -Math.PI / 2; floor.position.set(0, 0.002, -14); lotGroup.add(floor);
+    var grid = new THREE.GridHelper(30, 12, 0x3a4250, 0x2a3038); grid.position.set(0, 0.006, -14); grid.scale.z = 56 / 30; lotGroup.add(grid);
+  })();
+  var lotAt = -1e9, LOT_TTL = 1500;
+  var lotTag = document.createElement('div');
+  lotTag.id = 'lotTag';
+  lotTag.style.cssText = 'position:fixed;top:64px;left:50%;transform:translateX(-50%);z-index:20;padding:6px 14px;border-radius:8px;background:rgba(10,40,50,.78);' +
+    'color:#28e1ff;font:600 16px system-ui,sans-serif;letter-spacing:.04em;display:none;pointer-events:none';
+  document.body.appendChild(lotTag);
+  function showLot(p, now) {
+    lotAt = now;
+    var free = 0;
+    (p.slots || []).forEach(function (s) { if (!s.o && !s.own) free++; });
+    lotTag.textContent = '停車場・空位 ' + free + ' 格';
+  }
   var slotGrp = new THREE.Group();
   scene.add(slotGrp);
   var slotPool = [];
@@ -825,13 +845,33 @@
     });
   }
 
+  // 點停車格（在中控台裡）：射線打到哪一格的填色面 → 把格子中心傳給外層，外層轉給 360 引擎選格
+  (function () {
+    var ray = new THREE.Raycaster(), ndc = new THREE.Vector2(), downAt = null;
+    renderer.domElement.addEventListener('pointerdown', function (e) { downAt = [e.clientX, e.clientY]; });
+    renderer.domElement.addEventListener('pointerup', function (e) {
+      if (!downAt || Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 12) return;   // 拖曳轉視角不算點
+      var r = renderer.domElement.getBoundingClientRect();
+      ndc.set((e.clientX - r.left) / r.width * 2 - 1, -(e.clientY - r.top) / r.height * 2 + 1);
+      ray.setFromCamera(ndc, camera);
+      var fills = slotPool.filter(function (g) { return g.visible && g.userData.slot; }).map(function (g) { return g.userData.fill; });
+      var hit = ray.intersectObjects(fills, false)[0];
+      if (!hit) return;
+      var s = hit.object.parent.userData.slot, p = s.p;
+      if (s.o && !s.own) return;
+      var cx = (p[0] + p[2] + p[4] + p[6]) / 4, cz = (p[1] + p[3] + p[5] + p[7]) / 4;
+      try { window.parent.postMessage({ __slotTap: [cx, cz] }, '*'); } catch (x) {}
+    });
+  })();
+
   function drawSlots(list) {
     var n = list ? Math.min(list.length, SLOT_MAX) : 0, i, used = 0;
     for (i = 0; i < n; i++) {
       var s = list[i], p = s && s.p;
       if (!p || p.length < 8) continue;          // 壞掉的那一格跳過就好，不要連後面的也丟掉
       var g = slotPool[used] || makeSlot(), u = g.userData;
-      var col = s.o ? slotCol.used : slotCol.free;
+      g.userData.slot = s;
+      var col = s.own ? slotCol.own : s.sel ? slotCol.sel : s.o ? slotCol.used : slotCol.free;   // 自車停的那格青、選定的藍
       var fp = u.fill.geometry.attributes.position, ep = u.edge.geometry.attributes.position;
       var mp = u.mouth.geometry.attributes.position, k;
       for (k = 0; k < 4; k++) {
@@ -1229,6 +1269,7 @@
     lastLca = p.lca || null;
     if (p.slots) { slotsAt = now; drawSlots(p.slots); }
     if (p.cw) { cwAt = now; drawCrosswalks(p.cw); }
+    if (p.lot) showLot(p, now);
     if (p.obs) { obsAt = now; drawObs(p.obs); }
     if (p.park) { parkAt = now; drawPark(p.park); }
     if (p.turn) { turnAt = now; drawTurn(p.turn); }
@@ -1526,6 +1567,8 @@
     // 停車格：來源停送就收起來
     if (slotsAt > 0 && now - slotsAt > SLOT_TTL) { drawSlots(null); slotsAt = -1e9; }
     if (cwAt > 0 && now - cwAt > CW_TTL) { drawCrosswalks(null); cwAt = -1e9; }
+    var inLot = now - lotAt < LOT_TTL;
+    lotGroup.visible = inLot; lotTag.style.display = inLot ? 'block' : 'none';
     if (obsAt > 0 && now - obsAt > OBS_TTL) { drawObs(null); obsAt = -1e9; }
     if (parkAt > 0 && now - parkAt > PARK_TTL) { drawPark(null); parkAt = -1e9; }
     if (turnAt > 0 && now - turnAt > TURN_TTL) { drawTurn(null); turnAt = -1e9; }

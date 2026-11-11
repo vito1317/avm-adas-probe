@@ -64,6 +64,8 @@ object LauncherLink {
             "rear" -> arg.toIntOrNull()?.let { RearDisplay.test(it) }
             // 桌面的「道路畫面」卡片：打開 360 並切到道路畫面
             "roadview" -> Engine360.showRoad(true)
+            // 中控台 3D 道路畫面點了停車格（只是選格子、畫路徑，不碰車）
+            "slot_tap" -> arg.split(',').mapNotNull { it.toFloatOrNull() }.takeIf { it.size == 2 }?.let { Engine360.tapSlot(it[0], it[1]) }
             else -> {}
         }
     }
