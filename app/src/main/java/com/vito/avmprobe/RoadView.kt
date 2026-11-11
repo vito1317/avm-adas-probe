@@ -192,6 +192,21 @@ class RoadView(context: Context) : View(context) {
         fill.shader = LinearGradient(0f, cy, 0f, h, Color.rgb(16, 24, 38), Color.rgb(28, 40, 58), Shader.TileMode.CLAMP)
         c.drawPath(path, fill); fill.shader = null
 
+        // 斑馬線：貼地的白條
+        p?.optJSONArray("cw")?.let { cw ->
+            for (i in 0 until cw.length()) {
+                val o = cw.optJSONObject(i) ?: continue
+                val q = o.optJSONArray("p") ?: continue
+                if (q.length() < 8) continue
+                val pc = FloatArray(8) { q.optDouble(it).toFloat() }
+                fill.color = Color.argb(215, 240, 246, 255)
+                for (sq in CrosswalkDetector.stripeQuads(pc, o.optInt("n", 5))) {
+                    path.reset(); var okAll = true
+                    for (k in 0 until 4) { if (!proj(sq[k * 2], 0f, sq[k * 2 + 1])) { okAll = false; break }; if (k == 0) path.moveTo(tmp[0], tmp[1]) else path.lineTo(tmp[0], tmp[1]) }
+                    if (okAll) { path.close(); c.drawPath(path, fill) }
+                }
+            }
+        }
         val lines = road?.optJSONArray("lines")
         if (lines == null || lines.length() == 0) {
             // 沒偵測到線：畫預設的淡淡車道線，看得出路

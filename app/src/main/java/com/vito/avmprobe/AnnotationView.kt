@@ -173,6 +173,7 @@ class AnnotationView(context: Context) : View(context) {
         if (calibrating) drawCalibration(c, m)
         if (p != null) {
             if (drawRoad) p.optJSONObject("road")?.optJSONArray("lines")?.let { drawRoad(c, m, it) }
+            if (drawRoad) p.optJSONArray("cw")?.let { drawCrosswalks(c, m, it) }
             p.optJSONArray("slots")?.let { drawSlots(c, m, it) }
             p.optJSONObject("park")?.let { drawParkPath(c, m, it) }
             p.optJSONObject("turn")?.let { drawTurnPath(c, m, it) }
@@ -412,6 +413,23 @@ class AnnotationView(context: Context) : View(context) {
             c.drawLine(m.sx(x1, z1), m.sy(x1, z1), m.sx(x2, z2), m.sy(x2, z2), stroke)
         }
         stroke.pathEffect = null
+    }
+
+    /** 斑馬線：一條一條半透明白條＋淡框。 */
+    private fun drawCrosswalks(c: Canvas, m: AnnotationMapper, a: JSONArray) {
+        for (i in 0 until a.length()) {
+            val o = a.optJSONObject(i) ?: continue
+            val q = o.optJSONArray("p") ?: continue
+            if (q.length() < 8) continue
+            val p = FloatArray(8) { q.optDouble(it).toFloat() }
+            fill.color = Color.WHITE; fill.alpha = 150
+            for (s in CrosswalkDetector.stripeQuads(p, o.optInt("n", 5))) {
+                path.reset()
+                for (k in 0 until 4) { val x = s[k * 2]; val z = s[k * 2 + 1]; if (k == 0) path.moveTo(m.sx(x, z), m.sy(x, z)) else path.lineTo(m.sx(x, z), m.sy(x, z)) }
+                path.close(); c.drawPath(path, fill)
+            }
+            fill.alpha = 255
+        }
     }
 
     private fun drawSlots(c: Canvas, m: AnnotationMapper, a: JSONArray) {

@@ -110,6 +110,9 @@ class AdasPipeline(
     @Volatile private var groundBusy = false
     private var bevArgb = IntArray(0)
     private val roadEx = RoadExtractor()
+    private val cwDet = CrosswalkDetector()
+    @Volatile private var cws: List<CrosswalkDetector.Crosswalk> = emptyList()
+    @Volatile private var cwAt = 0L
     private val roadTrack = RoadTracker()
     private val coneDet = ConeDetector()
     private val slotDet = ParkingSlotDetector()
@@ -876,6 +879,9 @@ class AdasPipeline(
                 slots = slotTrack.update(near + far, now)
                 slotsAt = now
                 Crumbs.at(Crumbs.GROUND, "road")
+                if (!Crumbs.off("crosswalk")) Crumbs.step(Crumbs.GROUND, "crosswalk") {
+                    cws = cwDet.detect(buf, bw, bh, mpp, cx, cy, g.ipmValidMask(), excl); cwAt = now
+                }
                 if (mode == AppPrefs.GROUND_VIRTUAL) {
                     road = roadTrack.update(steepFilter(roadEx.extract(buf, bw, bh, mpp, cx, cy, excl, g.roadValidMask()), VehicleBus.signals.snapshot().speedKmh), now); roadAt = now
                 }
@@ -944,6 +950,14 @@ class AdasPipeline(
                 .put("el", rd.edgeL?.let { r2(it) } ?: JSONObject.NULL)
                 .put("er", rd.edgeR?.let { r2(it) } ?: JSONObject.NULL))
         }
+        // 斑馬線（停車場裡不畫：停車場的斜線區、行人道標線不是斑馬線）
+        val cwNow = if (now - cwAt < BEV_TTL_MS && !inLot) cws else emptyList()
+        if (cwNow.isNotEmpty()) {
+            val a = JSONArray()
+            for (c in cwNow) a.put(JSONObject().put("p", JSONArray().apply { for (v in c.p) put(r2(v)) }).put("n", c.stripes)
+                .put("ux", r2(c.ux)).put("uz", r2(c.uz)))
+            p.put("cw", a)
+        }
         // 開車（> 20 km/h）不顯示停車格：旁邊車道的標線會被湊成格子（實車）
         if (now - slotsAt < BEV_TTL_MS && slots.isNotEmpty() && (vs.speedKmh ?: 0f) <= 20f && !onRoad) {
             // 倒車時打方向燈 → 自動選那一側最近的空格
@@ -981,6 +995,16 @@ class AdasPipeline(
                 (if (now - obstaclesAt < OBS_TTL_MS) obstacles.map { ParkingAids.Thing(it.x, it.z, it.w / 2f) } else emptyList())
             parkAids.narrowGap(things, vs.speedKmh, vs.gear)?.let { msgs.add(DriverAids.Msg(it.key, it.text, it.level)) }
             if (parkAids.shouldSnapshot(now, vs.speedKmh, vs.gear) && !Crumbs.off("parkshot")) { Crumbs.at(Crumbs.FRAME, "parkshot"); saveParkedSnapshot() }
+            // 斑馬線：前方 6 m 內（含正壓在上面）→ 提示；上面有行人 → 警示
+            if ((vs.speedKmh ?: 0f) >= 3f && gearCur != 'R' && gearCur != 'P') {
+                val front = 2.57f
+                cwNow.filter { it.ahead(front) in -2f..6f }.minByOrNull { it.ahead(front) }?.let { c ->
+                    val xs = (0 until 4).map { c.p[it * 2] }; val zs = (0 until 4).map { c.p[it * 2 + 1] }
+                    val ped = aidObjs.any { it.t == "ped" && it.x in xs.min() - 1.5f..xs.max() + 1.5f && it.z in zs.min() - 1.5f..zs.max() + 1.5f }
+                    msgs.add(if (ped) DriverAids.Msg("cw", "斑馬線上有行人", 2)
+                        else DriverAids.Msg("cw", if (c.ahead(front) > 0.5f) "前方斑馬線 %.0f m".format(c.ahead(front)) else "斑馬線，注意行人", 0))
+                }
+            }
             // 提醒開雙閃（車機沒辦法自己開）：高速急煞、高速時前車打雙閃
             val leadHaz = leadLight?.takeIf { now - leadLightAt < 1500 }?.hazard == true
             hazardPrompt.update(now, vs.speedKmh, decel, CanVehicle.brake(), vs.turn, leadHaz)?.let { msgs.add(DriverAids.Msg(it.key, it.text, it.level)) }

@@ -803,6 +803,28 @@
     return g;
   }
 
+  // ---------- 斑馬線：貼地白條（偵測給四角＋白條數，這裡拆回一條一條） ----------
+  var cwGroup = new THREE.Group(); scene.add(cwGroup);
+  var cwMat = new THREE.MeshBasicMaterial({ color: 0xf2f6ff, transparent: true, opacity: 0.85, toneMapped: false, depthWrite: false, side: THREE.DoubleSide,
+    polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+  var cwAt = -1e9, CW_TTL = 1500, CW_Y = 0.03;
+  function drawCrosswalks(list) {
+    while (cwGroup.children.length) { var o = cwGroup.children.pop(); o.geometry.dispose(); }
+    (list || []).forEach(function (c) {
+      var p = c.p, n = Math.max(1, c.n || 5);
+      if (!p || p.length < 8) return;
+      var ux = p[2] - p[0], uz = p[3] - p[1], vx = p[6] - p[0], vz = p[7] - p[1], step = 1 / (2 * n - 1);
+      for (var k = 0; k < n; k++) {
+        var a = 2 * k * step, b = a + step;
+        var q = [p[0] + vx * a, p[1] + vz * a, p[0] + ux + vx * a, p[1] + uz + vz * a, p[0] + ux + vx * b, p[1] + uz + vz * b, p[0] + vx * b, p[1] + vz * b];
+        var g = new THREE.BufferGeometry();
+        g.setAttribute('position', new THREE.Float32BufferAttribute([q[0], CW_Y, -q[1], q[2], CW_Y, -q[3], q[4], CW_Y, -q[5], q[6], CW_Y, -q[7]], 3));
+        g.setIndex([0, 1, 2, 0, 2, 3]);
+        var m = new THREE.Mesh(g, cwMat); m.renderOrder = 3; cwGroup.add(m);
+      }
+    });
+  }
+
   function drawSlots(list) {
     var n = list ? Math.min(list.length, SLOT_MAX) : 0, i, used = 0;
     for (i = 0; i < n; i++) {
@@ -1206,6 +1228,7 @@
     lastVeh = p.veh || null;
     lastLca = p.lca || null;
     if (p.slots) { slotsAt = now; drawSlots(p.slots); }
+    if (p.cw) { cwAt = now; drawCrosswalks(p.cw); }
     if (p.obs) { obsAt = now; drawObs(p.obs); }
     if (p.park) { parkAt = now; drawPark(p.park); }
     if (p.turn) { turnAt = now; drawTurn(p.turn); }
@@ -1502,6 +1525,7 @@
     if (window.AVM_LCA) AVM_LCA.update(lastLca, lastObjs, now);
     // 停車格：來源停送就收起來
     if (slotsAt > 0 && now - slotsAt > SLOT_TTL) { drawSlots(null); slotsAt = -1e9; }
+    if (cwAt > 0 && now - cwAt > CW_TTL) { drawCrosswalks(null); cwAt = -1e9; }
     if (obsAt > 0 && now - obsAt > OBS_TTL) { drawObs(null); obsAt = -1e9; }
     if (parkAt > 0 && now - parkAt > PARK_TTL) { drawPark(null); parkAt = -1e9; }
     if (turnAt > 0 && now - turnAt > TURN_TTL) { drawTurn(null); turnAt = -1e9; }
