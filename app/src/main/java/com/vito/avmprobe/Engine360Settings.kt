@@ -185,6 +185,10 @@ object Engine360Settings {
         }
         check("停好車（P 檔＋手煞車）問要不要升窗、鎖車", { prefs.cyParkPrompt }) { prefs.cyParkPrompt = it }
 
+        section("第一人稱畫面（前／後鏡頭展開）")
+        check("原廠畫面跟著方向盤轉時（動態輔助線），標注也跟著轉", { prefs.fpvFollowWheel }) { prefs.fpvFollowWheel = it; FactoryViews.followWheel = it }
+        check("標注轉的方向跟畫面相反時勾這個", { prefs.fpvWheelFlip }) { prefs.fpvWheelFlip = it; FactoryViews.wheelFlip = it }
+
         section("車道線模型（實驗）")
         val segInfo = TextView(act).apply { setTextColor(0xFFB0B8C4.toInt()); textSize = 13f }
         fun segText() = if (!LaneSeg.available(act)) "這版沒有附模型檔" else Engine360.pipelineLaneSegMs().let { ms -> if (ms >= 0) "每顆鏡頭約 $ms ms" else "還沒跑（要在 360 畫面、地面模式為虛擬道路）" }

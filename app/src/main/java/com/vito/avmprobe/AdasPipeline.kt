@@ -165,6 +165,7 @@ class AdasPipeline(
             geo?.let { g ->
                 fun pos(n: String) = g.cam(n)?.let { floatArrayOf(it.px.toFloat(), it.py.toFloat(), it.pz.toFloat()) }
                 FactoryViews.setCameras(pos("front"), pos("rear"), pos("left"), pos("right"))
+                FactoryViews.followWheel = prefs.fpvFollowWheel; FactoryViews.wheelFlip = prefs.fpvWheelFlip
             }
             calibrated = JSONObject(calibText).optBoolean("calibrated", false)
         } catch (t: Throwable) {

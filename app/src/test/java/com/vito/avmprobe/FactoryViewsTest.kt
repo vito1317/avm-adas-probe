@@ -252,4 +252,16 @@ class PolygonClipTest {
         // 白線（x = −1.25）那一邊要延伸到畫面下半部（靠近鏡頭的地方）
         org.junit.Assert.assertTrue(pts.maxOf { it[1] } > 0.87f * 720f * 0.6f)
     }
+
+    @Test fun cameraViewFollowsWheel() {
+        val c = floatArrayOf(0f, 0.6f, 2.3f)
+        val p0 = FactoryViews.cameraParams(c, false)
+        val z = FactoryViews.cameraParams(c, false, 0f)
+        org.junit.Assert.assertEquals("回正時跟原本一樣", p0, z)
+        val r = FactoryViews.cameraParams(c, false, 27f)
+        org.junit.Assert.assertTrue("往右打：看的點往右", r.tx > c[0] + 1f)
+        org.junit.Assert.assertEquals(-27f, r.azDeg, 1e-4f)
+        val rr = FactoryViews.cameraParams(floatArrayOf(0f, 0.9f, -2.4f), true, 27f)
+        org.junit.Assert.assertTrue("後鏡頭偏向同一側（原廠兩個負號抵銷）", rr.tx > 1f)
+    }
 }

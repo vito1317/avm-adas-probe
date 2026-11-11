@@ -102,18 +102,43 @@ object FactoryViews {
         return cameraParams(c, rear)
     }
 
-    /** 鏡頭位置 [c]（我們的座標，m）→ 鏡頭展開畫面的投影參數。 */
-    fun cameraParams(c: FloatArray, rear: Boolean): PerspectiveMapper.Params {
+    /**
+     * 鏡頭位置 [c]（我們的座標，m）→ 鏡頭展開畫面的投影參數。[yawRight]：畫面往右偏幾度（動態輔助線跟著方向盤轉）。
+     */
+    fun cameraParams(c: FloatArray, rear: Boolean, yawRight: Float = 0f): PerspectiveMapper.Params {
         val el = if (rear) 17.55f else 17.17f
         val d = 5f
         val e = Math.toRadians(el.toDouble())
-        val dirZ = (if (rear) -1.0 else 1.0) * kotlin.math.cos(e)
+        val a = Math.toRadians(yawRight.toDouble())
+        // 前後兩個畫面偏向同一側（原廠：後鏡頭 AngleBias 取負號，方向又是朝後，兩個負號抵銷）
+        val dirX = kotlin.math.sin(a) * kotlin.math.cos(e)
+        val dirZ = (if (rear) -1.0 else 1.0) * kotlin.math.cos(a) * kotlin.math.cos(e)
         return PerspectiveMapper.Params(
             clipL = 0.348f, clipT = 0f, clipR = 1f, clipB = 0.87f,
-            azDeg = if (rear) 180f else 0f, elDeg = el, dist = d, fovDeg = if (rear) 91.25f else 97.31f,
-            tx = c[0], tz = (c[2] + d * dirZ).toFloat(), ty = (c[1] - d * kotlin.math.sin(e)).toFloat(),
+            azDeg = if (rear) 180f + yawRight else -yawRight, elDeg = el, dist = d, fovDeg = if (rear) 91.25f else 97.31f,
+            tx = (c[0] + d * dirX).toFloat(), tz = (c[2] + d * dirZ).toFloat(), ty = (c[1] - d * kotlin.math.sin(e)).toFloat(),
             mirror = rear, cyOff = if (rear) 0.02f else -0.092f
         )
+    }
+
+    /**
+     * 原廠「動態輔助線」：前／後鏡頭展開畫面跟著方向盤轉。原廠腳本（view_animate.lua 的 WheelSingleView）：
+     *   AngleBias = 前輪角 × (75 / FOV)（後鏡頭取負號）
+     * 標注每畫一次就照當下的前輪角重算（以前固定朝正前／正後，方向盤打到底時標注卡在原本的位置）。
+     * [p] 不是前／後鏡頭展開畫面 → 原樣傳回。
+     */
+    @Volatile var followWheel = true
+    @Volatile var wheelFlip = false
+    fun steered(p: PerspectiveMapper.Params): PerspectiveMapper.Params {
+        if (!followWheel) return p
+        val rear = p.mirror && p.clipL == 0.348f
+        val front = !p.mirror && p.clipL == 0.348f && p.clipR == 1f && p.fovDeg == 97.31f
+        if (!rear && !front) return p
+        val c = (if (rear) camRear else camFront) ?: return p
+        val w = FactoryVehicle.wheel ?: return p          // 前輪角，+ = 右
+        val yaw = (if (wheelFlip) -w else w) * (75f / p.fovDeg)
+        if (kotlin.math.abs(yaw) < 0.2f) return p
+        return cameraParams(c, rear, yaw)
     }
 
     /** 這個場景確定沒有俯視圖（全 3D 模式）。 */

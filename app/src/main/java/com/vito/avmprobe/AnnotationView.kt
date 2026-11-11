@@ -107,7 +107,7 @@ class AnnotationView(context: Context) : View(context) {
         if (e.actionMasked != android.view.MotionEvent.ACTION_DOWN) return false
         val prof = currentProfile()
         // 點 3D 畫面上的格子也能選（反投影到地面）
-        prof.p3?.takeIf { !suspend3d }?.let { p3 ->
+        prof.p3?.takeIf { !suspend3d }?.let { FactoryViews.steered(it) }?.let { p3 ->
             val m3 = PerspectiveMapper(p3, width, height)
             if (e.x >= m3.clipLeft && e.x <= m3.clipRight && e.y >= m3.clipTop && e.y <= m3.clipBottom) {
                 val g = m3.unprojectToGround(e.x, e.y) ?: return false
@@ -155,7 +155,7 @@ class AnnotationView(context: Context) : View(context) {
         val prof = currentProfile()
         val top = prof.top
         if (top != null) drawTop(c, AnnotationMapper(top, width, height), p)
-        prof.p3?.let { p3 ->
+        prof.p3?.let { FactoryViews.steered(it) }?.let { p3 ->
             if (suspend3d) {
                 val m3 = PerspectiveMapper(p3, width, height)
                 val t = "3D 重新對位中…"

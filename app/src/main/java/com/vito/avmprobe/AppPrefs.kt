@@ -296,6 +296,14 @@ class AppPrefs(context: Context) {
     var laneModel: Boolean
         get() = sp.getBoolean("laneModel", true)
         set(v) = sp.edit().putBoolean("laneModel", v).apply()
+    /** 前／後鏡頭展開畫面跟著方向盤轉（原廠動態輔助線）時，標注也跟著轉。 */
+    var fpvFollowWheel: Boolean
+        get() = sp.getBoolean("fpvFollowWheel", true)
+        set(v) = sp.edit().putBoolean("fpvFollowWheel", v).apply()
+    /** 上面那個轉的方向相反（實車驗證用）。 */
+    var fpvWheelFlip: Boolean
+        get() = sp.getBoolean("fpvWheelFlip", false)
+        set(v) = sp.edit().putBoolean("fpvWheelFlip", v).apply()
     var trainCollect: Boolean
         get() = sp.getBoolean("trainCollect", false)
         set(v) = sp.edit().putBoolean("trainCollect", v).apply()
