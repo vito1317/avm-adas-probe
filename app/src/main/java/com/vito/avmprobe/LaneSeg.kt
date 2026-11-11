@@ -19,18 +19,19 @@ import java.nio.channels.FileChannel
 class LaneSeg(ctx: Context, asset: String = ASSET) {
     companion object {
         const val ASSET = "lane_seg.tflite"
-        const val W = 480; const val H = 272; const val SH = 270   // 960x540 象限縮一半，下面補 2 列
         const val QW = 960; const val QH = 540
         const val TTL_MS = 1500L
         fun available(ctx: Context): Boolean = try { ctx.assets.openFd(ASSET).close(); true } catch (_: Throwable) { false }
     }
 
     private val interp: Interpreter
-    private val inBuf = ByteBuffer.allocateDirect(4 * W * H * 3).order(ByteOrder.nativeOrder())
-    private val outBuf = ByteBuffer.allocateDirect(4 * W * H * 2).order(ByteOrder.nativeOrder())   // 背景、車道線兩類分數
-    private val argb = IntArray(W * SH)
+    /** 模型輸入大小（從模型讀：480x272 或縮小版 224x128）；[SH] = 實際放影像的列數，下面補黑（訓練時 960x540 → 480x270 再補 2 列）。 */
+    val W: Int; val H: Int; private val SH: Int
+    private val inBuf: ByteBuffer
+    private val outBuf: ByteBuffer   // 背景、車道線兩類分數
+    private val argb: IntArray
     /** 每顆鏡頭（quad 0 前、1 後、2 左、3 右）最近一次的機率圖，與時間。 */
-    val prob = Array(4) { FloatArray(W * H) }
+    val prob: Array<FloatArray>
     val probAt = LongArray(4)
     @Volatile var lastMs = 0L; private set
     private var next = 0
@@ -39,6 +40,12 @@ class LaneSeg(ctx: Context, asset: String = ASSET) {
         val afd = ctx.assets.openFd(asset)
         val model = FileInputStream(afd.fileDescriptor).use { it.channel.map(FileChannel.MapMode.READ_ONLY, afd.startOffset, afd.declaredLength) }
         interp = Interpreter(model, Interpreter.Options().apply { setNumThreads(2); setUseXNNPACK(true) })
+        val shp = interp.getInputTensor(0).shape()          // [1, H, W, 3]
+        H = shp[1]; W = shp[2]; SH = Math.round(H * 270f / 272f)
+        inBuf = ByteBuffer.allocateDirect(4 * W * H * 3).order(ByteOrder.nativeOrder())
+        outBuf = ByteBuffer.allocateDirect(4 * W * H * 2).order(ByteOrder.nativeOrder())
+        argb = IntArray(W * SH)
+        prob = Array(4) { FloatArray(W * H) }
     }
 
     /** 影格執行緒上：把下一顆鏡頭的畫面取樣進來（幾毫秒）。回傳是哪顆鏡頭。 */
@@ -88,7 +95,7 @@ class LaneSeg(ctx: Context, asset: String = ASSET) {
                 if (p < 0) { idx[k] = -1; continue }
                 val x = p % frameW; val y = p / frameW
                 val q = (x / QW) + 2 * (y / QH)
-                val u = ((x % QW) / 2).coerceAtMost(W - 1); val v = ((y % QH) / 2).coerceAtMost(SH - 1)
+                val u = ((x % QW) * W / QW).coerceAtMost(W - 1); val v = ((y % QH) * SH / QH).coerceAtMost(SH - 1)
                 idx[k] = (q shl 24) or (v * W + u)
             }
             bevIdx = idx; bevKey = key
