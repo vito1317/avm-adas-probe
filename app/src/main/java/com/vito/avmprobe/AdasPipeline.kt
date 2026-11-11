@@ -952,13 +952,25 @@ class AdasPipeline(
                 used.add(tr.id)
                 aidObjs.add(DriverAids.Obj(o.t, o.x, o.z, tr.vx, tr.vz, o.clr))
                 j.put("id", tr.id).put("vx", r2(tr.vx)).put("vz", r2(tr.vz))
-                yaw(tr, ego)?.let { y -> j.put("yaw", r2(y)) }
+                val isVeh = o.t == "car" || o.t == "van" || o.t == "truck" || o.t == "bus"
+                val gs = if (ego != null) hypot(tr.vx, tr.vz + ego) else Float.MAX_VALUE
+                if (isVeh && gs <= StaticStabilizer.MOVING_MPS) {
+                    // 停著的車：釘在地上、方向鎖住（照格子方向，沒有就沿用上次）
+                    val hint = if (now - slotsAt < BEV_TTL_MS) slotYaw(slots, o.x, o.z) else null
+                    val (sx, sz, sy) = stabilizer.apply(tr.id, o.x, o.z, gs, hint, now)
+                    j.put("x", r2(sx)).put("z", r2(sz)).put("still", 1)
+                    sy?.let { y -> j.put("yaw", r2(y)) }
+                } else {
+                    if (isVeh) stabilizer.apply(tr.id, o.x, o.z, gs, null, now)   // 在動 → 放掉
+                    yaw(tr, ego)?.let { y -> j.put("yaw", r2(y)) }
+                }
             }
             // 停著的車看不出方向 → 停在偵測到的格子裡就照格子的方向（停車場裡橫的、斜的都畫對）
             if (!j.has("yaw") && (o.t == "car" || o.t == "van" || o.t == "truck" || o.t == "bus") && now - slotsAt < BEV_TTL_MS)
                 slotYaw(slots, o.x, o.z)?.let { y -> j.put("yaw", r2(y)) }
             objs.put(j)
         }
+        stabilizer.prune(now)
         if (now - conesAt < BEV_TTL_MS) for (c in cones) {
             if (coneOut.any { hypot(it.x - c.x, it.z - c.z) < 1f }) continue
             objs.put(JSONObject().put("t", "cone").put("x", r2(c.x)).put("z", r2(c.z)).put("c", r2(c.conf)))
@@ -1328,11 +1340,16 @@ class AdasPipeline(
         val st = vs.steerDeg?.takeIf { TurnPathPlanner.plausibleSteer(it, vs.speedKmh) } ?: 0f
         val geo = VehicleGeometry()
         val wheel = Math.toRadians((st / geo.steerRatio).toDouble().coerceIn(-geo.maxWheelDeg, geo.maxWheelDeg))
+        val dyaw = (v * kotlin.math.tan(wheel) / geo.wheelbase * dt).toFloat()
         synchronized(egoLock) {
             egoDz += v * dt
-            egoYaw += (v * kotlin.math.tan(wheel) / geo.wheelbase * dt).toFloat()
+            egoYaw += dyaw
         }
+        stabilizer.egoMotion(v * dt, dyaw)
     }
+
+    /** 停著的車在畫面上釘住不飄（只影響畫的位置；警示照用即時偵測）。 */
+    private val stabilizer = StaticStabilizer()
 
     private fun takeEgoMotion(): Pair<Float, Float> = synchronized(egoLock) { (egoDz to egoYaw).also { egoDz = 0f; egoYaw = 0f } }
     private val vehShift = VehicleShiftOdometry()
