@@ -73,24 +73,56 @@ def main():
     ap.add_argument("session")
     ap.add_argument("--frames", required=True)
     ap.add_argument("--out", required=True)
+    ap.add_argument("--model", default=None, help="車道線模型權重（train.py 的 best.pt）：模型找到的線也加進候選（規則在白天常漏線）")
+    ap.add_argument("--save-bev", dest="save_bev", action="store_true", help="另存俯視圖 PNG（給 Kotlin 偵測程式跑斑馬線、網狀線、停車格候選）")
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
     geo = ag.Geometry(load_calib(a.session))
     lut = ag.build_bev_lut(geo, 1920, 1080)
     ipm = pp.ipm_valid_mask(geo, W, H, MPP, CX, CY, min_elev_deg=8.0)
     sess = os.path.basename(a.session.rstrip("/"))
+    net = None
+    if a.model:
+        import torch
+        sys.path.insert(0, HERE); import train as T
+        net = T.LaneNet(pretrained=False); net.load_state_dict(torch.load(a.model, map_location="cpu")); net.eval()
+        # 俯視圖每個像素對應哪顆鏡頭的哪個像素（LUT 是整幀 1920x1080 的索引）→ 模型輸出 480x272 的位置
+        lutf = np.asarray(lut).reshape(-1)
+        valid_l = lutf >= 0
+        fx = np.where(valid_l, lutf % 1920, 0); fy = np.where(valid_l, lutf // 1920, 0)
+        q_of = (fx // 960) + 2 * (fy // 540)
+        u_of = np.clip((fx % 960) // 2, 0, 479); v_of = np.clip((fy % 540) // 2, 0, 269)
     f_big, f_sm = font(18), font(14)
     for fr in [int(x) for x in a.frames.split(",")]:
         base = os.path.join(a.session, "f_%05d" % fr)
         frame = np.asarray(Image.open(base + ".jpg").convert("RGB"))
         meta = json.load(open(base + ".json"))
         bev = ag.stitch(frame, lut)
+        if a.save_bev:
+            Image.fromarray(bev.astype(np.uint8)).save(os.path.join(a.out, f"{sess}_{fr:05d}_bev.png"))
         rgb = bev.astype(np.int64)
         argb = ((0xFF << 24) | (rgb[..., 0] << 16) | (rgb[..., 1] << 8) | rgb[..., 2]).reshape(-1)
         res = pp.road_extract(argb, W, H, MPP, CX, CY, EGO, P=LOOSE, ipm=ipm)
         dev = [dict(k=l["k"], d=bool(l.get("d")), x1=l["x1"], z1=l["z1"], x2=l["x2"], z2=l["z2"], src="dev") for l in meta.get("lines", [])]
+        mdl = []
+        if net is not None:
+            import torch
+            probs = np.zeros((4, 272, 480), np.float32)
+            for q in range(4):
+                ox, oy = (q % 2) * 960, (q // 2) * 540
+                im = Image.fromarray(frame[oy:oy + 540, ox:ox + 960]).resize((480, 270), Image.BILINEAR)
+                x = np.zeros((272, 480, 3), np.float32); x[:270] = np.asarray(im, np.float32) / 255.0
+                t = (torch.from_numpy(x).permute(2, 0, 1) - T.MEAN) / T.STD
+                with torch.no_grad():
+                    probs[q] = torch.softmax(net(t[None]), 1)[0, 1].numpy()
+            bp = np.where(valid_l, probs[q_of, v_of, u_of], 0.0).reshape(H, W)
+            # 模型說是線的地方畫成白漆、其他灰色，丟給同一套找線程式
+            syn = np.where(bp >= 0.5, 230, 80).astype(np.int64)
+            sargb = ((0xFF << 24) | (syn << 16) | (syn << 8) | syn).reshape(-1)
+            rm = pp.road_extract(sargb, W, H, MPP, CX, CY, EGO, P=pp.TUNED, ipm=ipm)
+            mdl = [dict(k=l["k"], d=bool(l["d"]), x1=l["x1"], z1=l["z1"], x2=l["x2"], z2=l["z2"], src="model") for l in rm["lines"]]
         loose = [dict(k=l["k"], d=bool(l["d"]), x1=l["x1"], z1=l["z1"], x2=l["x2"], z2=l["z2"], src="loose") for l in res["lines"]]
-        cands = dedupe(dev + loose)
+        cands = dedupe(dev + mdl + loose)
         for i, c in enumerate(cands):
             c["id"] = i + 1
         # ── 檢查圖 ──

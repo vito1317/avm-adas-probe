@@ -52,10 +52,14 @@ class DS(torch.utils.data.Dataset):
             # 縮小：影像雙線性；遮罩先把「線」加粗一點再最近鄰縮，細線才不會縮到消失
             im = im.resize(self.size, Image.BILINEAR)
             ma = np.asarray(mk)
-            line = Image.fromarray(((ma == 1) * 255).astype(np.uint8)).resize(self.size, Image.BILINEAR)
             ign = Image.fromarray(((ma == 255) * 255).astype(np.uint8)).resize(self.size, Image.NEAREST)
             m2 = np.zeros((self.size[1], self.size[0]), np.uint8)
-            m2[np.asarray(ign) > 127] = 255; m2[np.asarray(line) > 60] = 1
+            m2[np.asarray(ign) > 127] = 255
+            # 整塊的（斑馬線 2、網狀線 3）照比例縮；細線（車道線 1、停車格線 4）放寬一點才不會縮到消失，最後畫
+            for c, thr in [(2, 127), (3, 127), (4, 60), (1, 60)]:
+                if (ma == c).any():
+                    r = Image.fromarray(((ma == c) * 255).astype(np.uint8)).resize(self.size, Image.BILINEAR)
+                    m2[np.asarray(r) > thr] = c
             mk = Image.fromarray(m2)
         img = np.asarray(im, np.float32) / 255.0
         m = np.asarray(mk, np.int64)
@@ -84,7 +88,8 @@ def metrics(logits, m):
     p = logits.argmax(1)
     valid = m != 255
     out = {}
-    for c, n in [(1, "line")]:
+    for c, n in [(1, "line"), (2, "crosswalk"), (3, "boxjunc"), (4, "slot")]:
+        if c >= logits.shape[1]: break
         tp = ((p == c) & (m == c) & valid).sum().item(); fp = ((p == c) & (m != c) & valid).sum().item(); fn = ((p != c) & (m == c)).sum().item()
         out[n] = (tp, fp, fn)
     return out
@@ -96,6 +101,7 @@ def main():
     ap.add_argument("--extra", default=None, help="額外的訓練資料夾（全部拿來訓練、不進驗證），例：細化後的 WoodScape")
     ap.add_argument("--repeat", type=int, default=1, help="自己的訓練資料重複幾次（跟大量的 --extra 混時平衡用）")
     ap.add_argument("--size", default=None, help="訓練尺寸 寬x高（例 224x128；要能被 16 整除）")
+    ap.add_argument("--classes", type=int, default=2, help="類別數：2 = 背景／車道線；5 = 再加斑馬線、網狀線、停車格線")
     ap.add_argument("--init", default=None, help="從這個權重接著訓練（例：WoodScape 預訓練的 best.pt）")
     ap.add_argument("--epochs", type=int, default=40); ap.add_argument("--bs", type=int, default=16); ap.add_argument("--lr", type=float, default=2e-3)
     a = ap.parse_args()
@@ -112,13 +118,13 @@ def main():
     sz = tuple(int(v) for v in a.size.split("x")) if a.size else None
     dl = torch.utils.data.DataLoader(DS(a.data, tr, True, sz), batch_size=a.bs, shuffle=True, num_workers=6, drop_last=True)
     dv = torch.utils.data.DataLoader(DS(a.data, va, False, sz), batch_size=a.bs, num_workers=6)
-    net = LaneNet()
+    net = LaneNet(n_cls=a.classes)
     if a.init:
         net.load_state_dict(torch.load(a.init, map_location="cpu")); print("從", a.init, "接著訓練")
     net = net.to(dev)
     opt = torch.optim.AdamW(net.parameters(), lr=a.lr, weight_decay=1e-4)
     sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=a.lr, total_steps=a.epochs * max(1, len(dl)))
-    wts = torch.tensor([1.0, 8.0], device=dev)       # 線很細、很少：加權
+    wts = torch.tensor([1.0, 8.0, 3.0, 3.0, 8.0][:a.classes], device=dev)       # 線很細、很少：加權；斑馬線、網狀線是整塊，權重低一點
     best, log = -1.0, []
     for ep in range(a.epochs):
         net.train(); t0 = time.time(); tl = 0.0
@@ -127,7 +133,8 @@ def main():
             lo = net(x)
             loss = F.cross_entropy(lo, m, weight=wts, ignore_index=255)
             opt.zero_grad(); loss.backward(); opt.step(); sched.step(); tl += loss.item()
-        net.eval(); agg = {"line": [0, 0, 0]}
+        names = ["line", "crosswalk", "boxjunc", "slot"][:a.classes - 1]
+        net.eval(); agg = {k: [0, 0, 0] for k in names}
         with torch.no_grad():
             for x, m in dv:
                 r = metrics(net(x.to(dev)).cpu(), m)
@@ -135,9 +142,10 @@ def main():
         f1 = {}
         for k, (tp, fp, fn) in agg.items():
             pr = tp / max(1, tp + fp); rc = tp / max(1, tp + fn); f1[k] = (2 * pr * rc / max(1e-9, pr + rc), pr, rc)
-        score = f1["line"][0]
+        score = f1["line"][0] * 0.7 + (sum(f1[k][0] for k in names[1:]) / max(1, len(names) - 1)) * 0.3 if len(names) > 1 else f1["line"][0]
         log.append(dict(epoch=ep + 1, loss=tl / max(1, len(dl)), f1=f1))
-        print(f"ep {ep + 1:3d} loss {tl / max(1, len(dl)):.3f}  線 F1 {f1['line'][0]:.3f}（精確 {f1['line'][1]:.2f}、召回 {f1['line'][2]:.2f}）"
+        extra = "".join(f"  {k} {f1[k][0]:.2f}" for k in names[1:])
+        print(f"ep {ep + 1:3d} loss {tl / max(1, len(dl)):.3f}  線 F1 {f1['line'][0]:.3f}（精確 {f1['line'][1]:.2f}、召回 {f1['line'][2]:.2f}）{extra}"
               f"  {time.time() - t0:.0f}s", flush=True)
         if score > best:
             best = score; torch.save(net.state_dict(), os.path.join(a.out, "best.pt"))

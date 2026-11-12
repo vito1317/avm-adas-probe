@@ -48,4 +48,30 @@ class ParkingLotStateTest {
         assertTrue(ParkingLotState().update(0, 0f, 'R', 0f))
         assertTrue(ParkingLotState().update(0, 0f, 'P', 0f))
     }
+
+    @Test fun leavingSlowlyIntoCityStreetWithLanesExits() {
+        // 實車：開出停車場後市區慢慢開（< 20 km/h），以前一直當停車場、不畫道路線
+        val s = ParkingLotState()
+        run(s, 0, 2_000, 0f, gear = 'R')
+        assertTrue(run(s, 2_100, 3_000, 0f, gear = 'P'))
+        val street = ParkingLotState.Clues(longLanes = true)
+        assertFalse("兩旁有車道線開一段就離開", run(s, 3_100, 15_000, 15f, clues = street))
+    }
+
+    @Test fun drivingFarWithoutLotSignsExits() {
+        val s = ParkingLotState()
+        run(s, 0, 1_000, 0f, gear = 'P')
+        // 15 km/h 一直開、沒有格子、沒打大方向盤、也沒有明顯車道線（巷子）：開超過 150 m 就離開
+        assertTrue("才開 40 m 還在", run(s, 1_100, 10_000, 15f))
+        assertFalse("開了 160 m 離開", run(s, 10_100, 40_000, 15f))
+    }
+
+    @Test fun circlingInsideLotStays() {
+        val s = ParkingLotState()
+        run(s, 0, 1_000, 0f, gear = 'R')
+        // 停車場裡繞：常常大角度轉彎、看得到格子 → 開很久也還在
+        var t = 1_100L; var r = true
+        repeat(12) { r = run(s, t, t + 4_000, 10f, steer = if (it % 2 == 0) 300f else 0f, clues = ParkingLotState.Clues(slots = 3)); t += 4_100 }
+        assertTrue(r)
+    }
 }

@@ -24,6 +24,7 @@ class BoxJunctionDetector {
         const val DENSITY_MAX = 0.55
         const val PEAK_FRAC = 0.18
         const val DIAG_MIN_DEG = 20.0
+        const val PAINT_DY = 22
         private const val BINS = 12
 
         fun isYellow(c: Int): Boolean {
@@ -41,11 +42,20 @@ class BoxJunctionDetector {
 
     fun detect(argb: IntArray, w: Int, h: Int, mpp: Float, cx: Float, cy: Float, valid: BooleanArray?, exclude: List<FloatArray>): List<Box> {
         val n = w * h; val m = mpp.toDouble()
+        // 黃漆要比周圍 1 m 的路面亮一截（晚上鈉燈把整片路面照黃，以前整片被當成網狀線）
+        val lum = IntArray(n) { val c = argb[it]; (77 * ((c shr 16) and 255) + 150 * ((c shr 8) and 255) + 29 * (c and 255)) shr 8 }
+        val W1 = w + 1
+        val integ = LongArray(W1 * (h + 1))
+        for (j in 0 until h) { var rs = 0L; for (i in 0 until w) { rs += lum[j * w + i]; integ[(j + 1) * W1 + i + 1] = integ[j * W1 + i + 1] + rs } }
+        val hr = max(2, (0.5 / m).toInt())
         val yel = BooleanArray(n)
         for (j in 0 until h) for (i in 0 until w) {
             val p = j * w + i
             if (valid != null && !valid[p]) continue
             if (!isYellow(argb[p])) continue
+            val i0 = max(0, i - hr); val i1 = min(w, i + hr + 1); val j0 = max(0, j - hr); val j1 = min(h, j + hr + 1)
+            val mean = (integ[j1 * W1 + i1] - integ[j0 * W1 + i1] - integ[j1 * W1 + i0] + integ[j0 * W1 + i0]) / ((i1 - i0) * (j1 - j0))
+            if (lum[p] < mean + PAINT_DY) continue
             val x = (i + 0.5 - cx) * m; val z = (cy - j - 0.5) * m
             if (exclude.any { x >= it[0] && x <= it[2] && z >= it[1] && z <= it[3] }) continue
             yel[p] = true

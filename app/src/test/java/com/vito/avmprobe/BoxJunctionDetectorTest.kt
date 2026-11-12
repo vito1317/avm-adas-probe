@@ -45,4 +45,10 @@ class BoxJunctionDetectorTest {
         paint(a) { x, z -> x in -2f..2f && z in 3f..6f }        // 整片黃（例如黃色車、招牌倒影）
         assertTrue(BoxJunctionDetector().detect(a, W, H, MPP, CX, CY, null, ego).isEmpty())
     }
+
+    @Test fun sodiumLitRoadIsNotHatch() {
+        // 晚上鈉燈：整片路面偏黃（有些亮暗起伏），沒有漆
+        val a = IntArray(W * H) { val k = (it * 7919 % 23); (0xFF shl 24) or ((150 + k) shl 16) or ((115 + k) shl 8) or (40 + k / 2) }
+        assertTrue(BoxJunctionDetector().detect(a, W, H, MPP, CX, CY, null, ego).isEmpty())
+    }
 }

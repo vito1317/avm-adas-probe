@@ -921,7 +921,7 @@ class AdasPipeline(
                 cones = coneDet.detect(buf, bw, bh, mpp, cx, cy, excl); conesAt = now
                 // 停車格：用比較大的俯視圖（看得遠一點），記住跑出畫面的格子並依自車移動推算位置
                 val (mdz, myaw) = takeEgoMotion()
-                slotTrack.egoMotion(mdz, myaw); slotSelection.egoMotion(mdz, myaw)
+                slotTrack.egoMotion(mdz, myaw); slotSelection.egoMotion(mdz, myaw); roadTrack.egoMotion(mdz, myaw)
                 Crumbs.at(Crumbs.GROUND, "slots")
                 val sb = slotBuf.takeIf { !Crumbs.off("slotbev") }
                 val sg = slotGeo

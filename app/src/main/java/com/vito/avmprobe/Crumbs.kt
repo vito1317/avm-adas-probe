@@ -17,7 +17,7 @@ import java.nio.channels.FileChannel
 object Crumbs {
     const val HEALTHY_MS = 60_000L
     /** 足跡裡標明是哪一版（跟發佈的版號一致）。 */
-    const val BUILD = "m-v103"
+    const val BUILD = "m-v104"
     private const val SLOT = 96
     private const val SLOTS = 7
     private const val HEAD = 16

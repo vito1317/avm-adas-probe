@@ -1243,13 +1243,40 @@ class RoadExtractor {
  */
 class RoadTracker {
     private class Track(
-        val kind: Char, var ang: Double, var off: Double, var sMin: Double, var sMax: Double,
+        var kind: Char, var ang: Double, var off: Double, var sMin: Double, var sMax: Double,
         var conf: Double, var dashP: Double, var k: Double, var last: Long, var hist: Int
     ) {
         /** 已經穩定（最近 5 次有 3 次對到）→ 開始輸出，之後一直輸出到軌跡被丟掉為止（不跟著單幀漏抓閃爍）。 */
         var shown = false
         /** 虛／實線判定加遲滯：dashP > 0.65 才變虛線、< 0.35 才變回實線，不會一幀一幀跳。 */
         var dashed = dashP >= 0.5
+        /** 顏色投票（白／黃／紅次數，EMA）：晚上燈光讓同一條線一下白一下黃，以前拆成兩條軌跡一閃一閃 */
+        val kindP = DoubleArray(3)
+    }
+
+    /**
+     * 自車移動了（前進 [dz] 公尺、轉了 [dyaw] 弧度）：先把每條軌跡搬到新的車身座標再配對
+     * （以前沒有：轉彎、換車道時線落後、跟著雜訊抖）。座標換算同 [SlotSelection.egoMotion]。
+     */
+    fun egoMotion(dz: Float, dyaw: Float) {
+        if (dz == 0f && dyaw == 0f) return
+        val c = cos(dyaw.toDouble()); val sn = sin(dyaw.toDouble())
+        for (t in tracks) {
+            val pr = Math.toRadians(t.ang); val ca = cos(pr); val sa = sin(pr)
+            fun mv(sv: Double): DoubleArray {
+                val x = t.off * ca + sv * sa; val z = -t.off * sa + sv * ca - dz
+                return doubleArrayOf(x * c - z * sn, x * sn + z * c)
+            }
+            val p0 = mv(t.sMin); val p1 = mv(t.sMax)
+            var ang = Math.toDegrees(atan2(p1[0] - p0[0], p1[1] - p0[1]))
+            var a = p0; var b = p1
+            if (ang >= 90.0) { ang -= 180.0; a = p1; b = p0 } else if (ang < -90.0) { ang += 180.0; a = p1; b = p0 }
+            val r = Math.toRadians(ang); val cc = cos(r); val ss = sin(r)
+            t.ang = ang
+            t.off = a[0] * cc - a[1] * ss
+            val s0 = a[0] * ss + a[1] * cc; val s1 = b[0] * ss + b[1] * cc
+            t.sMin = min(s0, s1); t.sMax = max(s0, s1)
+        }
     }
 
     private val tracks = ArrayList<Track>()
@@ -1291,7 +1318,7 @@ class RoadTracker {
             var bestCost = Double.MAX_VALUE
             for (ti in 0 until nOld) {
                 val t = tracks[ti]
-                if (used[ti] || t.kind != L.kind) continue
+                if (used[ti]) continue                        // 白／黃不分開配對（顏色用投票）
                 val da = RoadExtractor.wrap90(ang - t.ang)
                 if (abs(da) >= MATCH_DEG) continue
                 // ±90° 交界：同一條線的另一種表示法 (φ±180, -d)
@@ -1304,7 +1331,7 @@ class RoadTracker {
             }
             if (bestI < 0) {
                 tracks.add(Track(L.kind, ang, off, min(sa, sb), max(sa, sb), L.conf.toDouble(),
-                    if (L.dashed) 1.0 else 0.0, kk, nowMs, 1))
+                    if (L.dashed) 1.0 else 0.0, kk, nowMs, 1).also { it.kindP["wyr".indexOf(L.kind).coerceAtLeast(0)] = 1.0 })
                 continue
             }
             used[bestI] = true
@@ -1322,6 +1349,10 @@ class RoadTracker {
             t.conf += ALPHA * (L.conf - t.conf)
             t.dashP += ALPHA * ((if (L.dashed) 1.0 else 0.0) - t.dashP)
             t.k += ALPHA * (k2 - t.k)
+            val ki = "wyr".indexOf(L.kind).coerceAtLeast(0)
+            for (q in 0..2) t.kindP[q] += 0.2 * ((if (q == ki) 1.0 else 0.0) - t.kindP[q])
+            val best = (0..2).maxByOrNull { t.kindP[it] }!!
+            if (t.kindP[best] > t.kindP["wyr".indexOf(t.kind).coerceAtLeast(0)] + 0.15) t.kind = "wyr"[best]
             if (t.ang >= 90.0) { t.ang -= 180.0; flipTrack(t) } else if (t.ang < -90.0) { t.ang += 180.0; flipTrack(t) }
             t.last = nowMs
             t.hist = t.hist or 1

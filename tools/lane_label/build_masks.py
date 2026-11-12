@@ -27,6 +27,8 @@ LINE_W = 4                   # 線寬（輸出像素）
 # 第一版不分顏色：夜間尾燈／路燈把白線照成黃橘色，審查者也分不準（同一段路兩批標成不同顏色）。
 # 模型只學「哪裡有線」（1），顏色交給後面的程式在線上取色判斷。要分顏色時改回 {"w": 1, "y": 2}。
 CLS = {"w": 1, "y": 1}
+# 第二輪：區域類別（審查留下的 regions）。車道線 1、斑馬線 2（整塊）、網狀線 3（整塊）、停車格線 4（外框）
+REGION_CLS = {"cw": 2, "bj": 3, "slots": 4}
 
 
 def known_region(geo):
@@ -99,6 +101,23 @@ def main():
                 gnd = ground_cache[sess][q]
                 m[gnd] = 255
             mi = Image.fromarray(m); d = ImageDraw.Draw(mi)
+            # 區域先畫（車道線最後畫，蓋在上面）
+            regs = {r["id"]: r for r in cand.get("regions", [])}
+            for rid in L.get("keep_regions", []):
+                r = regs.get(rid)
+                if r is None: continue
+                cls = REGION_CLS.get(r["type"]); p = r["p"]
+                xs, zs = [], []
+                for i in range(4):
+                    x0, z0, x1, z1 = p[i * 2], p[i * 2 + 1], p[(i + 1) % 4 * 2], p[(i + 1) % 4 * 2 + 1]
+                    t = np.linspace(0, 1, 40, endpoint=False); xs += list(x0 + (x1 - x0) * t); zs += list(z0 + (z1 - z0) * t)
+                u, v, th, ok, _ = ag.ground_to_pixel(cam, np.array(xs), np.array(zs), 960, 540)
+                pts = [(uu / 2.0, vv / 2.0) for uu, vv, kk in zip(u, v, ok) if kk]
+                if len(pts) < 3: continue
+                if r["type"] == "slots":
+                    d.line(pts + [pts[0]] if len(pts) == len(xs) else pts, fill=cls, width=LINE_W)
+                else:
+                    d.polygon(pts, fill=cls)
             for cid, kind in L.get("keep", {}).items():
                 c = byid.get(str(cid))
                 if c is None: continue
