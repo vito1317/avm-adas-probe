@@ -39,3 +39,6 @@ app/src/test/java/com/vito/avmprobe/LocalSlotProbeTest.kt
 
 # 車道線模型（實車資料訓練；用 WoodScape 預訓練的不得散布）只放私有 release
 app/src/main/assets/lane_seg.tflite
+app/src/test/java/com/vito/avmprobe/LocalRegionProbeTest.kt
+# 魚眼物件偵測模型（WoodScape＋實車資料微調，不得散布）只放私有 release
+app/src/main/assets/model_fisheye_*

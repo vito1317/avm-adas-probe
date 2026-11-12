@@ -185,7 +185,8 @@ object Engine360Settings {
         }
         check("停好車（P 檔＋手煞車）問要不要升窗、鎖車", { prefs.cyParkPrompt }) { prefs.cyParkPrompt = it }
 
-        section("溫度（太熱自動降速，避免車機過熱重開機）")
+        section("溫度")
+        check("太熱自動降速（減少偵測次數、關車道線模型；可避免過熱重開機）", { prefs.thermalThrottle }) { prefs.thermalThrottle = it; ThermalGovernor.enabled = it }
         val thInfo = TextView(act).apply { setTextColor(0xFFB0B8C4.toInt()); textSize = 13f; text = ThermalGovernor.status() }
         col.addView(thInfo)
         thInfo.postDelayed(object : Runnable { override fun run() { ThermalGovernor.poll(); thInfo.text = ThermalGovernor.status(); if (thInfo.isAttachedToWindow) thInfo.postDelayed(this, 2000) } }, 500)

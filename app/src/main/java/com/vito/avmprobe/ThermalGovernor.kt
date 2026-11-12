@@ -19,6 +19,9 @@ object ThermalGovernor {
     private val UP = intArrayOf(80, 90, 98)          // 進入第 1、2、3 級的溫度
     private const val HYST = 3
 
+    /** 關掉時只讀溫度給設定頁看，不降速（使用者要求預設關；設定頁可再打開）。 */
+    @Volatile var enabled = false
+        set(v) { field = v; if (!v) level = 0 }
     @Volatile var level = 0; private set
     @Volatile var tempC = -1; private set
     private var zone: File? = null
@@ -39,6 +42,7 @@ object ThermalGovernor {
         val z = zone ?: findZone() ?: return
         val t = try { z.readText().trim().toInt() / 1000 } catch (_: Throwable) { return }
         tempC = t
+        if (!enabled) { level = 0; return }
         var lv = level
         while (lv < 3 && t >= UP[lv]) lv++
         while (lv > 0 && t < UP[lv - 1] - HYST) lv--
@@ -57,6 +61,6 @@ object ThermalGovernor {
     }
 
     /** 設定頁顯示。 */
-    fun status(): String = if (tempC < 0) "讀不到 CPU 溫度" else
+    fun status(): String = if (tempC < 0) "讀不到 CPU 溫度" else if (!enabled) "CPU ${tempC}°C・不降速（已關閉）" else
         "CPU ${tempC}°C・" + arrayOf("正常", "溫（偵測減半）", "熱（再減半、關車道線模型）", "過熱（只留基本偵測）")[level]
 }

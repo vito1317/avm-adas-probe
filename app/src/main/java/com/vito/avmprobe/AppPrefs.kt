@@ -13,7 +13,13 @@ class AppPrefs(context: Context) {
     private val sp: SharedPreferences =
         context.getSharedPreferences("avm_probe", Context.MODE_PRIVATE)
 
+    /** assets 裡有沒有魚眼微調版物件模型（列 assets 不便宜，只看一次）。 */
+    private val hasFishModel: Boolean by lazy {
+        try { context.assets.list("")?.contains(FISH_MODEL) == true } catch (_: Throwable) { false }
+    }
+
     companion object {
+        const val FISH_MODEL = "model_fisheye_320.tflite"
         /** 正常版面的俯視對位（俯視圖在左邊那格）：自動／手動對位只有這種才當全域預設。 */
         fun normalTopLayout(t: AnnotationMapper.Params) =
             t.clipL < 0.05f && t.clipR in 0.28f..0.42f && t.scale in 0.07f..0.13f && t.cx in 0.10f..0.26f
@@ -33,6 +39,7 @@ class AppPrefs(context: Context) {
         private fun displayName(file: String): String {
             val size = inputSizeOf(file)
             return when {
+                file.contains("fisheye") -> "魚眼微調 $size"
                 file.contains("o365") -> "車種細分 $size"          // Objects365：多箱型車、三角錐，較慢
                 file.contains("int8") -> "$size int8"
                 else -> file.removePrefix("model_").removeSuffix(".tflite")
@@ -49,7 +56,17 @@ class AppPrefs(context: Context) {
     }
 
     var model: String
-        get() = sp.getString("model", "model_320.tflite")!!
+        get() {
+            // 有魚眼微調版就預設用它；原本停在舊預設（COCO 320）的也換過去一次，自己選別的模型的不動
+            val fish = FISH_MODEL
+            val hasFish = hasFishModel
+            val cur = sp.getString("model", null)
+            if (hasFish && !sp.getBoolean("modelFishMigrated", false)) {
+                sp.edit().putBoolean("modelFishMigrated", true).apply()
+                if (cur == null || cur == "model_320.tflite") { sp.edit().putString("model", fish).apply(); return fish }
+            }
+            return cur ?: if (hasFish) fish else "model_320.tflite"
+        }
         set(v) = sp.edit().putString("model", v).apply()
 
     /** true=GPU delegate；false=CPU 4 執行緒（XNNPACK，int8 模型常較快）。 */
@@ -297,6 +314,11 @@ class AppPrefs(context: Context) {
         get() = sp.getBoolean("laneModel", true)
         set(v) = sp.edit().putBoolean("laneModel", v).apply()
     /** 前／後鏡頭展開畫面跟著方向盤轉（原廠動態輔助線）時，標注也跟著轉。 */
+    /** 依 CPU 溫度降速（偵測次數、車道線模型）。使用者要求預設關。 */
+    var thermalThrottle: Boolean
+        get() = sp.getBoolean("thermalThrottle", false)
+        set(v) = sp.edit().putBoolean("thermalThrottle", v).apply()
+
     var fpvFollowWheel: Boolean
         get() = sp.getBoolean("fpvFollowWheel", true)
         set(v) = sp.edit().putBoolean("fpvFollowWheel", v).apply()
