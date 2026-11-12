@@ -44,6 +44,13 @@ class Yolo(
     private val iouThreshold: Float = 0.45f,
     useGpu: Boolean = true
 ) {
+    /**
+     * 魚眼微調版：兩輪車訓練樣本少、分數偏低 → 機車／腳踏車門檻降到 0.15
+     * （驗證：抓到率 0.13 → 0.31、準確率 0.87；其他類別照 [confThreshold]）。
+     */
+    private val lowTwoWheel = modelAsset.contains("fisheye")
+    private val minConf = if (lowTwoWheel) minOf(0.15f, confThreshold) else confThreshold
+
     companion object {
         private const val TAG = "Yolo"
 
@@ -221,8 +228,9 @@ class Yolo(
                 val s = feat(4 + c)
                 if (s > bestScore) { bestScore = s; bestCls = c }
             }
-            if (bestScore < confThreshold) continue
+            if (bestScore < minConf) continue
             val type = types.getOrNull(bestCls) ?: continue
+            if (bestScore < confThreshold && !(lowTwoWheel && (type == "moto" || type == "bigbike" || type == "bike"))) continue
 
             // 座標：相容「像素(0..inputSize)」與「正規化(0..1)」兩種輸出
             var cx = feat(0); var cy = feat(1); var w = feat(2); var h = feat(3)
