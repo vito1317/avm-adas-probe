@@ -23,9 +23,16 @@ def main():
     for k in ["review", "grids", "results", "ws", "out"]: ap.add_argument("--" + k, required=True)
     ap.add_argument("--ws_frac", type=float, default=1.0, help="WoodScape 用多少比例")
     a = ap.parse_args()
-    grids = {g["grid"]: g["cells"] for g in json.load(open(os.path.join(a.grids, "grids.json")))}
+    # 可以給好幾輪（逗號分隔，--grids 與 --results 一一對應）；後面的輪次覆蓋前面（重審過的裁切以新的為準）
     rev = {}
-    for f in glob.glob(os.path.join(a.results, "*.jsonl")):
+    for gdir, rdir in zip(a.grids.split(","), a.results.split(",")):
+        _load(gdir, rdir, rev)
+    _build(a, rev)
+
+
+def _load(gdir, rdir, rev):
+    grids = {g["grid"]: g["cells"] for g in json.load(open(os.path.join(gdir, "grids.json")))}
+    for f in sorted(glob.glob(os.path.join(rdir, "*.jsonl"))):
         for line in open(f):
             line = line.strip()
             if not line: continue
@@ -35,6 +42,9 @@ def main():
             if not cells: continue
             for k, n in enumerate(cells):
                 if "ABCD"[k] in r: rev[n] = r["ABCD"[k]]
+
+
+def _build(a, rev):
     for s in ("train", "val"):
         for sub in ("images", "labels"):
             d = os.path.join(a.out, sub, s); shutil.rmtree(d, ignore_errors=True); os.makedirs(d)

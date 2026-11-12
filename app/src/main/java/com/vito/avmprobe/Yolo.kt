@@ -46,7 +46,7 @@ class Yolo(
 ) {
     /**
      * 魚眼微調版：兩輪車訓練樣本少、分數偏低 → 機車／腳踏車門檻降到 0.15
-     * （驗證：抓到率 0.13 → 0.31、準確率 0.87；其他類別照 [confThreshold]）。
+     * （第二版驗證：門檻 0.15 時 F1 0.62、0.30 時 0.55；其他類別照 [confThreshold]）。
      */
     private val lowTwoWheel = modelAsset.contains("fisheye")
     private val minConf = if (lowTwoWheel) minOf(0.15f, confThreshold) else confThreshold

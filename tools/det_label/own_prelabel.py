@@ -21,6 +21,11 @@ GATE_PROMPTS = ["boom barrier", "parking gate arm", "barrier arm"]
 QW, QH = 960, 540
 
 
+def _iou(p, q):
+    ix = max(0, min(p[2], q[2]) - max(p[0], q[0])); iy = max(0, min(p[3], q[3]) - max(p[1], q[1])); i = ix * iy
+    return i / ((p[2] - p[0]) * (p[3] - p[1]) + (q[2] - q[0]) * (q[3] - q[1]) - i + 1e-9)
+
+
 def crops_of(frame):
     """→ [(tag, PIL 正方形)]；象限順序 0 前、1 後、2 左、3 右（跟車機 quad 一樣）。"""
     out = []
@@ -38,12 +43,14 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--train", required=True); ap.add_argument("--out", required=True)
     ap.add_argument("--every", type=int, default=8)
+    ap.add_argument("--extra", default="", help="魚眼微調版（補老師漏掉的邊緣車輛；它的框一樣要審查）")
     a = ap.parse_args()
     from ultralytics import YOLO, YOLOWorld
     import torch
     dev = "mps" if torch.backends.mps.is_available() else "cpu"
     det = YOLO("yolo11x.pt")
     world = YOLOWorld("yolov8x-worldv2.pt"); world.set_classes(GATE_PROMPTS)
+    extra = YOLO(a.extra) if a.extra else None
     try: font = ImageFont.truetype("/System/Library/Fonts/Supplemental/Arial Bold.ttf", 16)
     except Exception: font = ImageFont.load_default()
     os.makedirs(a.out, exist_ok=True)
@@ -65,6 +72,13 @@ def main():
             r = det.predict(arr, imgsz=640, conf=0.3, device=dev, verbose=False)[0]
             for b, c, s in zip(r.boxes.xyxy.cpu().tolist(), r.boxes.cls.cpu().tolist(), r.boxes.conf.cpu().tolist()):
                 if int(c) in COCO2OUR: boxes.append(dict(c=COCO2OUR[int(c)], b=[round(v, 1) for v in b], s=round(s, 3)))
+            if extra is not None:
+                r = extra.predict(arr, imgsz=320, conf=0.35, device=dev, verbose=False)[0]
+                for b, c, s in zip(r.boxes.xyxy.cpu().tolist(), r.boxes.cls.cpu().tolist(), r.boxes.conf.cpu().tolist()):
+                    if int(c) == 7: continue
+                    if (b[2] - b[0]) * (b[3] - b[1]) > 0.4 * im.size[0] ** 2: continue
+                    if any(_iou(b, o["b"]) > 0.4 for o in boxes): continue
+                    boxes.append(dict(c=int(c), b=[round(v, 1) for v in b], s=round(s, 3), src="fish"))
             r = world.predict(arr, imgsz=640, conf=0.12, device=dev, verbose=False)[0]
             for b, s in zip(r.boxes.xyxy.cpu().tolist(), r.boxes.conf.cpu().tolist()):
                 w, h = b[2] - b[0], b[3] - b[1]

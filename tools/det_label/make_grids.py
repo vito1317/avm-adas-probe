@@ -14,14 +14,21 @@ CELL = 720
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--review", required=True); ap.add_argument("--out", required=True); ap.add_argument("--batches", type=int, default=8)
+    ap.add_argument("--exclude", default="", help="上一輪的 grids.json（審過的裁切不再審；上一輪標 missing 而重產的除外）")
+    ap.add_argument("--prefix", default="g", help="審查圖名稱字首（每輪不同，避免撞名）")
+    ap.add_argument("--redo", default="", help="要重審的裁切名稱清單（一行一個）")
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
     try: font = ImageFont.truetype("/System/Library/Fonts/Supplemental/Arial Bold.ttf", 40)
     except Exception: font = ImageFont.load_default()
     names = sorted(os.path.basename(f)[:-11] for f in glob.glob(os.path.join(a.review, "*.review.jpg")))
+    if a.exclude:
+        done = {n for g in json.load(open(a.exclude)) for n in g["cells"]}
+        redo = set(open(a.redo).read().split()) if a.redo else set()
+        names = [n for n in names if n not in done or n in redo]
     grids = []
     for gi in range(0, len(names), 4):
-        part = names[gi:gi + 4]; gname = "g%05d" % (gi // 4)
+        part = names[gi:gi + 4]; gname = a.prefix + "%05d" % (gi // 4)
         im = Image.new("RGB", (CELL * 2, CELL * 2), (40, 40, 40)); d = ImageDraw.Draw(im)
         for k, n in enumerate(part):
             x, y = (k % 2) * CELL, (k // 2) * CELL
