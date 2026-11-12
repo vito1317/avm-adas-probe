@@ -21,13 +21,14 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--data", required=True); ap.add_argument("--ckpt", required=True); ap.add_argument("--out", required=True)
     ap.add_argument("--size", default=None, help="模型的輸入尺寸 寬x高（跟訓練一樣）")
+    ap.add_argument("--all", action="store_true", help="index.json 裡全部都當驗證（已經自己切好驗證集時用）")
     ap.add_argument("--thr", type=float, default=0.5); ap.add_argument("--show", type=int, default=8)
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
     dev = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
     net = T.LaneNet(pretrained=False); net.load_state_dict(torch.load(a.ckpt, map_location="cpu")); net.to(dev).eval()
     items = json.load(open(os.path.join(a.data, "index.json")))
-    _, va = T.split(items)
+    _, va = (None, items) if a.all else T.split(items)
     sz = tuple(int(v) for v in a.size.split("x")) if a.size else None
     ds = T.DS(a.data, va, False, sz)
     full = T.DS(a.data, va, False, None)      # 評分一律在原尺寸（480x272）比，縮小版放大回去，容許偏差才一樣

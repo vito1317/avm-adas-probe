@@ -38,8 +38,8 @@ class LaneNet(nn.Module):
 
 
 class DS(torch.utils.data.Dataset):
-    def __init__(self, root, items, aug, size=None):
-        self.root, self.items, self.aug, self.size = root, items, aug, size   # size = (寬, 高)；None = 原本 480x272
+    def __init__(self, root, items, aug, size=None, n_cls=2):
+        self.root, self.items, self.aug, self.size, self.n_cls = root, items, aug, size, n_cls   # size = (寬, 高)；None = 原本 480x272
 
     def __len__(self): return len(self.items)
 
@@ -62,7 +62,9 @@ class DS(torch.utils.data.Dataset):
                     m2[np.asarray(r) > thr] = c
             mk = Image.fromarray(m2)
         img = np.asarray(im, np.float32) / 255.0
-        m = np.asarray(mk, np.int64)
+        m = np.asarray(mk, np.int64).copy()
+        if self.n_cls == 2:
+            m[(m >= 2) & (m != 255)] = 0     # 只學車道線：斑馬線、網狀線、停車格線都當「不是車道線」
         if self.aug:
             # 亮度／對比／色偏（夜間、路燈），小量雜訊；不做翻轉（左右鏡頭幾何不對稱，翻了線的位置就不對）
             img = img * random.uniform(0.6, 1.4) + random.uniform(-0.1, 0.1)
@@ -116,8 +118,8 @@ def main():
         tr = tr + ex
     print(f"訓練 {len(tr)}、驗證 {len(va)} 張（裝置 {dev}）")
     sz = tuple(int(v) for v in a.size.split("x")) if a.size else None
-    dl = torch.utils.data.DataLoader(DS(a.data, tr, True, sz), batch_size=a.bs, shuffle=True, num_workers=6, drop_last=True)
-    dv = torch.utils.data.DataLoader(DS(a.data, va, False, sz), batch_size=a.bs, num_workers=6)
+    dl = torch.utils.data.DataLoader(DS(a.data, tr, True, sz, a.classes), batch_size=a.bs, shuffle=True, num_workers=6, drop_last=True)
+    dv = torch.utils.data.DataLoader(DS(a.data, va, False, sz, a.classes), batch_size=a.bs, num_workers=6)
     net = LaneNet(n_cls=a.classes)
     if a.init:
         net.load_state_dict(torch.load(a.init, map_location="cpu")); print("從", a.init, "接著訓練")

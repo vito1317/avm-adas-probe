@@ -28,7 +28,7 @@ LINE_W = 4                   # 線寬（輸出像素）
 # 模型只學「哪裡有線」（1），顏色交給後面的程式在線上取色判斷。要分顏色時改回 {"w": 1, "y": 2}。
 CLS = {"w": 1, "y": 1}
 # 第二輪：區域類別（審查留下的 regions）。車道線 1、斑馬線 2（整塊）、網狀線 3（整塊）、停車格線 4（外框）
-REGION_CLS = {"cw": 2, "bj": 3, "slots": 4}
+REGION_CLS = {"cw": 2, "bj": 3, "slots": 4, "scooter_box": 4}   # 待轉區樣本太少，先併進停車格線那一類
 
 
 def known_region(geo):
@@ -67,18 +67,23 @@ def main():
     ap.add_argument("--train", required=True); ap.add_argument("--out", required=True)
     a = ap.parse_args()
     os.makedirs(os.path.join(a.out, "img"), exist_ok=True); os.makedirs(os.path.join(a.out, "mask"), exist_ok=True)
-    labels = []
-    for f in sorted(glob.glob(os.path.join(a.labels, "out_*.jsonl"))):
-        for line in open(f):
-            line = line.strip()
-            if line:
-                try: labels.append(json.loads(line))
-                except Exception: pass
+    # 可以給多組（逗號分隔、順序對應）：後面的同名影格蓋掉前面的（重審過的以新的為準）
+    byimg = {}
+    for lab_dir, rev_dir in zip(a.labels.split(","), a.review.split(",")):
+        for f in sorted(glob.glob(os.path.join(lab_dir, "out_*.jsonl"))):
+            for line in open(f):
+                line = line.strip()
+                if not line: continue
+                try: L = json.loads(line)
+                except Exception: continue
+                L["_review"] = rev_dir
+                byimg[L["img"]] = L
+    labels = list(byimg.values())
     geo_cache, known_cache, ground_cache = {}, {}, {}
     index = []
     for L in labels:
         base = L["img"][:-4]
-        cand = json.load(open(os.path.join(a.review, base + ".cand.json")))
+        cand = json.load(open(os.path.join(L["_review"], base + ".cand.json")))
         sess, fr = cand["session"], cand["frame"]
         sd = os.path.join(a.train, sess)
         if sess not in geo_cache:
@@ -106,7 +111,9 @@ def main():
             for rid in L.get("keep_regions", []):
                 r = regs.get(rid)
                 if r is None: continue
-                cls = REGION_CLS.get(r["type"]); p = r["p"]
+                rtype = L.get("relabel", {}).get(rid, r["type"])
+                cls = REGION_CLS.get(rtype); p = r["p"]
+                if cls is None: continue
                 xs, zs = [], []
                 for i in range(4):
                     x0, z0, x1, z1 = p[i * 2], p[i * 2 + 1], p[(i + 1) % 4 * 2], p[(i + 1) % 4 * 2 + 1]
@@ -114,13 +121,15 @@ def main():
                 u, v, th, ok, _ = ag.ground_to_pixel(cam, np.array(xs), np.array(zs), 960, 540)
                 pts = [(uu / 2.0, vv / 2.0) for uu, vv, kk in zip(u, v, ok) if kk]
                 if len(pts) < 3: continue
-                if r["type"] == "slots":
+                if rtype in ("slots", "scooter_box"):
                     d.line(pts + [pts[0]] if len(pts) == len(xs) else pts, fill=cls, width=LINE_W)
                 else:
                     d.polygon(pts, fill=cls)
             for cid, kind in L.get("keep", {}).items():
                 c = byid.get(str(cid))
                 if c is None: continue
+                g = L.get("geom", {}).get(str(cid))       # snap_labels.py 吸附到漆上的位置（有就用）
+                if g: c = dict(c, x1=g[0], z1=g[1], x2=g[2], z2=g[3])
                 cls = CLS.get(kind[0], 1)
                 t = np.linspace(0, 1, 200)
                 gx = c["x1"] + (c["x2"] - c["x1"]) * t; gz = c["z1"] + (c["z2"] - c["z1"]) * t

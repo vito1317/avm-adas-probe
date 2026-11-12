@@ -92,6 +92,19 @@ class AdasPipeline(
     private var lutKey = 0L
     private var slotIdx = 0
     private val camResults = HashMap<String, CamResult>()
+    /** 每個偵測位置兩次更新的間隔（EMA，ms）：降溫降速時每顆鏡頭隔很久才再偵測一次。 */
+    private val camGap = HashMap<String, Float>()
+
+    private fun putCamResult(slot: String, r: CamResult) {
+        camResults[slot]?.let { old -> val g = (r.at - old.at).toFloat(); camGap[slot] = camGap[slot]?.let { it * 0.7f + g * 0.3f } ?: g }
+        camResults[slot] = r
+    }
+
+    /**
+     * 這個位置的偵測結果保留多久：至少 [OBJ_TTL_MS]，間隔變長就跟著拉長（間隔的 2.2 倍）。
+     * 實車：車機太熱降速後，後鏡頭要隔將近 4 秒才再偵測一次，結果 1.3 秒就過期 → 框一直閃。
+     */
+    private fun ttlFor(slot: String): Long = maxOf(OBJ_TTL_MS, ((camGap[slot] ?: 0f) * 2.2f).toLong()).coerceAtMost(6000L)
     private var tl: TlResult? = null
     private val trackMgr = TrackManager(camPos = TrackManager.DEFAULT_CAMS.mapValues { it.value.copyOf(2) })
     private val lca = LaneChangeAssist()
@@ -388,7 +401,7 @@ class AdasPipeline(
             if (w[3] > 0f) tDets.add(Det(d.type, w[0], w[1], d.score, cam = name, atMs = atMs))
             boxes.add(QuadOverlayView.Box(RectF(d.rect), "${NAMES[d.type] ?: d.label} ${"%.1f".format(w[2])}m", w[2] < 1.2f))
         }
-        camResults[slot] = CamResult(now, objs, boxes)
+        putCamResult(slot, CamResult(now, objs, boxes))
         afterDetections(tDets, vs, now)
     }
 
@@ -603,7 +616,7 @@ class AdasPipeline(
             objs.add(WObj(d.type, w[0], w[1], d.score, w[2]))
             if (w[3] > 0f) tDets.add(Det(d.type, w[0], w[1], d.score, cam = "front", atMs = atMs))
         }
-        camResults[slot] = CamResult(now, objs, emptyList())
+        putCamResult(slot, CamResult(now, objs, emptyList()))
         // 前車燈號：用窄角（看得比較大）那一格；正前方（框中心在畫面中間 30%）最近的那台車
         // 車子轉向角速度（遠處景物的橫向平移）→ 道路彎度
         if (slot == "front:w" && !Crumbs.off("vyaw")) try {
@@ -810,7 +823,7 @@ class AdasPipeline(
 
     private fun currentObjects(now: Long): List<WObj> {
         val all = ArrayList<WObj>()
-        for (r in camResults.values) if (now - r.at < OBJ_TTL_MS) all.addAll(r.objs)
+        for ((slot, r) in camResults) if (now - r.at < ttlFor(slot)) all.addAll(r.objs)
         all.sortByDescending { it.c }
         val kept = ArrayList<WObj>()
         for (o in all) if (kept.none { sameObject(it, o) }) kept.add(o)
@@ -1346,8 +1359,15 @@ class AdasPipeline(
      */
     private fun steepFilter(r: RoadResult, kmh: Float?): RoadResult {
         if ((kmh ?: 0f) < 40f) return r
-        val keep = r.lines.filter { l -> val dx = abs(l.x2 - l.x1); val dz = abs(l.z2 - l.z1); dx <= dz * 0.466f }   // tan 25°
-        return if (keep.size == r.lines.size) r else r.copy(lines = keep)
+        var keep = r.lines.filter { l -> val dx = abs(l.x2 - l.x1); val dz = abs(l.z2 - l.z1); dx <= dz * 0.466f }   // tan 25°
+        // 國道最左邊（內側）的邊線是黃色實線（使用者確認）：晚上在燈光下常被認成白線，
+        // 時速 60 以上，自車左側最外面那條實線就當黃線（不然會誤報「白實線禁止變換車道」）
+        if ((kmh ?: 0f) >= 60f) {
+            fun xAt0(l: RoadLine) = if (abs(l.z2 - l.z1) > 0.1f) l.x1 + (0f - l.z1) * (l.x2 - l.x1) / (l.z2 - l.z1) else (l.x1 + l.x2) / 2f
+            val left = keep.filter { !it.dashed && xAt0(it) < -1.0f }.minByOrNull { xAt0(it) }
+            if (left != null && left.kind == 'w') keep = keep.map { if (it === left) it.copy(kind = 'y') else it }
+        }
+        return if (keep == r.lines) r else r.copy(lines = keep)
     }
     @Volatile private var gearCur: Char? = null
     /** P 檔或在停車場：方向燈不當成要變道（停車場裡打燈、打雙閃不出變道提示、盲點警示） */
