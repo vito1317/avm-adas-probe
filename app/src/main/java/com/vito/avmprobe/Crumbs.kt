@@ -17,7 +17,7 @@ import java.nio.channels.FileChannel
 object Crumbs {
     const val HEALTHY_MS = 60_000L
     /** 足跡裡標明是哪一版（跟發佈的版號一致）。 */
-    const val BUILD = "m-v110"
+    const val BUILD = "m-v111"
     private const val SLOT = 96
     private const val SLOTS = 7
     private const val HEAD = 16
@@ -27,7 +27,7 @@ object Crumbs {
 
     /** 出事可以自動停用的功能（名稱 → 說明）。 */
     val SKIPPABLE = linkedMapOf(
-        "orient" to "車頭朝向模型（3D 畫面上別台車的方向）",
+        "orient" to "車頭朝向模型（3D 畫面上別台車的方向）", "arrow" to "路面箭頭（車道用途）", "tlnet" to "紅綠燈燈號模型",
         "tts" to "語音提示（初始化）", "speak" to "語音提示（念）", "slotbev" to "停車格大範圍俯視圖",
         "aids" to "駕駛／停車輔助", "turnopen" to "轉彎轉進空地", "vshift" to "周圍車輛判斷變道",
         "vyaw" to "前方畫面轉向", "cutin" to "切入偵測", "lead" to "前車燈號", "door" to "車門狀態",

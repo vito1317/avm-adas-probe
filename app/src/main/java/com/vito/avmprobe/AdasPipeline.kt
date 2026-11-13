@@ -51,6 +51,9 @@ class AdasPipeline(
         private const val OBJ_TTL_MS = 1300L
         // 車頭朝向模型：信心（8 個方向機率的向量長度）≥ 0.7 才用（驗證：涵蓋約 35%，誤差 60° 內 88%、前後顛倒 7%；再加每台車平滑）
         private const val ORIENT_MIN_CONF = 0.7f
+        // 路面箭頭：每 6 幀跑一次、機率 0.8 以上才算（驗證：有無箭頭準確率約 0.7；再加道路記憶要多次一致才顯示）
+        private const val ARROW_EVERY = 6L
+        private const val ARROW_MIN_PROB = 0.8f
         private const val TL_TTL_MS = 1200L
         private const val BEV_TTL_MS = 1500L
         private const val OBS_TTL_MS = 4000L
@@ -83,7 +86,16 @@ class AdasPipeline(
     private class WObj(val t: String, val x: Float, val z: Float, val c: Float, val clr: Float,
                        val vyaw: Float = Float.NaN, val vconf: Float = 0f)
     private class CamResult(val at: Long, val objs: List<WObj>, val boxes: List<QuadOverlayView.Box>)
-    private class TlResult(val at: Long, val s: String, val c: Float, val ax: Float, val box: RectF)
+    private class TlResult(val at: Long, val s: String, val c: Float, val ax: Float, val box: RectF, val arrow: String? = null)
+
+    // 紅綠燈燈號模型（有 tl_state.tflite 才用）：暗燈照規則判熄燈；模型有把握（≥ 0.7）用模型的燈色＋箭頭，不然退回顏色規則
+    private val tlNet: TlNet? by lazy { if (TlNet.available(ctx)) try { TlNet(ctx) } catch (t: Throwable) { Log.w(TAG, "tlnet", t); null } else null }
+    private fun tlState(crop: IntArray, w: Int, h: Int): Triple<String, Float, String?> {
+        val (rs, rc) = TrafficLightState.classify(crop, w, h)
+        if (rs == "off" || Crumbs.off("tlnet")) return Triple(rs, rc, null)
+        val m = tlNet?.classify(crop, w, h) ?: return Triple(rs, rc, null)
+        return if (m.colorProb >= 0.7f) Triple(m.color, m.colorProb, m.arrow) else Triple(rs, rc, null)
+    }
 
     private var geo: AvmGeometry? = null
     private var calibText = "{}"
@@ -346,6 +358,7 @@ class AdasPipeline(
         // 推論緊貼車身的分隔線只在停車時（R／P 檔，或在停車場、或慢速且不在馬路上）
         slotDet.allowInfer = gearNow == 'R' || gearNow == 'P' || (!onRoad && (vs.speedKmh ?: 99f) < 3f)
         if (prefs.camBev && !groundBusy) Crumbs.step(Crumbs.FRAME, "bev") { runBev(g, now) }
+        try { runArrows(g, now, vs) } catch (t: Throwable) { Log.w(TAG, "arrows", t) }
 
         emaProc = ema(emaProc, (SystemClock.elapsedRealtime() - t0).toFloat())
         if (lastFrameAt != 0L) emaFps = ema(emaFps, 1000f / max(1L, t0 - lastFrameAt))
@@ -793,12 +806,12 @@ class AdasPipeline(
             val sx = x0 + (x1 - x0) * i / ow; val sy = y0 + (y1 - y0) * j / oh
             crop[j * ow + i] = argb[sy * v.size + sx]
         }
-        val (state, conf) = TrafficLightState.classify(crop, ow, oh)
+        val (state, conf, arrow) = tlState(crop, ow, oh)
         val score = d.score * if (state == "off") 0.3f else conf
         val cur = tl
         if (cur != null && now - cur.at < 300 && cur.c >= score) return
         val ray = v.rayAt(r.centerX().toDouble(), r.centerY().toDouble())
-        tl = TlResult(now, state, score, Math.toDegrees(atan2(ray[0], ray[2])).toFloat(), RectF(r))
+        tl = TlResult(now, state, score, Math.toDegrees(atan2(ray[0], ray[2])).toFloat(), RectF(r), arrow)
     }
 
     private fun runTrafficLightPass(det: Yolo, g: AvmGeometry, qw: Int, qh: Int) {
@@ -828,13 +841,13 @@ class AdasPipeline(
         val oh = r.height().toInt().coerceIn(6, 48)
         val crop = IntArray(ow * oh)
         frame.cropArgb(r.left.toInt(), r.top.toInt(), r.right.toInt(), r.bottom.toInt(), ow, oh, crop)
-        val (state, conf) = TrafficLightState.classify(crop, ow, oh)
+        val (state, conf, arrow) = tlState(crop, ow, oh)
         val score = d.score * if (state == "off") 0.3f else conf
         val cur = tl
         if (cur != null && now - cur.at < 300 && cur.c >= score) return
         val ray = g.pixelToRay(camP, (r.centerX() - qx0).toDouble(), (r.centerY() - qy0).toDouble(), qw, qh)
         val ax = Math.toDegrees(atan2(ray[0], ray[2])).toFloat()
-        tl = TlResult(now, state, score, ax, RectF(r))
+        tl = TlResult(now, state, score, ax, RectF(r), arrow)
     }
 
     private fun toWorld(g: AvmGeometry, camP: CamParams, u: Double, v: Double, qw: Int, qh: Int, t: String): FloatArray? {
@@ -1325,9 +1338,13 @@ class AdasPipeline(
         }
         if (!vs.isEmpty) p.put("veh", VehicleSignals.toJson(vs))
         if (now - tracksAt < OBJ_TTL_MS) lcaState?.let { p.put("lca", lca.toJson(it)) }
+        // 車道用途（道路追蹤）："lp": {"0": "直行", "-1": "左轉"}、車道中心與寬（畫在路面上）
+        val lp = synchronized(arrowMem) { arrowMem.snapshot() }
+        if (lp.isNotEmpty() && !inLot) p.put("lp", JSONObject().apply { for ((k, v) in lp) put(k.toString(), LaneArrowMemory.label(v)) })
+            .put("lpc", r2(laneCenter)).put("lpw", r2(laneWidth))
         mapSrc?.takeJsonIfNew()?.let { p.put("map", it) }
         val t = tl
-        if (t != null && now - t.at < TL_TTL_MS) p.put("tl", JSONObject().put("s", t.s).put("c", r2(t.c)).put("ax", r2(t.ax)))
+        if (t != null && now - t.at < TL_TTL_MS) p.put("tl", JSONObject().put("s", t.s).put("c", r2(t.c)).put("ax", r2(t.ax)).put("ar", t.arrow ?: JSONObject.NULL))
         lastPayload = p
         Crumbs.at(Crumbs.FRAME, "sink")
         sink(p)
@@ -1484,6 +1501,26 @@ class AdasPipeline(
         }
         stabilizer.egoMotion(v * dt, dyaw)
         sideBlink.egoMotion(v * dt, dyaw)
+        synchronized(arrowMem) { arrowMem.advance(v * dt, Math.toDegrees(dyaw.toDouble()).toFloat()) }
+    }
+
+    /** 路面箭頭：每 [ARROW_EVERY] 幀跑一次（前後各三條，約 10 ms），夠有把握的送進道路記憶。 */
+    private fun runArrows(g: AvmGeometry, now: Long, vs: VehicleState) {
+        if (Crumbs.off("arrow") || inLot || (vs.speedKmh ?: 0f) < 3f || vs.gear == 'R') return
+        if (arrowCount++ % ARROW_EVERY != 0L) return
+        if (!arrowTried) { arrowTried = true; if (ArrowNet.available(ctx)) arrowNet = try { ArrowNet(ctx, g) } catch (t: Throwable) { Log.w(TAG, "arrow", t); null } }
+        val net = arrowNet ?: return
+        // 自車車道：用偵測到的車道線（沒有就當車道中心在 0、寬 3.5 m）
+        val rd = road?.takeIf { now - roadAt < BEV_TTL_MS }
+        val lane = rd?.let { laneAt0(it) }
+        var c = 0f; var w = 3.5f
+        if (lane != null && !lane[0].isNaN() && !lane[1].isNaN() && lane[1] - lane[0] in 2.5f..4.6f) { c = (lane[0] + lane[1]) / 2f; w = lane[1] - lane[0] }
+        // 換車道：自車所在車道的中心突然跳了大半個車道寬（從右邊跳到左邊 = 往左換）
+        if (!laneCenterPrev.isNaN() && kotlin.math.abs(c - laneCenterPrev) > 0.5f * w)
+            synchronized(arrowMem) { arrowMem.laneChanged(if (c < laneCenterPrev) -1 else 1) }
+        laneCenterPrev = c; laneCenter = c; laneWidth = w
+        val hits = Crumbs.step(Crumbs.FRAME, "arrow") { net.detect(frame, ARROW_MIN_PROB) }
+        synchronized(arrowMem) { for (h in hits) arrowMem.observe(LaneArrowMemory.Arrow(h.kind, h.x, c, w, h.prob)) }
     }
 
     /** 周圍車輛打方向燈（側邊、後方鏡頭）。 */
@@ -1495,6 +1532,14 @@ class AdasPipeline(
     // 車頭朝向模型（有 orient.tflite 才用）：停著／慢慢開、又不在格子裡的車也知道車頭朝哪
     private val orientNet: OrientNet? by lazy { if (OrientNet.available(ctx)) try { OrientNet(ctx) } catch (t: Throwable) { Log.w(TAG, "orient", t); null } else null }
     private val orientSmooth = OrientHeading.Smoother()
+    // 道路追蹤：路面箭頭（前／後鏡頭的路面條）→ 每個車道的用途，箭頭壓過去之後還記得（換車道跟著換、過路口清掉）
+    private var arrowNet: ArrowNet? = null
+    private var arrowTried = false
+    private var arrowCount = 0L
+    private val arrowMem = LaneArrowMemory()
+    private var laneCenterPrev = Float.NaN
+    @Volatile private var laneCenter = 0f
+    @Volatile private var laneWidth = 3.5f
 
     private fun takeEgoMotion(): Pair<Float, Float> = synchronized(egoLock) { (egoDz to egoYaw).also { egoDz = 0f; egoYaw = 0f } }
     private val vehShift = VehicleShiftOdometry()

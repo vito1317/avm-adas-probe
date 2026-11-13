@@ -247,6 +247,27 @@ class RoadView(context: Context) : View(context) {
     }
 
     /** 停車格：空格綠、有車灰、自己停的那格青（標「目前車格」）、選中的藍。 */
+    /**
+     * 道路追蹤記得的車道用途（路面箭頭）：在每個車道前方約 9 m 的路面上寫「直行」「左轉」…，自車車道的字比較亮。
+     * 箭頭壓過去之後還會留著，換車道跟著換、過了路口清掉（[LaneArrowMemory]）。
+     */
+    private fun drawLanePurpose(c: Canvas, h: Float, p: JSONObject) {
+        val lp = p.optJSONObject("lp") ?: return
+        val lc = p.optDouble("lpc", 0.0).toFloat(); val lw = p.optDouble("lpw", 3.5).toFloat()
+        val keys = lp.keys()
+        while (keys.hasNext()) {
+            val k = keys.next(); val idx = k.toIntOrNull() ?: continue
+            if (!proj(lc + idx * lw, 0f, 9f)) continue
+            val own = idx == 0
+            text.textAlign = Paint.Align.CENTER
+            text.textSize = (focal * (if (own) 0.75f else 0.55f) / tmp[2]).coerceIn(h * 0.022f, h * 0.05f)
+            text.color = if (own) Color.rgb(56, 225, 255) else Color.argb(170, 200, 220, 240)
+            text.setShadowLayer(6f, 0f, 0f, Color.BLACK)
+            c.drawText(lp.optString(k), tmp[0], tmp[1], text)
+            text.clearShadowLayer()
+        }
+    }
+
     private fun drawSlots(c: Canvas, h: Float, p: JSONObject) {
         val a = p.optJSONArray("slots") ?: return
         for (i in 0 until a.length()) {
@@ -330,6 +351,7 @@ class RoadView(context: Context) : View(context) {
             }
         }
         if (p != null) drawSlots(c, h, p)
+        if (p != null) drawLanePurpose(c, h, p)
         val lines = road?.optJSONArray("lines")
         if (lines == null || lines.length() == 0) {
             // 沒偵測到線：畫預設的淡淡車道線，看得出路
