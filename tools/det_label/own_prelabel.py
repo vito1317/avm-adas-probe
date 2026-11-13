@@ -43,6 +43,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--train", required=True); ap.add_argument("--out", required=True)
     ap.add_argument("--every", type=int, default=8)
+    ap.add_argument("--extra_conf", type=float, default=0.35)
+    ap.add_argument("--teach_conf", type=float, default=0.3, help="老師模型門檻（補漏框時調低，多框一些再由審查剔除）")
     ap.add_argument("--extra", default="", help="魚眼微調版（補老師漏掉的邊緣車輛；它的框一樣要審查）")
     a = ap.parse_args()
     from ultralytics import YOLO, YOLOWorld
@@ -69,11 +71,11 @@ def main():
             if os.path.exists(base + ".cand.json"): continue
             arr = np.asarray(im)[:, :, ::-1]
             boxes = []
-            r = det.predict(arr, imgsz=640, conf=0.3, device=dev, verbose=False)[0]
+            r = det.predict(arr, imgsz=640, conf=a.teach_conf, device=dev, verbose=False)[0]
             for b, c, s in zip(r.boxes.xyxy.cpu().tolist(), r.boxes.cls.cpu().tolist(), r.boxes.conf.cpu().tolist()):
                 if int(c) in COCO2OUR: boxes.append(dict(c=COCO2OUR[int(c)], b=[round(v, 1) for v in b], s=round(s, 3)))
             if extra is not None:
-                r = extra.predict(arr, imgsz=320, conf=0.35, device=dev, verbose=False)[0]
+                r = extra.predict(arr, imgsz=320, conf=a.extra_conf, device=dev, verbose=False)[0]
                 for b, c, s in zip(r.boxes.xyxy.cpu().tolist(), r.boxes.cls.cpu().tolist(), r.boxes.conf.cpu().tolist()):
                     if int(c) == 7: continue
                     if (b[2] - b[0]) * (b[3] - b[1]) > 0.4 * im.size[0] ** 2: continue

@@ -59,7 +59,7 @@ object CanCarInfo {
     private var handler: Handler? = null
 
     /** CAN 車速可用（讀到過非 0、最近 1 秒內有讀到）。 */
-    fun fresh(): Boolean = trusted && SystemClock.elapsedRealtime() - lastAt < 1000
+    fun fresh(): Boolean = SystemClock.elapsedRealtime() - lastAt < 1000
 
     /**
      * 車速一律用 CAN（使用者要求）：這台車讀到過一次 CAN 車速就記住（存在設定裡，重開也算數），
@@ -118,8 +118,8 @@ object CanCarInfo {
             if (spd !in 0..300) return true
             speedKmh = spd; rpm = r; lastAt = SystemClock.elapsedRealtime()
             if (spd > 0 && !trusted) { trusted = true; prefs?.edit()?.putBoolean("speedTrusted", true)?.apply(); Engine360.log("讀到車機 CAN 車速（$spd km/h），之後一律用它當車速") }
-            if (trusted) VehicleBus.signals.reportSpeed(spd.toFloat())
-            status = "CAN 車速 $spd km/h、轉速 $r" + (if (trusted) "（使用中）" else "（還沒讀到非 0，暫不採用）")
+            VehicleBus.signals.reportSpeed(spd.toFloat())   // 車速只用 CAN：停著讀到 0 也照送（以前要先讀到過非 0 才採用）
+            status = "CAN 車速 $spd km/h、轉速 $r（唯一的車速來源）"
             return true
         } catch (t: Throwable) {
             status = "讀取失敗：${t.javaClass.simpleName}"

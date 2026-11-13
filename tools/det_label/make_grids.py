@@ -23,7 +23,7 @@ def main():
     except Exception: font = ImageFont.load_default()
     names = sorted(os.path.basename(f)[:-11] for f in glob.glob(os.path.join(a.review, "*.review.jpg")))
     if a.exclude:
-        done = {n for g in json.load(open(a.exclude)) for n in g["cells"]}
+        done = {n for ex in a.exclude.split(",") for g in json.load(open(ex)) for n in g["cells"]}
         redo = set(open(a.redo).read().split()) if a.redo else set()
         names = [n for n in names if n not in done or n in redo]
     grids = []

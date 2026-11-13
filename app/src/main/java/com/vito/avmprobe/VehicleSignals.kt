@@ -226,8 +226,28 @@ class VehicleSignals(
     fun reportSteerRaw(raw: Float?, atMs: Long = clock()) =
         reportSteer(raw?.takeIf { !it.isNaN() }?.let { steerCal.apply(it) }, atMs)
 
-    fun reportSpeed(kmh: Float?, atMs: Long = clock()) =
-        change(atMs) { speed.set(kmh?.takeIf { !it.isNaN() }, atMs) }
+    // 車速保險（實車：停車場裡排 P、方向盤不動，記錄到的車速卻在 5～157 km/h 亂跳）：
+    // - P 檔一律 0；
+    // - 變化率超過物理極限（SPEED_MAX_RATE km/h 每秒 ≈ 1.3 g；緊急煞車約 1 g ≈ 35 km/h/s，不會被擋）的值先不收，
+    //   連續 SPEED_JUMP_CONFIRM 次都在那附近才算數。
+    private var jumpCand = Float.NaN
+    private var jumpHits = 0
+    private var speedAt = 0L
+
+    fun reportSpeed(kmh: Float?, atMs: Long = clock()) = change(atMs) {
+        var v = kmh?.takeIf { !it.isNaN() && it >= 0f && it < 320f }
+        if (v != null && gear.get(atMs, timeouts.gearMs) == 'P') v = 0f
+        val prev = speed.get(atMs, 1500L)
+        if (v != null && prev != null) {
+            val dt = ((atMs - speedAt).coerceAtLeast(50L)) / 1000f
+            if (kotlin.math.abs(v - prev) / dt > SPEED_MAX_RATE && kotlin.math.abs(v - prev) > 8f) {
+                if (!jumpCand.isNaN() && kotlin.math.abs(v - jumpCand) < 10f) jumpHits++ else { jumpCand = v; jumpHits = 1 }
+                if (jumpHits < SPEED_JUMP_CONFIRM) return@change false
+            }
+        }
+        jumpCand = Float.NaN; jumpHits = 0; speedAt = atMs
+        speed.set(v, atMs)
+    }
 
     /** 前雷達 4 顆（左→右，公尺，POSITIVE_INFINITY = 無障礙，NaN = 故障）；null = 雷達未啟動 */
     fun reportPdcFront(d: FloatArray?, atMs: Long = clock()) =
@@ -308,6 +328,8 @@ class VehicleSignals(
 
     companion object {
         private const val NEVER = Long.MIN_VALUE / 4
+        const val SPEED_MAX_RATE = 45f
+        const val SPEED_JUMP_CONFIRM = 2
 
         /**
          * 時鐘容許的倒退量（毫秒）：回報比現有紀錄早超過這麼多 → 視為時間基準往回跳而照收；

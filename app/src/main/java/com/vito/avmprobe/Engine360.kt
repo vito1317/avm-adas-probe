@@ -368,6 +368,20 @@ object Engine360 {
 
     @Volatile private var lastBvName: String = ""
 
+    /**
+     * 行車記錄器右半邊要錄哪顆鏡頭（跟著原廠目前的視角）：(鏡頭名稱, 要不要左右翻轉)。
+     * 原廠前／後鏡頭畫面 → 前／後（後鏡頭原廠是左右翻轉的，照做）；倒車 → 後；
+     * 打方向燈（原廠切側邊）→ 那一側；其他 3D 視角 → 前。
+     */
+    fun recordView(): Pair<String, Boolean> {
+        val bv = lastBvName.uppercase()
+        if (bv == "BV_BACK" || bv == "BV_REAR" || bv == "BV_MW_REAR") return Pair("rear", true)
+        if (bv == "BV_FRONT" || bv == "BV_MW_FRONT") return Pair("front", false)
+        val vs = VehicleBus.signals.snapshot()
+        if ((CanVehicle.info.gear ?: vs.gear) == 'R') return Pair("rear", true)
+        return when (vs.turn) { 'L' -> Pair("left", false); 'R' -> Pair("right", false); else -> Pair("front", false) }
+    }
+
     private fun setViewKey(key: String) {
         if (lastViewKey == key) return
         // 換了視角：原廠會回到那個視角的預設角度 → 拖動後的角度只在原本那個視角有效

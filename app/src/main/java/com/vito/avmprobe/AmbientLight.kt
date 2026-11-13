@@ -74,6 +74,7 @@ object AmbientRules {
 
 /** 藍牙連線與送指令（一個背景執行緒；斷線每 15 秒重連）。 */
 object AmbientLight {
+    private const val GATE = "ambient"
     private val SERVICE = UUID.fromString("0000ffe0-0000-1000-8000-00805f9b34fb")
     private val TX = UUID.fromString("0000ffe2-0000-1000-8000-00805f9b34fb")
     private val RX = UUID.fromString("0000ffe1-0000-1000-8000-00805f9b34fb")
@@ -107,9 +108,15 @@ object AmbientLight {
         })
     }
 
+    /** 排隊（[BleGate]）：同一時間只讓一個藍牙裝置在連線，不然車機藍牙會時好時壞。 */
     private fun connect(mac: String) {
-        val ad = BluetoothAdapter.getDefaultAdapter() ?: run { status = "車機沒有藍牙"; return }
-        if (!ad.isEnabled) { status = "車機藍牙是關的"; return }
+        status = "排隊等藍牙（${BleGate.status()}）"
+        BleGate.request(GATE) { h?.post { connectNow(mac) } ?: BleGate.done(GATE) }
+    }
+
+    private fun connectNow(mac: String) {
+        val ad = BluetoothAdapter.getDefaultAdapter() ?: run { status = "車機沒有藍牙"; BleGate.done(GATE); return }
+        if (!ad.isEnabled) { status = "車機藍牙是關的"; BleGate.done(GATE); return }
         status = "連線中（$mac）…"
         Crumbs.at(Crumbs.OTHER, "ambient-connect")
         try { gatt?.close() } catch (_: Throwable) {}
@@ -118,6 +125,7 @@ object AmbientLight {
         // 連線逾時：Android 有時一直不回報，會永遠卡在「連線中」→ 15 秒沒好就放掉重來
         val mine = gatt
         h?.postDelayed({
+            if (gatt === mine) BleGate.done(GATE)
             if (!ready && gatt != null && gatt === mine) {
                 try { mine?.disconnect(); mine?.close() } catch (_: Throwable) {}
                 gatt = null; fails++
@@ -130,6 +138,7 @@ object AmbientLight {
 
     private val cb = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(g: BluetoothGatt, st: Int, ns: Int) {
+            BleGate.done(GATE)          // 連上或失敗：讓下一個裝置去連
             if (ns == BluetoothProfile.STATE_CONNECTED) { status = "已連線，找服務…"; rediscovered = false; g.discoverServices() }
             else {
                 ready = false; tx = null

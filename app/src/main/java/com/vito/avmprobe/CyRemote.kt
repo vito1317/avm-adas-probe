@@ -103,6 +103,7 @@ object CyProtocol {
 
 /** 藍牙連線：要用才連，握手、送指令，閒置 15 秒就斷開（讓手機 App 可以用）。 */
 object CyRemote {
+    private const val GATE = "cyremote"
     private val SVC = UUID.fromString("0000ffe0-0000-1000-8000-00805f9b34fb")
     private val CH = UUID.fromString("0000ffe1-0000-1000-8000-00805f9b34fb")
     private val CCC = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
@@ -159,9 +160,15 @@ object CyRemote {
      * 先掃描找模組再連：這種模組常用隨機位址（直接拿 MAC 連會用錯位址類型，悶著連不上），
      * 而且手機 App 連著時模組不廣播。掃到廣播（MAC 一樣，或名稱含 6600121332）才連，用掃到的那個裝置物件連。
      */
+    /** 排隊（[BleGate]）：使用者按了才連，插隊排第一個；掃描＋建立連線這段一次只讓一個裝置做。 */
     private fun connect(mac: String) {
-        val ad = BluetoothAdapter.getDefaultAdapter() ?: run { note("車機沒有藍牙"); return }
-        if (!ad.isEnabled) { note("車機藍牙是關的"); return }
+        note("排隊等藍牙（${BleGate.status()}）")
+        BleGate.request(GATE, urgent = true) { h.post { connectNow(mac) } }
+    }
+
+    private fun connectNow(mac: String) {
+        val ad = BluetoothAdapter.getDefaultAdapter() ?: run { note("車機沒有藍牙"); BleGate.done(GATE); return }
+        if (!ad.isEnabled) { note("車機藍牙是關的"); BleGate.done(GATE); return }
         val sc = ad.bluetoothLeScanner ?: run { connectTo(ad.getRemoteDevice(mac)); return }
         ctx?.let { BleDiag.ensureLocation(it) }
         stopScan()
@@ -189,6 +196,7 @@ object CyRemote {
         h.postDelayed({
             if (scanCb === cbk) {
                 stopScan()
+                BleGate.done(GATE)
                 note("掃不到模組的廣播：手機 App（亮波）連著時模組不廣播，請把手機藍牙關掉或把 App 完全關閉；也可能熄火後模組休眠")
                 queue.clear()
             }
@@ -208,6 +216,7 @@ object CyRemote {
         val g = dev.connectGatt(ctx, false, cb, android.bluetooth.BluetoothDevice.TRANSPORT_LE)   // 指定 BLE（車機預設可能走傳統藍牙）
         gatt = g
         h.postDelayed({
+            if (gatt === g) BleGate.done(GATE)
             if (!ready && gatt === g) {
                 note(if (!linked) "模組有廣播但連不上（藍牙一直沒建立連線；試著把車機藍牙關掉再打開）" else "連上了但握手沒回應（金鑰不對，或協定不同）")
                 queue.clear(); close()
@@ -250,6 +259,7 @@ object CyRemote {
 
     private val cb = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(g: BluetoothGatt, st: Int, ns: Int) {
+            BleGate.done(GATE)
             h.post {
                 if (ns == BluetoothProfile.STATE_CONNECTED) { linked = true; note("已連線，找服務…"); g.discoverServices() }
                 else {

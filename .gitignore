@@ -42,3 +42,4 @@ app/src/main/assets/lane_seg.tflite
 app/src/test/java/com/vito/avmprobe/LocalRegionProbeTest.kt
 # 魚眼物件偵測模型（WoodScape＋實車資料微調，不得散布）只放私有 release
 app/src/main/assets/model_fisheye_*
+app/src/main/assets/orient.tflite

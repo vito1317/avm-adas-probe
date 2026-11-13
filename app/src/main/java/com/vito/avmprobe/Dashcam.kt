@@ -26,7 +26,7 @@ import kotlin.math.sqrt
  * 上方警示列，角落時間、車速、方向燈、檔位、煞車。不管原廠 360 畫面有沒有開都能錄。
  *
  * - 字幕（.srt）每秒一行：車速、方向燈、煞車、最近的車距離、警示。
- * - 煞車：車機訊號沒有煞車，用車速急降推估（減速度 > [BRAKE_DECEL]），標「推估」。
+ * - 煞車：有 CAN 煞車訊號就用（標「煞車」）；沒有才用車速急降推估（減速度 > [BRAKE_DECEL]），標「推估」。
  * - 撞擊：車機的加速度感測器偵測到瞬間衝擊（> [IMPACT_G]）→ 這段跟上一段鎖定，不會被循環刪除。
  */
 object Dashcam {
@@ -117,15 +117,10 @@ object Dashcam {
         painter?.paintRecording(c, W, H, top, p)
         // 自車
         val pm = top.scale * H
-        val sprite = appCtx?.let { EgoSprite.get(it) }
-        if (sprite != null) {
-            // 原廠俯視圖上截下來的車模
-            c.drawBitmap(sprite, null, RectF(ox * k - EgoSprite.HW * pm, oy * k - EgoSprite.HL * pm,
-                ox * k + EgoSprite.HW * pm, oy * k + EgoSprite.HL * pm), paint)
-        } else {
-            box.color = Color.argb(200, 230, 230, 230)
-            c.drawRoundRect(RectF(ox * k - 0.925f * pm, oy * k - 2.42f * pm, ox * k + 0.925f * pm, oy * k + 2.42f * pm), 10f, 10f, box)
-        }
+        // 自車：直接畫向量車模（以前從原廠俯視圖截下來貼，邊緣帶到地面、比例怪）；煞車尾燈亮、方向燈閃
+        val vehNow = p?.optJSONObject("veh")
+        val blinkOn = (SystemClock.elapsedRealtime() / 400L) % 2L == 0L
+        EgoTopCar.draw(c, ox * k, oy * k, pm, braking, vehNow?.optString("turn"), blinkOn)
         // 角落：時間、車速、方向燈、檔位、煞車、錄影中
         val veh = p?.optJSONObject("veh")
         box.color = Color.argb(150, 0, 0, 0)
@@ -133,6 +128,8 @@ object Dashcam {
         c.drawText(clock.format(Date()), bw + 26f, H - 84f, txt)
         val spd = veh?.takeIf { !it.isNull("speed") }?.optDouble("speed")
         c.drawText(if (spd != null) "%.0f km/h".format(spd) else "-- km/h", bw + 26f, H - 28f, big)
+        // 車速來源：CAN（車上的真車速）以外都是 GPS 換算的（原廠 360 的車速也是 GPS），標出來才知道準不準
+        if (spd != null) c.drawText(if (CanCarInfo.fresh()) "CAN" else "GPS", bw + 26f, H - 92f, txt)
         var x = bw + 290f
         val turn = veh?.optString("turn")
         if (turn == "L" || turn == "H") { box.color = Color.rgb(60, 220, 90); c.drawText("◀", x, H - 30f, big.apply { color = Color.rgb(60, 220, 90) }); }
@@ -144,7 +141,7 @@ object Dashcam {
         if (braking) {
             box.color = Color.rgb(220, 30, 30)
             c.drawRoundRect(RectF(bw + 12f, H - 170f, bw + 210f, H - 128f), 10f, 10f, box)
-            c.drawText("煞車（推估）", bw + 22f, H - 140f, txt)
+            c.drawText(if (brakeReal) "煞車" else "煞車（推估）", bw + 22f, H - 140f, txt)
         }
         box.color = Color.rgb(230, 30, 30)
         c.drawCircle(W - 30f, 30f, 10f, box)
@@ -158,6 +155,7 @@ object Dashcam {
         val veh = p?.optJSONObject("veh")
         val spd = veh?.takeIf { !it.isNull("speed") }?.optDouble("speed")
         sb.append(if (spd != null) "%.0f km/h".format(spd) else "-- km/h")
+        if (spd != null) sb.append(if (CanCarInfo.fresh()) "(CAN)" else "(GPS)")
         when (veh?.optString("turn")) { "L" -> sb.append("  左轉燈"); "R" -> sb.append("  右轉燈"); "H" -> sb.append("  雙黃燈") }
         if (veh?.optString("gear") == "R") sb.append("  倒車")
         if (braking) sb.append(if (brakeReal) "  煞車" else "  煞車(推估)")

@@ -76,11 +76,11 @@ class HeadUnitSignalAdapter(
                 }
                 Decode.ACT_SPEED -> {
                     val v = intent.getIntExtra(Decode.KEY_STATE, -1)
-                    if (v >= 0 && !FactoryVehicle.speedFresh() && !CanCarInfo.owns()) s.reportSpeed(v.toFloat())
+                    /* 車速只用 CAN（使用者要求），車機廣播的車速不採用 */
                 }
                 // 這台車機自己的車速廣播：鍵名未知，從 extras 裡認
                 Decode.ACT_TS_SPEED, Decode.ACT_TS_MCU -> {
-                    if (!FactoryVehicle.speedFresh() && !CanCarInfo.owns()) Decode.speedFrom(intent.extras)?.let { s.reportSpeed(it) }
+                    /* 車速只用 CAN */
                 }
                 // 方向燈聯動：位元遮罩，跟 AIDL 的 GetLeft/Right/Emergency 同一套編碼
                 Decode.ACT_LRREVERSE -> {
@@ -180,7 +180,7 @@ class HeadUnitSignalAdapter(
             s.reportTurn(Decode.turnOf(Decode.turnBits(left, right, hazard)))
 
             // 原廠 360 讀得到車速時以原廠的為準（這台車機的 GetSpeed 一直回 0，會把真的車速蓋掉）
-            if (!FactoryVehicle.speedFresh() && !CanCarInfo.owns()) s.reportSpeed(c.GetSpeed().toFloat())
+            /* 車速只用 CAN */
 
             val eps = c.getLineEps()
             // 原廠 360 有從 CAN 讀到方向盤（它的輔助線很準）時以原廠的為準；車機這個介面的讀值不可靠（實車卡在 329°）

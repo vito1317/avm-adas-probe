@@ -31,6 +31,25 @@ object TrainCollector {
     @Volatile private var busy = false
     private val h: Handler by lazy { Handler(HandlerThread("train-save").apply { start() }.looper) }
 
+    // 事件觸發：前車煞車／打方向燈、旁邊車打方向燈時多存幾張（燈亮的例子平常太少，車燈模型標不到）。
+    // 一次事件最多連存 EVT_BURST 張、每張隔 EVT_GAP_MS（方向燈一亮一暗都會存到），之後冷卻 EVT_COOL_MS。
+    private const val EVT_GAP_MS = 700L
+    private const val EVT_BURST = 8
+    private const val EVT_COOL_MS = 15_000L
+    private var evtCount = 0
+    private var evtLast = 0L
+    private var evtCoolUntil = 0L
+
+    /** 有車燈事件時：這一幀要不要額外存（[evt] = null 表示目前沒有事件）。 */
+    fun dueEvent(now: Long, evt: String?): Boolean {
+        if (evt == null || busy || count >= MAX_FRAMES || now < evtCoolUntil) return false
+        if (now - evtLast < EVT_GAP_MS) return false
+        if (now - evtLast > 3000L) evtCount = 0            // 新的一次事件
+        evtCount++; evtLast = now
+        if (evtCount >= EVT_BURST) { evtCoolUntil = now + EVT_COOL_MS; evtCount = 0 }
+        return true
+    }
+
     /** 該不該存這一幀（在影格執行緒上呼叫，很便宜）。 */
     fun due(now: Long, speedKmh: Float?): Boolean {
         if (busy || count >= MAX_FRAMES) return false

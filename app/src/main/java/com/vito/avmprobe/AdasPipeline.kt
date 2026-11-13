@@ -49,6 +49,8 @@ class AdasPipeline(
     companion object {
         private const val TAG = "AdasPipeline"
         private const val OBJ_TTL_MS = 1300L
+        // 車頭朝向模型：信心（8 個方向機率的向量長度）≥ 0.7 才用（驗證：涵蓋約 35%，誤差 60° 內 88%、前後顛倒 7%；再加每台車平滑）
+        private const val ORIENT_MIN_CONF = 0.7f
         private const val TL_TTL_MS = 1200L
         private const val BEV_TTL_MS = 1500L
         private const val OBS_TTL_MS = 4000L
@@ -77,7 +79,9 @@ class AdasPipeline(
         )
     }
 
-    private class WObj(val t: String, val x: Float, val z: Float, val c: Float, val clr: Float)
+    /** vyaw／vconf：車頭朝向模型看出來的方向（世界 yaw）與信心；沒跑或沒把握是 NaN／0。 */
+    private class WObj(val t: String, val x: Float, val z: Float, val c: Float, val clr: Float,
+                       val vyaw: Float = Float.NaN, val vconf: Float = 0f)
     private class CamResult(val at: Long, val objs: List<WObj>, val boxes: List<QuadOverlayView.Box>)
     private class TlResult(val at: Long, val s: String, val c: Float, val ax: Float, val box: RectF)
 
@@ -213,12 +217,27 @@ class AdasPipeline(
     }
 
     /** 這一幀的前方去畸變畫面（寬視角）畫進 [out]（[size]×[size]）。在影格執行緒上呼叫。 */
+    /**
+     * 行車記錄器右半邊：跟著使用者在原廠切的視角（[Engine360.recordView]）——前鏡頭、後鏡頭（左右翻轉，跟原廠一樣）、
+     * 打方向燈時的左／右鏡頭；原廠的 3D 視角我們畫不出來，就錄前方。
+     */
     fun renderFrontInto(out: IntArray, size: Int): Boolean {
         val g = geo ?: return false
         if (frame.width == 0) return false
-        val v = recFront?.takeIf { it.size == size } ?: try { VirtualView(g, "front", 0.0, 6.0, 110.0, size) } catch (_: Throwable) { null }
+        val (cam, mirror) = try { Engine360.recordView() } catch (_: Throwable) { Pair("front", false) }
+        val v = recFront?.takeIf { it.size == size && it.camName == cam } ?: try {
+            when (cam) {
+                "rear" -> VirtualView(g, "rear", 0.0, 12.0, 120.0, size)
+                "left", "right" -> VirtualView(g, cam, 0.0, 18.0, 120.0, size)
+                else -> VirtualView(g, "front", 0.0, 6.0, 110.0, size)
+            }
+        } catch (_: Throwable) { null }
         recFront = v ?: return false
         frame.sampleLut(v.lut(frame.width, frame.height), out)
+        if (mirror) for (j in 0 until size) {
+            var a = j * size; var b = a + size - 1
+            while (a < b) { val t = out[a]; out[a] = out[b]; out[b] = t; a++; b-- }
+        }
         return true
     }
     private var recFront: VirtualView? = null
@@ -332,15 +351,27 @@ class AdasPipeline(
         if (lastFrameAt != 0L) emaFps = ema(emaFps, 1000f / max(1L, t0 - lastFrameAt))
         lastFrameAt = t0
         Crumbs.step(Crumbs.FRAME, "publish") { pushPayload(g, det, now, vs) }
-        if (prefs.trainCollect && !Crumbs.off("train") && TrainCollector.due(now, vs.speedKmh)) Crumbs.step(Crumbs.FRAME, "train") {
+        val lampEvt = if (prefs.trainCollect) lampEvent(now) else null
+        if (prefs.trainCollect && !Crumbs.off("train") && (TrainCollector.due(now, vs.speedKmh) || TrainCollector.dueEvent(now, lampEvt))) Crumbs.step(Crumbs.FRAME, "train") {
             val rd = road?.takeIf { now - roadAt < BEV_TTL_MS }
             val meta = JSONObject().put("t", System.currentTimeMillis())
                 .put("speed", vs.speedKmh ?: JSONObject.NULL).put("gear", gearCur?.toString() ?: JSONObject.NULL)
                 .put("steer", vs.steerDeg ?: JSONObject.NULL).put("turn", vs.turn?.toString() ?: JSONObject.NULL)
-                .put("lot", inLot).put("lines", TrainCollector.lines(rd?.lines))
+                .put("lot", inLot).put("lines", TrainCollector.lines(rd?.lines)).put("evt", lampEvt ?: JSONObject.NULL)
                 .put("edgeL", rd?.edgeL ?: JSONObject.NULL).put("edgeR", rd?.edgeR ?: JSONObject.NULL)
             TrainCollector.submit(ctx, frame.toNv21(), frame.width, frame.height, now, meta, calibText)
         }
+    }
+
+    /** 目前有沒有車燈事件（給訓練資料收集多存幾張）：前車煞車／方向燈／雙黃燈、旁邊車打方向燈。 */
+    private fun lampEvent(now: Long): String? {
+        leadLight?.takeIf { now - leadLightAt < 1500 }?.let { ll ->
+            if (ll.brake) return "lead_brake"
+            if (ll.hazard) return "lead_hazard"
+            if (ll.turn != null) return "lead_turn"
+        }
+        if (!Crumbs.off("sideblink") && sideBlink.blinking(now).isNotEmpty()) return "side_blink"
+        return null
     }
 
     private fun slots(): List<String> {
@@ -380,6 +411,7 @@ class AdasPipeline(
         val objs = ArrayList<WObj>()
         val boxes = ArrayList<QuadOverlayView.Box>()
         val tDets = ArrayList<Det>()
+        var nOrient = 0
         for (d in dets) {
             if (d.type == ObjTypes.LIGHT) {
                 if (name == "front") considerTrafficLight(g, camP, d, qx0, qy0, qw, qh, now)
@@ -389,7 +421,15 @@ class AdasPipeline(
             val v = d.rect.bottom - qy0
             if (v > qh * 0.97f && d.rect.width() > side * 0.85f) continue
             val w = toWorld(g, camP, u.toDouble(), v.toDouble(), qw, qh, d.type) ?: continue
-            objs.add(WObj(d.type, w[0], w[1], d.score, w[2]))
+            var vyaw = Float.NaN; var vconf = 0f
+            if (ObjTypes.group(d.type) == "veh" && nOrient < OrientNet.MAX_PER_CALL && d.rect.width() >= 24f && !Crumbs.off("orient")) {
+                orientNet?.let { on ->
+                    nOrient++
+                    val (rel, conf) = on.classify(frame, d.rect.left, d.rect.top, d.rect.right, d.rect.bottom)
+                    if (conf >= ORIENT_MIN_CONF) { vyaw = OrientHeading.worldYaw(camP.px.toFloat(), camP.pz.toFloat(), w[0], w[1], rel); vconf = conf }
+                }
+            }
+            objs.add(WObj(d.type, w[0], w[1], d.score, w[2], vyaw, vconf))
             // 周圍車輛的方向燈：數車框裡亮琥珀色的像素（縮成最多 64x48 取樣）
             if (ObjTypes.group(d.type) == "veh" && !Crumbs.off("sideblink")) {
                 val bw = d.rect.width().toInt().coerceIn(8, 64); val bh = d.rect.height().toInt().coerceIn(6, 48)
@@ -1006,15 +1046,17 @@ class AdasPipeline(
                 j.put("id", tr.id).put("vx", r2(tr.vx)).put("vz", r2(tr.vz))
                 val isVeh = o.t == "car" || o.t == "van" || o.t == "truck" || o.t == "bus"
                 val gs = if (ego != null) hypot(tr.vx, tr.vz + ego) else Float.MAX_VALUE
+                // 車頭朝向模型：每台車平滑起來（停著的車方向不變，越看越穩）
+                val vy = if (isVeh && !o.vyaw.isNaN()) orientSmooth.update(tr.id, o.vyaw, o.vconf, now) else if (isVeh) orientSmooth.get(tr.id, now) else null
                 if (isVeh && gs <= StaticStabilizer.MOVING_MPS) {
-                    // 停著的車：釘在地上、方向鎖住（照格子方向，沒有就沿用上次）
-                    val hint = if (now - slotsAt < BEV_TTL_MS) slotYaw(slots, o.x, o.z) else null
+                    // 停著的車：釘在地上、方向鎖住（照格子方向；不在格子裡就用車頭朝向模型；都沒有就沿用上次）
+                    val hint = (if (now - slotsAt < BEV_TTL_MS) slotYaw(slots, o.x, o.z) else null) ?: vy
                     val (sx, sz, sy) = stabilizer.apply(tr.id, o.x, o.z, gs, hint, now)
                     j.put("x", r2(sx)).put("z", r2(sz)).put("still", 1)
                     sy?.let { y -> j.put("yaw", r2(y)) }
                 } else {
                     if (isVeh) stabilizer.apply(tr.id, o.x, o.z, gs, null, now)   // 在動 → 放掉
-                    yaw(tr, ego)?.let { y -> j.put("yaw", r2(y)) }
+                    (yaw(tr, ego) ?: vy)?.let { y -> j.put("yaw", r2(y)) }
                 }
             }
             // 停著的車看不出方向 → 停在偵測到的格子裡就照格子的方向（停車場裡橫的、斜的都畫對）
@@ -1023,6 +1065,7 @@ class AdasPipeline(
             objs.put(j)
         }
         stabilizer.prune(now)
+        orientSmooth.prune(now)
         // 周圍車輛打方向燈：標在物件上（道路畫面閃琥珀色）
         val blinks = if (Crumbs.off("sideblink")) emptyList() else sideBlink.blinking(now)
         if (blinks.isNotEmpty()) for (i in 0 until objs.length()) {
@@ -1449,6 +1492,9 @@ class AdasPipeline(
 
     /** 停著的車在畫面上釘住不飄（只影響畫的位置；警示照用即時偵測）。 */
     private val stabilizer = StaticStabilizer()
+    // 車頭朝向模型（有 orient.tflite 才用）：停著／慢慢開、又不在格子裡的車也知道車頭朝哪
+    private val orientNet: OrientNet? by lazy { if (OrientNet.available(ctx)) try { OrientNet(ctx) } catch (t: Throwable) { Log.w(TAG, "orient", t); null } else null }
+    private val orientSmooth = OrientHeading.Smoother()
 
     private fun takeEgoMotion(): Pair<Float, Float> = synchronized(egoLock) { (egoDz to egoYaw).also { egoDz = 0f; egoYaw = 0f } }
     private val vehShift = VehicleShiftOdometry()
