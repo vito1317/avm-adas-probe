@@ -13,6 +13,8 @@ import android.os.SystemClock
 object BleGate {
     private const val HOLD_MAX_MS = 18_000L      // 有人拿著太久（回呼沒來）就強制放掉
     private const val GAP_MS = 400L
+    private const val MAX_WAIT_MS = 20_000L      // 排超過這麼久就不等了，直接連（實車：一直顯示「排隊等藍牙」）
+    private val firstAsk = HashMap<String, Long>()
 
     private class Req(val tag: String, val start: () -> Unit)
     private val waiting = ArrayDeque<Req>()
@@ -20,7 +22,12 @@ object BleGate {
     private var since = 0L
     private val h: Handler by lazy { Handler(HandlerThread("ble-gate").apply { start() }.looper) }
 
-    @Synchronized fun status(): String = holder?.let { "正在連：$it" + if (waiting.isNotEmpty()) "（排隊 ${waiting.joinToString { r -> r.tag }}）" else "" } ?: "閒置"
+    @Synchronized fun status(): String = holder?.let {
+        val sec = (SystemClock.elapsedRealtime() - since) / 1000
+        "正在連：${name(it)} ${sec} 秒" + if (waiting.isNotEmpty()) "（排隊：${waiting.joinToString { r -> name(r.tag) }}）" else ""
+    } ?: "閒置"
+
+    private fun name(tag: String) = when (tag) { "ambient" -> "氛圍燈"; "reardisp" -> "後擋看板"; "cyremote" -> "遠端模組"; else -> tag }
 
     /** 要開始連線／掃描。輪到時呼叫 [start]（在排隊執行緒上，請自己 post 回模組的執行緒）。同一個 tag 重複要求只留最新的。 */
     fun request(tag: String, urgent: Boolean = false, start: () -> Unit) {
@@ -28,8 +35,10 @@ object BleGate {
         synchronized(this) {
             waiting.removeAll { it.tag == tag }
             val now = SystemClock.elapsedRealtime()
+            val asked = firstAsk.getOrPut(tag) { now }
             if (holder != null && now - since > HOLD_MAX_MS) holder = null
-            if (holder == null || holder == tag) { holder = tag; since = now; run = Req(tag, start) }
+            if (holder == null || holder == tag) { holder = tag; since = now; firstAsk.remove(tag); run = Req(tag, start) }
+            else if (now - asked > MAX_WAIT_MS) { firstAsk.remove(tag); run = Req(tag, start) }   // 等太久：不排了，直接連（不搶位子）
             else { if (urgent) waiting.addFirst(Req(tag, start)) else waiting.addLast(Req(tag, start)); run = null }
         }
         if (run != null) h.post { run.start() }
@@ -51,7 +60,7 @@ object BleGate {
         synchronized(this) {
             if (holder != null) return
             r = waiting.removeFirstOrNull() ?: return
-            holder = r.tag; since = SystemClock.elapsedRealtime()
+            holder = r.tag; since = SystemClock.elapsedRealtime(); firstAsk.remove(r.tag)
         }
         r.start()
         watchdog()
