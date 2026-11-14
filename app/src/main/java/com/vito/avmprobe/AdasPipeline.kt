@@ -223,10 +223,13 @@ class AdasPipeline(
         val g = geo ?: return false
         if (out.size != g.bev.width * g.bev.height || frame.width == 0) return false
         val key = (frame.width.toLong() shl 32) or frame.height.toLong()
-        val table = snapLut?.takeIf { snapLutKey == key } ?: g.buildBevLut(frame.width, frame.height).also { snapLut = it; snapLutKey = key }
-        frame.sampleLut(table, out)
+        // 行車記錄器：接縫兩顆鏡頭漸層混合（硬切的接縫，車子、柱子會斷掉錯位）
+        val t = recBlend?.takeIf { recBlendKey == key } ?: g.buildBevBlendLut(frame.width, frame.height).also { recBlend = it; recBlendKey = key }
+        frame.sampleLutBlend(t.first, t.second, t.third, out)
         return true
     }
+    private var recBlend: Triple<IntArray, IntArray, ByteArray>? = null
+    private var recBlendKey = 0L
 
     /** 這一幀的前方去畸變畫面（寬視角）畫進 [out]（[size]×[size]）。在影格執行緒上呼叫。 */
     /**

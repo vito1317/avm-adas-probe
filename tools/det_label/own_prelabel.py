@@ -44,6 +44,7 @@ def main():
     ap.add_argument("--train", required=True); ap.add_argument("--out", required=True)
     ap.add_argument("--every", type=int, default=8)
     ap.add_argument("--extra_conf", type=float, default=0.35)
+    ap.add_argument("--picks", default="", help="只處理這些影格（每行 session 路徑 影格），不用 --every 掃全部")
     ap.add_argument("--teach_conf", type=float, default=0.3, help="老師模型門檻（補漏框時調低，多框一些再由審查剔除）")
     ap.add_argument("--extra", default="", help="魚眼微調版（補老師漏掉的邊緣車輛；它的框一樣要審查）")
     a = ap.parse_args()
@@ -57,9 +58,14 @@ def main():
     except Exception: font = ImageFont.load_default()
     os.makedirs(a.out, exist_ok=True)
     frames = []
-    for sd in sorted(glob.glob(os.path.join(a.train, "train_*"))):
-        fs = sorted(glob.glob(os.path.join(sd, "f_*.jpg")))
-        frames += fs[::a.every]
+    if a.picks:
+        for line in open(a.picks):
+            q = line.split()
+            if len(q) >= 2: frames.append(os.path.join(q[0], "f_%05d.jpg" % int(q[1])))
+    else:
+        for sd in sorted(glob.glob(os.path.join(a.train, "train_*"))):
+            fs = sorted(glob.glob(os.path.join(sd, "f_*.jpg")))
+            frames += fs[::a.every]
     print("影格", len(frames), flush=True)
     n_box = n_gate = 0
     for k, fp in enumerate(frames):

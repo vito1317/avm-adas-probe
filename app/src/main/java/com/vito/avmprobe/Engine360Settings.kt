@@ -321,15 +321,7 @@ object Engine360Settings {
         col.addView(brakeInfo)
 
 
-        val spriteInfo = TextView(act).apply { textSize = 11f; text = if (EgoSprite.get(act) != null) "行車記錄器正在用原廠車模圖案" else "還沒擷取（自動對位成功時也會自動擷取）" }
-        col.addView(Button(act).apply {
-            text = "擷取原廠車模給行車記錄器用（停在有俯視圖的畫面再按）"; isAllCaps = false
-            setOnClickListener {
-                isEnabled = false
-                Engine360.captureEgoSprite { msg -> isEnabled = true; spriteInfo.text = msg }
-            }
-        })
-        col.addView(spriteInfo)
+        // 行車記錄器的自車改成直接畫向量車模（EgoTopCar），不用再從原廠俯視圖擷取
 
         val exportInfo = TextView(act).apply { textSize = 11f; typeface = Typeface.MONOSPACE }
         col.addView(Button(act).apply {

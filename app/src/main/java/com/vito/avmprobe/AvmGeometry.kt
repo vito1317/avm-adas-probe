@@ -154,6 +154,8 @@ class AvmGeometry(val cams: List<CamParams>, val bev: BevSpec, val carLength: Do
     companion object {
         /** 接縫兩側各挖掉多寬（公尺），抓道路線時不用。 */
         const val SEAM_BAND_M = 0.2
+        /** 行車記錄器俯視圖接縫的漸層寬度（兩顆鏡頭視角差幾度內混合）。 */
+        const val BLEND_DEG = 8.0
 
         /** 讀 avm_calib.json 的內容。cams 依 quad 排序。 */
         fun fromJson(text: String): AvmGeometry {
@@ -273,6 +275,41 @@ class AvmGeometry(val cams: List<CamParams>, val bev: BevSpec, val carLength: Do
             }
         }
         return lut
+    }
+
+    /**
+     * 給行車記錄器的俯視圖：接縫處兩顆鏡頭漸層混合（[buildBevLut] 是「看得最正的那顆」硬切，接縫的車子、柱子會斷掉錯位）。
+     * 回傳 (主鏡頭索引, 次鏡頭索引, 次鏡頭權重 0..255)；兩顆鏡頭的視角差在 [BLEND_DEG] 內才混，越接近交界越接近一半一半。
+     */
+    fun buildBevBlendLut(frameW: Int, frameH: Int): Triple<IntArray, IntArray, ByteArray> {
+        val qw = frameW / 2; val qh = frameH / 2
+        val bw = bev.width; val bh = bev.height
+        val order = cams.sortedBy { it.quad }; val n = order.size
+        val qx0 = IntArray(n) { (order[it].quad % 2) * qw }; val qy0 = IntArray(n) { (order[it].quad / 2) * qh }
+        val hw = carWidth / 2 + EGO_MARGIN; val hl = carLength / 2 + EGO_MARGIN
+        val tmp = DoubleArray(3)
+        val a = IntArray(bw * bh) { -1 }; val b = IntArray(bw * bh) { -1 }; val w = ByteArray(bw * bh)
+        val band = Math.toRadians(BLEND_DEG)
+        for (j in 0 until bh) {
+            val gz = bev.zMax - (j + 0.5) * bev.mpp
+            for (i in 0 until bw) {
+                val gx = bev.xMin + (i + 0.5) * bev.mpp
+                if (abs(gz) <= hl && abs(gx) <= hw) continue
+                var t1 = Double.POSITIVE_INFINITY; var t2 = Double.POSITIVE_INFINITY; var p1 = -1; var p2 = -1
+                for (k in 0 until n) {
+                    if (!project(order[k], gx, gz, qw, qh, tmp)) continue
+                    val idx = (qy0[k] + floor(tmp[1]).toInt()) * frameW + qx0[k] + floor(tmp[0]).toInt()
+                    if (tmp[2] < t1) { t2 = t1; p2 = p1; t1 = tmp[2]; p1 = idx } else if (tmp[2] < t2) { t2 = tmp[2]; p2 = idx }
+                }
+                val o = j * bw + i
+                a[o] = p1
+                if (p2 >= 0 && t2 - t1 < band) {
+                    b[o] = p2
+                    w[o] = (127.0 * (1.0 - (t2 - t1) / band)).toInt().coerceIn(0, 127).toByte()   // 交界處 0.5、往內漸減到 0
+                }
+            }
+        }
+        return Triple(a, b, w)
     }
 
     private fun rayInto(c: CamParams, u0: Double, v: Double, qw: Int, qh: Int, out: DoubleArray) {

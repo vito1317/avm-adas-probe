@@ -103,6 +103,24 @@ class YuvFrame {
         }
     }
 
+    /** 依兩組查表取樣後混合（接縫漸層）：w = 次鏡頭權重 0..127（127 ≈ 一半）。 */
+    fun sampleLutBlend(a: IntArray, b: IntArray, w: ByteArray, out: IntArray) {
+        val fw = width
+        for (k in a.indices) {
+            val p = a[k]
+            if (p < 0) { out[k] = BLACK; continue }
+            val c1 = argbAt(p % fw, p / fw)
+            val q = b[k]; val ww = w[k].toInt()
+            if (q < 0 || ww <= 0) { out[k] = c1; continue }
+            val c2 = argbAt(q % fw, q / fw)
+            val wb = ww * 2; val wa = 256 - wb
+            val r = (((c1 shr 16) and 255) * wa + ((c2 shr 16) and 255) * wb) shr 8
+            val g = (((c1 shr 8) and 255) * wa + ((c2 shr 8) and 255) * wb) shr 8
+            val bl = ((c1 and 255) * wa + (c2 and 255) * wb) shr 8
+            out[k] = (0xFF shl 24) or (r shl 16) or (g shl 8) or bl
+        }
+    }
+
     /** 把整幀矩形縮放取樣成 outW×outH 的 ARGB（紅綠燈燈色判斷用）。 */
     fun cropArgb(x0: Int, y0: Int, x1: Int, y1: Int, outW: Int, outH: Int, out: IntArray) {
         val sw = (x1 - x0).coerceAtLeast(1)
