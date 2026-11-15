@@ -12,9 +12,10 @@ import kotlin.math.abs
 /**
  * 自車 E60 的多角度渲染圖（tools/render/e60_atlas.py：方位每 15°、俯角 10/20/35/60/89°，正交、每像素 0.012 m）。
  * 行車記錄器右半邊重建原廠 3D 視角時，挑最接近的角度貼在自車位置（不用在車機上跑 3D）。
+ * 另有前輪轉角 −30/−15/0/15/30° 的版本（3D 轉彎：前輪跟著方向盤轉），挑最接近目前前輪角度的。
  */
 object EgoViews {
-    private class V(val az: Int, val el: Int, val file: String, val ox: Float, val oy: Float)
+    private class V(val az: Int, val el: Int, val steer: Int, val file: String, val ox: Float, val oy: Float)
     private var views: List<V>? = null
     private var mpp = 0.012f
     private val cache = HashMap<String, Bitmap?>()
@@ -26,17 +27,21 @@ object EgoViews {
             val j = JSONObject(ctx.assets.open("e60_views/index.json").bufferedReader().readText())
             mpp = j.optDouble("mpp", 0.012).toFloat()
             val a = j.getJSONArray("views")
-            List(a.length()) { i -> a.getJSONObject(i).let { V(it.getInt("az"), it.getInt("el"), it.getString("file"), it.getDouble("ox").toFloat(), it.getDouble("oy").toFloat()) } }
+            List(a.length()) { i -> a.getJSONObject(i).let { V(it.getInt("az"), it.getInt("el"), it.optInt("s", 0), it.getString("file"), it.getDouble("ox").toFloat(), it.getDouble("oy").toFloat()) } }
         } catch (_: Throwable) { emptyList() }
         views = list
         return list
     }
 
     /**
-     * 在 [c] 上把 E60 畫在自車位置：(x, y) = 地面原點在畫布上的位置、[pxPerM] = 每公尺像素、視角方位／俯角（度）、要不要左右翻。
+     * 在 [c] 上把 E60 畫在自車位置：(x, y) = 地面原點在畫布上的位置、[pxPerM] = 每公尺像素、視角方位／俯角（度）、要不要左右翻、
+     * [wheelDeg] = 前輪轉角（度，+ = 往右打）。左右翻時畫面裡的車也是鏡像的，前輪要反方向挑。
      */
-    fun draw(ctx: Context, c: Canvas, x: Float, y: Float, pxPerM: Float, azDeg: Float, elDeg: Float, mirror: Boolean): Boolean {
-        val vs = load(ctx); if (vs.isEmpty()) return false
+    fun draw(ctx: Context, c: Canvas, x: Float, y: Float, pxPerM: Float, azDeg: Float, elDeg: Float, mirror: Boolean, wheelDeg: Float = 0f): Boolean {
+        val all = load(ctx); if (all.isEmpty()) return false
+        val want = if (mirror) -wheelDeg else wheelDeg
+        val st = all.minOf { abs(it.steer - want) }.let { d -> all.first { abs(it.steer - want) == d }.steer }
+        val vs = all.filter { it.steer == st }
         fun angDiff(a: Float, b: Float): Float { var d = (a - b) % 360f; if (d > 180f) d -= 360f; if (d < -180f) d += 360f; return abs(d) }
         val best = vs.minByOrNull { angDiff(azDeg, it.az.toFloat()) + 1.5f * abs(elDeg - it.el) } ?: return false
         val bmp = cache.getOrPut(best.file) { try { ctx.assets.open("e60_views/" + best.file).use { BitmapFactory.decodeStream(it) } } catch (_: Throwable) { null } } ?: return false

@@ -111,12 +111,20 @@ object Dashcam {
         val srcW = (front.width * rw.toFloat() / H).toInt().coerceAtMost(front.width)
         val sx = (front.width - srcW) / 2
         c.drawBitmap(front, Rect(sx, 0, sx + srcW, front.height), Rect(bw, 0, W, H), paint)
+        // 3D 轉彎：路口轉彎的掃過範圍（外側車頭角、內側後輪虛線），跟 360 畫面同一份路徑，投影到重建的 3D 視角；畫在車模下面
+        if (bowlV != null) p?.optJSONObject("turn")?.let { t ->
+            val k2 = H.toFloat() / front.height
+            c.save(); c.clipRect(bw, 0, W, H)
+            drawTurn3D(c, bowlV, t) { pt -> floatArrayOf(bw + (pt[0] - sx) * k2, pt[1] * k2) }
+            c.restore()
+        }
         // 右半邊是重建的原廠 3D 視角：在自車位置貼 E60（挑最接近這個視角的渲染圖）
         val app0 = appCtx
         if (egoO != null && egoP != null && app0 != null) {
             val k2 = H.toFloat() / front.height
             c.save(); c.clipRect(bw, 0, W, H)
-            EgoViews.draw(app0, c, bw + (egoO[0] - sx) * k2, egoO[1] * k2, egoO[2] * k2, egoP.azDeg, egoP.elDeg, egoP.mirror)
+            val wheelDeg = VehicleBus.signals.snapshot().steerDeg?.let { (it / VehicleGeometry().steerRatio).toFloat().coerceIn(-35f, 35f) } ?: 0f
+            EgoViews.draw(app0, c, bw + (egoO[0] - sx) * k2, egoO[1] * k2, egoO[2] * k2, egoP.azDeg, egoP.elDeg, egoP.mirror, wheelDeg)
             c.restore()
         }
         // 動態輔助線（倒車或慢速）：照方向盤角度算車輪會走的弧線，投影到同一個 3D 視角
@@ -169,6 +177,31 @@ object Dashcam {
     private val guide = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = 5f; strokeCap = Paint.Cap.ROUND }
 
     /** 動態輔助線：兩條輪跡（自車寬）沿方向盤決定的圓弧往行進方向延伸 4 m，0.5 m 內紅、1.5 m 內黃、其餘綠。 */
+    private val turnFill = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+    private val turnLine = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = 4f; strokeJoin = Paint.Join.ROUND }
+    private val turnDash = android.graphics.DashPathEffect(floatArrayOf(18f, 12f), 0f)
+    private val turnPath = android.graphics.Path()
+
+    /** 轉彎路徑（payload "turn"：o 外側、i 內側後輪、sw 掃過多邊形，x 右 z 前、原點車中心）投影到 3D 視角。 */
+    private fun drawTurn3D(c: Canvas, bv: BowlView, t: JSONObject, toCanvas: (FloatArray) -> FloatArray) {
+        fun pts(key: String): List<FloatArray> {
+            val a = t.optJSONArray(key) ?: return emptyList()
+            return (0 until a.length()).mapNotNull { i -> a.optJSONArray(i)?.let { q -> bv.projectGround(q.optDouble(0), q.optDouble(1))?.let(toCanvas) } }
+        }
+        val col = when { t.optInt("hit") > 0 -> Color.rgb(255, 70, 60); t.optInt("est") == 1 -> Color.rgb(90, 200, 230); else -> Color.rgb(255, 200, 60) }
+        fun poly(ps: List<FloatArray>, close: Boolean) {
+            turnPath.reset(); ps.forEachIndexed { i, q -> if (i == 0) turnPath.moveTo(q[0], q[1]) else turnPath.lineTo(q[0], q[1]) }
+            if (close) turnPath.close()
+        }
+        val sw = pts("sw")
+        if (sw.size >= 3) { poly(sw, true); turnFill.color = col; turnFill.alpha = 70; c.drawPath(turnPath, turnFill) }
+        turnLine.color = col; turnLine.pathEffect = null
+        pts("o").takeIf { it.size >= 2 }?.let { poly(it, false); c.drawPath(turnPath, turnLine) }
+        turnLine.pathEffect = turnDash
+        pts("i").takeIf { it.size >= 2 }?.let { poly(it, false); c.drawPath(turnPath, turnLine) }
+        turnLine.pathEffect = null
+    }
+
     private fun drawGuides(c: Canvas, bv: BowlView, toCanvas: (FloatArray) -> FloatArray) {
         val vs = VehicleBus.signals.snapshot()
         val rev = (CanVehicle.info.gear ?: vs.gear) == 'R'

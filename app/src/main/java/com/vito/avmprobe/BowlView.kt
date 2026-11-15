@@ -58,9 +58,36 @@ class BowlView(private val geo: AvmGeometry, val params: PerspectiveMapper.Param
         return floatArrayOf(px.toFloat(), (half - yu * focal).toFloat(), (focal / d).toFloat())
     }
 
-    /** 地面點 (x, z) → 輸出畫面像素；在鏡頭後面回 null（動態輔助線用）。 */
+    /**
+     * 地面點 (x, z) → 輸出畫面像素；在鏡頭後面回 null（動態輔助線、轉彎路徑用）。
+     * 碗面重建時，5 m 外的地面被貼到碗壁上：實體鏡頭看那個地面點的光線跟碗壁的交點才是它在畫面上出現的地方，
+     * 所以遠的點先沿「看得最正的鏡頭 → 地面點」的光線找到碗壁上的位置再投影，線才會貼在畫面裡的路面上。
+     */
     fun projectGround(x: Double, z: Double): FloatArray? {
-        val vx = x - cam[0]; val vy = -cam[1]; val vz = z - cam[2]
+        if (hypot(x, z) <= FLAT_R) return project(x, 0.0, z)
+        var best: CamParams? = null; var bestAng = Double.MAX_VALUE
+        for (c in geo.cams) {
+            val vx = x - c.px; val vy = -c.py; val vz = z - c.pz; val m = c.rot
+            val cz = m[2] * vx + m[5] * vy + m[8] * vz
+            val cr = sqrt((m[0] * vx + m[3] * vy + m[6] * vz).let { it * it } + (m[1] * vx + m[4] * vy + m[7] * vz).let { it * it })
+            val ang = atan2(cr, cz)
+            if (ang < bestAng) { bestAng = ang; best = c }
+        }
+        val c = best ?: return project(x, 0.0, z)
+        // 從鏡頭往地面點走，找第一個「高度 ≤ 碗面高度」的位置（二分）
+        fun below(t: Double): Boolean {
+            val px = c.px + t * (x - c.px); val py = c.py + t * (0.0 - c.py); val pz = c.pz + t * (z - c.pz)
+            val rr = hypot(px, pz); val surf = if (rr <= FLAT_R) 0.0 else BOWL_K * (rr - FLAT_R) * (rr - FLAT_R)
+            return py <= surf
+        }
+        var lo = 0.0; var hi = 1.0
+        repeat(20) { val m = (lo + hi) / 2; if (below(m)) hi = m else lo = m }
+        return project(c.px + hi * (x - c.px), c.py + hi * (0.0 - c.py), c.pz + hi * (z - c.pz))
+    }
+
+    /** 3D 點 → 輸出畫面像素；在鏡頭後面回 null。 */
+    fun project(x: Double, y: Double, z: Double): FloatArray? {
+        val vx = x - cam[0]; val vy = y - cam[1]; val vz = z - cam[2]
         val d = vx * f[0] + vy * f[1] + vz * f[2]
         if (d < 0.3) return null
         val xr = (vx * r[0] + vy * r[1] + vz * r[2]) / d; val yu = (vx * u[0] + vy * u[1] + vz * u[2]) / d
