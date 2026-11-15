@@ -86,7 +86,8 @@ object Dashcam {
         fb.setPixels(frontArr, 0, FRONT, 0, 0, FRONT, FRONT)
         val mpp = p.bevMpp; val ox = p.bevOriginX; val oy = p.bevOriginY
         val pl = latest
-        r.frame({ c -> compose(c, bb, fb, mpp, ox, oy, pl) }, { subtitle(pl) })
+        val egoO = p.recBowlOrigin; val egoP = p.recBowlParams; val bowlV = p.recBowl
+        r.frame({ c -> compose(c, bb, fb, mpp, ox, oy, pl, egoO, egoP, bowlV) }, { subtitle(pl) })
     }
 
     // ───────────────────────── 畫面合成 ─────────────────────────
@@ -97,7 +98,8 @@ object Dashcam {
     private val box = Paint(Paint.ANTI_ALIAS_FLAG)
     private val clock = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
 
-    private fun compose(c: Canvas, bev: Bitmap, front: Bitmap, mpp: Float, ox: Float, oy: Float, p: JSONObject?) {
+    private fun compose(c: Canvas, bev: Bitmap, front: Bitmap, mpp: Float, ox: Float, oy: Float, p: JSONObject?,
+                        egoO: FloatArray? = null, egoP: PerspectiveMapper.Params? = null, bowlV: BowlView? = null) {
         val W = DashcamRecorder.W; val H = DashcamRecorder.H
         c.drawColor(Color.BLACK)
         // 左：俯視圖，高 720
@@ -109,6 +111,21 @@ object Dashcam {
         val srcW = (front.width * rw.toFloat() / H).toInt().coerceAtMost(front.width)
         val sx = (front.width - srcW) / 2
         c.drawBitmap(front, Rect(sx, 0, sx + srcW, front.height), Rect(bw, 0, W, H), paint)
+        // 右半邊是重建的原廠 3D 視角：在自車位置貼 E60（挑最接近這個視角的渲染圖）
+        val app0 = appCtx
+        if (egoO != null && egoP != null && app0 != null) {
+            val k2 = H.toFloat() / front.height
+            c.save(); c.clipRect(bw, 0, W, H)
+            EgoViews.draw(app0, c, bw + (egoO[0] - sx) * k2, egoO[1] * k2, egoO[2] * k2, egoP.azDeg, egoP.elDeg, egoP.mirror)
+            c.restore()
+        }
+        // 動態輔助線（倒車或慢速）：照方向盤角度算車輪會走的弧線，投影到同一個 3D 視角
+        if (bowlV != null) {
+            val k2 = H.toFloat() / front.height
+            c.save(); c.clipRect(bw, 0, W, H)
+            drawGuides(c, bowlV) { pt -> floatArrayOf(bw + (pt[0] - sx) * k2, pt[1] * k2) }
+            c.restore()
+        }
         // 俯視圖上的標注（對位是精確的：就是我們自己的俯視圖）
         val top = AnnotationMapper.Params(
             clipL = 0f, clipT = 0f, clipR = bw.toFloat() / W, clipB = 1f,
@@ -120,7 +137,7 @@ object Dashcam {
         // 自車：直接畫向量車模（以前從原廠俯視圖截下來貼，邊緣帶到地面、比例怪）；煞車尾燈亮、方向燈閃
         val vehNow = p?.optJSONObject("veh")
         val blinkOn = (SystemClock.elapsedRealtime() / 400L) % 2L == 0L
-        EgoTopCar.draw(c, ox * k, oy * k, pm, braking, vehNow?.optString("turn"), blinkOn)
+        EgoTopCar.draw(c, ox * k, oy * k, pm, braking, vehNow?.optString("turn"), blinkOn, appCtx)
         // 角落：時間、車速、方向燈、檔位、煞車、錄影中
         val veh = p?.optJSONObject("veh")
         box.color = Color.argb(150, 0, 0, 0)
@@ -147,6 +164,41 @@ object Dashcam {
         c.drawCircle(W - 30f, 30f, 10f, box)
         c.drawText("REC", W - 95f, 39f, txt)
         if (SystemClock.elapsedRealtime() - lastImpactAt < IMPACT_HOLD_MS) c.drawText("撞擊！已鎖定", W - 260f, 75f, txt)
+    }
+
+    private val guide = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = 5f; strokeCap = Paint.Cap.ROUND }
+
+    /** 動態輔助線：兩條輪跡（自車寬）沿方向盤決定的圓弧往行進方向延伸 4 m，0.5 m 內紅、1.5 m 內黃、其餘綠。 */
+    private fun drawGuides(c: Canvas, bv: BowlView, toCanvas: (FloatArray) -> FloatArray) {
+        val vs = VehicleBus.signals.snapshot()
+        val rev = (CanVehicle.info.gear ?: vs.gear) == 'R'
+        if (!rev && (vs.speedKmh ?: 99f) > 15f) return
+        val geo = VehicleGeometry()
+        val steer = vs.steerDeg ?: 0f
+        val wheel = Math.toRadians((steer / geo.steerRatio).coerceIn(-35.0, 35.0))
+        val dir = if (rev) -1.0 else 1.0
+        // 後軸中心（z = −軸距一半附近）當旋轉基準；前進看前方、倒車看後方
+        val axleZ = -geo.wheelbase / 2
+        val startZ = if (rev) -geo.length / 2 else geo.length / 2
+        val hw = geo.width / 2
+        for (side in doubleArrayOf(-hw, hw)) {
+            var prev: FloatArray? = null
+            for (k in 0..40) {
+                val s = k * 0.1                                     // 沿路徑走了幾公尺
+                val (x, z) = if (kotlin.math.abs(wheel) < 1e-3) Pair(side, startZ + dir * s) else {
+                    val rad = geo.wheelbase / kotlin.math.tan(wheel)    // + = 往右轉
+                    val ang = dir * (s + (startZ - axleZ) * dir) / rad  // 從後軸算的轉角
+                    val rr = rad - side
+                    Pair(rad - rr * kotlin.math.cos(ang), axleZ + rr * kotlin.math.sin(ang))
+                }
+                val pt = bv.projectGround(x, z)?.let(toCanvas)
+                if (pt != null && prev != null) {
+                    guide.color = when { s < 0.5 -> Color.rgb(255, 60, 60); s < 1.5 -> Color.rgb(255, 210, 40); else -> Color.rgb(60, 220, 120) }
+                    c.drawLine(prev[0], prev[1], pt[0], pt[1], guide)
+                }
+                prev = pt
+            }
+        }
     }
 
     /** 字幕：車速、方向燈、煞車、最近的車、警示。 */

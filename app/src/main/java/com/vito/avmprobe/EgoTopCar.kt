@@ -1,5 +1,8 @@
 package com.vito.avmprobe
 
+import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.LinearGradient
@@ -24,10 +27,34 @@ object EgoTopCar {
     private val line = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
     private val path = Path()
 
-    fun draw(c: Canvas, cx: Float, cy: Float, pm: Float, braking: Boolean, turn: String?, blinkOn: Boolean) {
+    /** 自車 E60 的俯視圖（tools/render/e60_top.py 從 3D 模型渲染：每像素 5 mm、車頭朝上、透明背景）。 */
+    private const val SPRITE_MPP = 0.005f
+    @Volatile private var sprite: Bitmap? = null
+    @Volatile private var spriteTried = false
+    private val bmpPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+
+    private fun sprite(ctx: Context?): Bitmap? {
+        if (!spriteTried && ctx != null) {
+            spriteTried = true
+            sprite = try { ctx.assets.open("e60_top.png").use { BitmapFactory.decodeStream(it) } } catch (_: Throwable) { null }
+        }
+        return sprite
+    }
+
+    fun draw(c: Canvas, cx: Float, cy: Float, pm: Float, braking: Boolean, turn: String?, blinkOn: Boolean, ctx: Context? = null) {
         val hw = WID / 2 * pm; val hl = LEN / 2 * pm
         fun X(x: Float) = cx + x * pm          // x：公尺，+ = 右
         fun Y(z: Float) = cy - z * pm          // z：公尺，+ = 前
+        val bmp = sprite(ctx)
+        if (bmp != null) {
+            // 你的車（E60 3D 模型渲染的俯視圖），燈號另外疊上去
+            val bw = bmp.width * SPRITE_MPP * pm / 2; val bh = bmp.height * SPRITE_MPP * pm / 2
+            fill.shader = null; fill.color = Color.argb(110, 0, 0, 0)
+            c.drawRoundRect(RectF(cx - bw - 0.08f * pm, cy - bh - 0.06f * pm, cx + bw + 0.08f * pm, cy + bh + 0.10f * pm), 0.45f * pm, 0.45f * pm, fill)
+            c.drawBitmap(bmp, null, RectF(cx - bw, cy - bh, cx + bw, cy + bh), bmpPaint)
+            drawLamps(c, cx, cy, pm, braking, turn, blinkOn, false)
+            return
+        }
 
         // 陰影
         fill.shader = null; fill.color = Color.argb(110, 0, 0, 0)
@@ -68,14 +95,29 @@ object EgoTopCar {
         c.drawLine(X(-w * 0.45f), Y(l - 0.15f), X(-w * 0.55f), Y(1.08f), line)
         c.drawLine(X(w * 0.45f), Y(l - 0.15f), X(w * 0.55f), Y(1.08f), line)
 
+        drawLamps(c, cx, cy, pm, braking, turn, blinkOn, true)
+    }
+
+    /** 燈號：vector = true 時連平常的大燈、尾燈也畫（向量車模）；疊在 E60 圖上時只畫亮起來的（煞車、方向燈）。 */
+    private fun drawLamps(c: Canvas, cx: Float, cy: Float, pm: Float, braking: Boolean, turn: String?, blinkOn: Boolean, vector: Boolean) {
+        val w = WID / 2; val l = LEN / 2
+        fun X(x: Float) = cx + x * pm
+        fun Y(z: Float) = cy - z * pm
         // 大燈（白）、尾燈（紅：平常暗、煞車亮）
+        if (vector) {
         fill.color = Color.rgb(225, 235, 245)
         c.drawRoundRect(RectF(X(-w * 0.92f), Y(l - 0.02f), X(-w * 0.55f), Y(l - 0.16f)), 0.05f * pm, 0.05f * pm, fill)
         c.drawRoundRect(RectF(X(w * 0.55f), Y(l - 0.02f), X(w * 0.92f), Y(l - 0.16f)), 0.05f * pm, 0.05f * pm, fill)
         fill.color = if (braking) Color.rgb(255, 40, 40) else Color.rgb(120, 20, 24)
         c.drawRoundRect(RectF(X(-w * 0.94f), Y(-l + 0.16f), X(-w * 0.50f), Y(-l + 0.02f)), 0.05f * pm, 0.05f * pm, fill)
         c.drawRoundRect(RectF(X(w * 0.50f), Y(-l + 0.16f), X(w * 0.94f), Y(-l + 0.02f)), 0.05f * pm, 0.05f * pm, fill)
+        }
         if (braking) {
+            if (!vector) {
+                fill.color = Color.rgb(255, 40, 40)
+                c.drawRoundRect(RectF(X(-w * 0.94f), Y(-l + 0.16f), X(-w * 0.50f), Y(-l + 0.02f)), 0.05f * pm, 0.05f * pm, fill)
+                c.drawRoundRect(RectF(X(w * 0.50f), Y(-l + 0.16f), X(w * 0.94f), Y(-l + 0.02f)), 0.05f * pm, 0.05f * pm, fill)
+            }
             // 光暈＋第三煞車燈
             fill.color = Color.argb(90, 255, 30, 30)
             c.drawRoundRect(RectF(X(-w), Y(-l + 0.30f), X(w), Y(-l - 0.25f)), 0.25f * pm, 0.25f * pm, fill)

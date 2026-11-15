@@ -239,6 +239,20 @@ class AdasPipeline(
     fun renderFrontInto(out: IntArray, size: Int): Boolean {
         val g = geo ?: return false
         if (frame.width == 0) return false
+        // 原廠目前是 3D 視角／第一人稱：用同一組虛擬相機參數把四顆魚眼貼到碗上重建（查表在背景算好才換過去）
+        if (!Crumbs.off("bowlrec")) Engine360.recordParams()?.let { prm ->
+            val bv = bowl
+            if (bv != null && bv.params == prm && bv.size == size && bowlReady) {
+                frame.sampleLut(bv.lut(frame.width, frame.height), out); recBowlOrigin = bv.projectOrigin(); recBowlParams = prm; recBowl = bv; return true
+            }
+            if (!bowlBusy && (bv == null || bv.params != prm || bv.size != size)) {
+                bowlBusy = true; bowlReady = false
+                val nb = BowlView(g, prm, size); bowl = nb
+                val fw = frame.width; val fh = frame.height
+                Thread({ try { nb.lut(fw, fh); if (bowl === nb) bowlReady = true } catch (t: Throwable) { Log.w(TAG, "bowl", t) } finally { bowlBusy = false } }, "bowl-lut").start()
+            }
+        }
+        recBowlOrigin = null; recBowlParams = null; recBowl = null
         val (cam, mirror) = try { Engine360.recordView() } catch (_: Throwable) { Pair("front", false) }
         val v = recFront?.takeIf { it.size == size && it.camName == cam } ?: try {
             when (cam) {
@@ -256,6 +270,13 @@ class AdasPipeline(
         return true
     }
     private var recFront: VirtualView? = null
+    @Volatile private var bowl: BowlView? = null
+    /** 右半邊這一幀是碗重建時：自車中心在畫面上的位置與比例（貼車模），以及用的視角。 */
+    @Volatile var recBowlOrigin: FloatArray? = null; private set
+    @Volatile var recBowlParams: PerspectiveMapper.Params? = null; private set
+    @Volatile var recBowl: BowlView? = null; private set
+    @Volatile private var bowlReady = false
+    @Volatile private var bowlBusy = false
 
     val bevWidth: Int get() = geo?.bev?.width ?: 0
     val bevHeight: Int get() = geo?.bev?.height ?: 0

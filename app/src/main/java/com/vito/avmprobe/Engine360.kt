@@ -373,6 +373,9 @@ object Engine360 {
      * 原廠前／後鏡頭畫面 → 前／後（後鏡頭原廠是左右翻轉的，照做）；倒車 → 後；
      * 打方向燈（原廠切側邊）→ 那一側；其他 3D 視角 → 前。
      */
+    /** 原廠目前視角的虛擬相機參數（3D 視角或第一人稱）；俯視或不知道 = null。行車記錄器右半邊照這個重建。 */
+    fun recordParams(): PerspectiveMapper.Params? = try { lastViewKey?.let { FactoryViews.forKey(it, lastBvName) } } catch (_: Throwable) { null }
+
     fun recordView(): Pair<String, Boolean> {
         val bv = lastBvName.uppercase()
         if (bv == "BV_BACK" || bv == "BV_REAR" || bv == "BV_MW_REAR") return Pair("rear", true)
