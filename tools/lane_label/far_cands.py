@@ -47,8 +47,11 @@ def ds3_val_groups(avm):
     return {(it["session"], it["frame"] // 150) for it in va}
 
 
-def pick(train, n, seed, avm):
+def pick(train, n, seed, avm, skip_dirs=()):
     done = labeled_frames(avm); vg = ds3_val_groups(avm)
+    for d in skip_dirs:                      # 前幾輪已經挑過的影格
+        for f in glob.glob(os.path.join(d, "comp", "*.npz")):
+            s, fr, _ = os.path.basename(f)[:-4].rsplit("_", 2); done.add((s, int(fr)))
     items = []
     for sd in sorted(glob.glob(os.path.join(train, "train_*"))):
         s = os.path.basename(sd); last = -99
@@ -120,13 +123,14 @@ def main():
     ap.add_argument("--train", required=True); ap.add_argument("--ckpt", required=True); ap.add_argument("--out", required=True)
     ap.add_argument("--frames", type=int, default=700); ap.add_argument("--size", default="224x128"); ap.add_argument("--seed", type=int, default=5)
     ap.add_argument("--thr", type=float, default=0.5)
+    ap.add_argument("--skip", default="", help="前幾輪的輸出資料夾（逗號分隔），那些影格不再挑")
     a = ap.parse_args()
     avm = os.path.dirname(os.path.abspath(a.train.rstrip("/")))
     for d in ("img", "comp", "grids"): os.makedirs(os.path.join(a.out, d), exist_ok=True)
     dev = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
     net = T.LaneNet(pretrained=False); net.load_state_dict(torch.load(a.ckpt, map_location="cpu")); net.to(dev).eval()
     sz = tuple(int(v) for v in a.size.split("x"))
-    frames = pick(a.train, a.frames, a.seed, avm)
+    frames = pick(a.train, a.frames, a.seed, avm, [d for d in a.skip.split(",") if d])
     print("影格", len(frames), flush=True)
     geo_cache, gcache = {}, {}
     tiles = []
