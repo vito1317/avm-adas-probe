@@ -43,8 +43,8 @@ def group_split(names, seed=3, val_frac=0.2):
     return set(groups[:max(1, int(len(groups) * val_frac))])
 
 
-def per_image(hn):
-    tiles = json.load(open(os.path.join(hn, "tiles.json"))); rv = load_reviews(hn)
+def per_image(hn, tiles_file="tiles.json"):
+    tiles = json.load(open(os.path.join(hn, tiles_file))); rv = load_reviews(hn)
     by = {}
     for t in tiles:
         v = rv.get((t.get("grid"), t.get("tile")))
@@ -54,8 +54,11 @@ def per_image(hn):
 
 
 def build(a):
-    by = per_image(a.hn)
+    by = per_image(a.hn, a.tiles)
     vg = group_split(list(by))
+    if a.holdout is not None:               # 整段留下來測試（不是隨機切）：holdout 那幾段當驗證，其他全部訓練
+        hs = set(x for x in a.holdout.split(",") if x)
+        vg = {(n.rsplit("_", 2)[0], int(n.rsplit("_", 2)[1]) // 150) for n in by if n.rsplit("_", 2)[0] in hs}
     cnt = {}; out = {"ds_train": [], "ds_val": []}
     for d in out:
         for sub in ("img", "mask"): os.makedirs(os.path.join(a.hn, d, sub), exist_ok=True)
@@ -116,6 +119,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("cmd", choices=["build", "eval"]); ap.add_argument("--hn", required=True)
     ap.add_argument("--ckpt"); ap.add_argument("--size", default="224x128")
+    ap.add_argument("--tiles", default="tiles.json", help="區塊清單檔（補審的那批是 tiles_only.json）")
+    ap.add_argument("--holdout", default=None, help="整段留做驗證的 session（逗號分隔）；不給 = 隨機 20%%")
     a = ap.parse_args()
     build(a) if a.cmd == "build" else evaluate(a)
 
