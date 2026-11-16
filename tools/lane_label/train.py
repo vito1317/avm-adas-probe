@@ -151,6 +151,7 @@ def main():
               f"  {time.time() - t0:.0f}s", flush=True)
         if score > best:
             best = score; torch.save(net.state_dict(), os.path.join(a.out, "best.pt"))
+        torch.save(net.state_dict(), os.path.join(a.out, "last.pt"))   # 驗證集只看近處；遠處誤判要另外評（hardneg_ds.py eval）
     json.dump(log, open(os.path.join(a.out, "log.json"), "w"), ensure_ascii=False, indent=1)
     print("最佳分數", round(best, 3))
 
