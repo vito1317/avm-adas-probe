@@ -70,7 +70,15 @@ def build(a):
             reg = lab == cid
             if v in NEG: m[ndimage.binary_dilation(reg, iterations=2) & (m == 255)] = 0
         for cid, v in comps:                     # 線最後畫（蓋過旁邊外擴的背景）
-            if v == "lane": m[(lab == cid) & (prob >= 178)] = 1
+            if v != "lane": continue
+            core = (lab == cid) & (prob >= 178)
+            if a.thin:
+                # 只標中心線（骨架外擴 1 px ≈ 3 px 寬），區塊其餘不計分：區塊通常比真的線粗，整塊標成線會教出粗線
+                from skimage.morphology import skeletonize
+                sk = ndimage.binary_dilation(skeletonize(core), iterations=1) & (lab == cid)
+                m[(lab == cid) & (m != 0)] = 255; m[sk] = 1
+            else:
+                m[core] = 1
         if not ((m == 0) | (m == 1)).any(): continue
         s, fr, q = name.rsplit("_", 2)
         d = "ds_val" if (s, int(fr) // 150) in vg else "ds_train"
@@ -119,6 +127,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("cmd", choices=["build", "eval"]); ap.add_argument("--hn", required=True)
     ap.add_argument("--ckpt"); ap.add_argument("--size", default="224x128")
+    ap.add_argument("--thin", action="store_true", help="真的線只標中心線（不然整塊標成線，會教出粗線）")
     ap.add_argument("--tiles", default="tiles.json", help="區塊清單檔（補審的那批是 tiles_only.json）")
     ap.add_argument("--holdout", default=None, help="整段留做驗證的 session（逗號分隔）；不給 = 隨機 20%%")
     a = ap.parse_args()

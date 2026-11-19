@@ -45,6 +45,7 @@ app/src/main/assets/model_fisheye_*
 app/src/main/assets/orient.tflite
 app/src/main/assets/arrow.tflite
 app/src/main/assets/tl_state.tflite
+app/src/main/assets/lamp.tflite
 
 # E60 車模渲染（本機產生，不進公開 repo）
 app/src/main/assets/e60_top.png

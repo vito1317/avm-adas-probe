@@ -3,8 +3,9 @@
 車燈分類器：車框裁切 96x96 → 三個獨立的「亮不亮」：煞車燈、畫面左側方向燈、畫面右側方向燈（sigmoid，多標籤）。
 不知道（-1）的不算損失。閃爍交給 360 端看連續幾幀（這裡只學「這一幀哪顆燈亮」）。
 
-資料：TLD 裁切（tld_crops.py，labels.csv）＋ 自己標的魚眼車框（lamp_sheets.py 的標註，量少，當微調／驗證）。
-驗證：TLD 依影片切 10% ＋ 自己的魚眼標註全部（看在真的魚眼上表現如何）。
+資料：TLD 裁切（tld_crops.py，labels.csv）＋ 自己標的魚眼車框（lamp_sheets.py 隨機挑車、lamp_events.py 車燈事件時的車）。
+自己的魚眼依路段 (session, 影格//150) 切：約 75% 一起訓練（重複 --own_repeat 次，量少但才是真的魚眼）、25% 驗證；
+挑最好的權重看「自己的魚眼驗證」（沒有時才看 TLD 驗證）。
 
 用法：~/avm-data/.venv312/bin/python tools/det_label/lamp_train.py --tld ~/avm-data/lamp_ext/tld --own ~/avm-data/lamp \
         --out ~/avm-data/lamp_runs/v1 [--export]
@@ -50,6 +51,7 @@ def load_own(d):
     from tld_crops import letterbox
     sheets = {s["sheet"]: s["cells"] for s in json.load(open(os.path.join(d, "sheets.json")))}
     out = []; os.makedirs(os.path.join(d, "crop96"), exist_ok=True)
+    import re
     for f in glob.glob(os.path.join(d, "results", "*.jsonl")):
         for line in open(f):
             try: r = json.loads(line)
@@ -66,7 +68,9 @@ def load_own(d):
                     im = Image.open(c["img"]).convert("RGB"); W = im.size[0]
                     cx, cy, w, h = c["box"]
                     letterbox(im, ((cx - w / 2) * W, (cy - h / 2) * W, (cx + w / 2) * W, (cy + h / 2) * W)).save(p, quality=92)
-                out.append((p, lab, "own"))
+                mm = re.search(r"(train_\d{8}_\d{6})_(\d{5})", os.path.basename(c["img"]))
+                grp = f"{mm.group(1)}/{int(mm.group(2)) // 150}" if mm else "own"
+                out.append((p, lab, grp))
     return out
 
 
@@ -96,6 +100,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--tld", required=True); ap.add_argument("--own", default=""); ap.add_argument("--out", required=True)
     ap.add_argument("--epochs", type=int, default=12); ap.add_argument("--max_tld", type=int, default=60000); ap.add_argument("--export", action="store_true")
+    ap.add_argument("--own_repeat", type=int, default=8, help="自己的魚眼訓練資料重複幾次（量比 TLD 少很多）")
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
     dev = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
@@ -103,9 +108,15 @@ def main():
     vids = sorted({v for *_, v in tld}); random.Random(1).shuffle(vids)
     val_v = set(vids[:max(1, len(vids) // 10)])
     tr = [r for r in tld if r[2] not in val_v]; va = [r for r in tld if r[2] in val_v]
-    own = load_own(a.own) if a.own else []
-    print("TLD 訓練", len(tr), "驗證", len(va), "自己的魚眼", len(own), flush=True)
-    Xt, Yt = tensors(tr); Xv, Yv = tensors(va); Xo, Yo = tensors(own) if own else (torch.zeros(0, 3, S, S), torch.zeros(0, 3))
+    own = [r for d in a.own.split(",") if d for r in load_own(d)]
+    grps = sorted({g for *_, g in own}); random.Random(2).shuffle(grps)
+    og_val = set(grps[:max(1, len(grps) // 4)]) if grps else set()
+    own_tr = [r for r in own if r[2] not in og_val]; own_va = [r for r in own if r[2] in og_val]
+    def npos(rows, j): return sum(1 for r in rows if r[1][j] == 1)
+    print("TLD 訓練", len(tr), "驗證", len(va), "｜自己的魚眼 訓練", len(own_tr), "驗證", len(own_va),
+          "｜驗證裡亮燈：煞車", npos(own_va, 0), "左", npos(own_va, 1), "右", npos(own_va, 2), flush=True)
+    tr = tr + own_tr * a.own_repeat
+    Xt, Yt = tensors(tr); Xv, Yv = tensors(va); Xo, Yo = tensors(own_va) if own_va else (torch.zeros(0, 3, S, S), torch.zeros(0, 3))
     # 方向燈少：正例加權
     pw = []
     for j in range(3):
@@ -129,8 +140,9 @@ def main():
         sched.step()
         print(f"ep {ep + 1} loss {loss.item():.3f}", flush=True)
         rv = evaluate(net, Xv, Yv, dev, "TLD 驗證")
-        if len(Xo): evaluate(net, Xo, Yo, dev, "自己的魚眼")
-        score = sum(v["prec"] + v["rec"] for v in rv.values())
+        ro = evaluate(net, Xo, Yo, dev, "自己的魚眼驗證") if len(Xo) else {}
+        def f1(v): return 2 * v["prec"] * v["rec"] / max(1e-9, v["prec"] + v["rec"])
+        score = sum(f1(v) for v in ro.values() if v["pos"] > 0) if any(v["pos"] > 0 for v in ro.values()) else sum(v["prec"] + v["rec"] for v in rv.values())
         if score > best: best = score; torch.save(net.state_dict(), os.path.join(a.out, "best.pt"))
     if a.export:
         net = Net(pretrained=False); net.load_state_dict(torch.load(os.path.join(a.out, "best.pt"), map_location="cpu")); net.eval()

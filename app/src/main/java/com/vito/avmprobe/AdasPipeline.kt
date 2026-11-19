@@ -718,8 +718,19 @@ class AdasPipeline(
             Crumbs.at(Crumbs.FRAME, "lead")
             val lead = dets.filter { ObjTypes.group(it.type) == "veh" && it.rect.centerX() in v.size * 0.35f..v.size * 0.65f }
                 .maxByOrNull { it.rect.bottom }
-            leadLight = if (lead != null) leadLights.update(now, argb, v.size, lead.rect.left, lead.rect.top, lead.rect.right, lead.rect.bottom)
+            var ll = if (lead != null) leadLights.update(now, argb, v.size, lead.rect.left, lead.rect.top, lead.rect.right, lead.rect.bottom)
                 else leadLights.update(now, null, v.size, 0f, 0f, 0f, 0f)
+            // 煞車燈改用模型判斷（規則看「紅色能量突然變高」，晚上尾燈、紅色車身、反光常誤判）；方向燈仍用規則的閃爍判斷。
+            // 平滑：機率指數平均，0.6 以上算亮、0.35 以下算熄（中間維持原狀），免得一幀一跳。
+            if (lead != null && lead.rect.width() >= 20f && !Crumbs.off("lampnet")) lampNet?.let { net ->
+                val p = Crumbs.step(Crumbs.FRAME, "lampnet") { net.classify(argb, v.size, lead.rect.left, lead.rect.top, lead.rect.right, lead.rect.bottom) }
+                if (p != null) {
+                    lampBrakeP = if (lampBrakeP.isNaN()) p[0] else lampBrakeP + 0.5f * (p[0] - lampBrakeP)
+                    if (lampBrakeP >= 0.6f) lampBrakeOn = true else if (lampBrakeP <= 0.35f) lampBrakeOn = false
+                    ll = ll.copy(brake = lampBrakeOn)
+                }
+            } else if (lead == null) { lampBrakeP = Float.NaN; lampBrakeOn = false }
+            leadLight = ll
             leadLightAt = now
         }
         Crumbs.at(Crumbs.FRAME, "det+")
@@ -727,6 +738,9 @@ class AdasPipeline(
     }
 
     private val leadLights = LeadLightDetector()
+    private val lampNet: LampNet? by lazy { if (LampNet.available(ctx)) try { LampNet(ctx) } catch (t: Throwable) { Log.w(TAG, "lamp", t); null } else null }
+    private var lampBrakeP = Float.NaN
+    private var lampBrakeOn = false
     private val cutInWatch = CutInWatcher()
     private val visualYaw = VisualYaw()
     @Volatile private var cutIn: Triple<Char, Float, Float>? = null
