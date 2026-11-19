@@ -33,6 +33,13 @@ class LaneSeg(ctx: Context, asset: String = ASSET) {
     /** 每顆鏡頭（quad 0 前、1 後、2 左、3 右）最近一次的機率圖，與時間。 */
     val prob: Array<FloatArray>
     val probAt = LongArray(4)
+    /** 時間一致性（[LaneTemporal]）：每顆鏡頭上一次的機率與兩次「取畫面」的時間。 */
+    val temporal = LaneTemporal()
+    private val grabAt = LongArray(4); private val obsAt = LongArray(4); private val prevAt = LongArray(4)
+    private val prevProb: Array<FloatArray>
+    private val gatedFor = LongArray(4)
+    private var gateBev: FloatArray? = null
+    @Volatile var useTemporal = true
     @Volatile var lastMs = 0L; private set
     private var next = 0
 
@@ -46,11 +53,13 @@ class LaneSeg(ctx: Context, asset: String = ASSET) {
         outBuf = ByteBuffer.allocateDirect(4 * W * H * 2).order(ByteOrder.nativeOrder())
         argb = IntArray(W * SH)
         prob = Array(4) { FloatArray(W * H) }
+        prevProb = Array(4) { FloatArray(W * H) }
     }
 
     /** 影格執行緒上：把下一顆鏡頭的畫面取樣進來（幾毫秒）。回傳是哪顆鏡頭。 */
     fun grab(frame: YuvFrame): Int {
         val q = next; next = (next + 1) % 4
+        grabAt[q] = SystemClock.elapsedRealtime()
         val ox = (q % 2) * QW; val oy = (q / 2) * QH
         frame.cropArgb(ox, oy, ox + QW, oy + QH, W, SH, argb)
         inBuf.rewind()
@@ -70,11 +79,12 @@ class LaneSeg(ctx: Context, asset: String = ASSET) {
         interp.run(inBuf, outBuf)
         outBuf.rewind()
         val dst = prob[q]
+        System.arraycopy(dst, 0, prevProb[q], 0, W * H); prevAt[q] = obsAt[q]
         for (p in 0 until W * H) {
             val bg = outBuf.getFloat(); val ln = outBuf.getFloat()
             dst[p] = (1.0 / (1.0 + kotlin.math.exp((bg - ln).toDouble()))).toFloat()   // 兩類 softmax = sigmoid(差)
         }
-        probAt[q] = SystemClock.elapsedRealtime()
+        probAt[q] = SystemClock.elapsedRealtime(); obsAt[q] = grabAt[q]
         lastMs = probAt[q] - t0
     }
 
@@ -85,7 +95,8 @@ class LaneSeg(ctx: Context, asset: String = ASSET) {
      * 拼成俯視圖的機率（跟 [lut] 同大小；看不到、或那顆鏡頭的結果太舊 = 0）。
      * [lut] 是 [AvmGeometry.buildBevLut] 的結果（俯視圖像素 → 整幀像素索引），[frameW] 整幀寬。
      */
-    fun bevProb(lut: IntArray, frameW: Int, out: FloatArray, now: Long) {
+    fun bevProb(lut: IntArray, frameW: Int, out: FloatArray, now: Long,
+                bw: Int = 0, bh: Int = 0, mpp: Float = 0f, cx: Float = 0f, cy: Float = 0f) {
         val key = (lut.size.toLong() shl 20) xor frameW.toLong() xor System.identityHashCode(lut).toLong()
         var idx = bevIdx
         if (idx == null || idx.size != lut.size || bevKey != key) {
@@ -101,9 +112,18 @@ class LaneSeg(ctx: Context, asset: String = ASSET) {
             bevIdx = idx; bevKey = key
         }
         val fresh = BooleanArray(4) { now - probAt[it] < TTL_MS }
+        // 時間一致性：哪顆鏡頭有新結果就重算它負責的那些像素的保留係數（舊結果沿用舊係數，兩者是同一刻的）
+        val gb = if (useTemporal && bw * bh == idx.size && mpp > 0f) (gateBev?.takeIf { it.size == idx.size } ?: FloatArray(idx.size) { 1f }.also { gateBev = it }) else null
+        if (gb != null) for (q in 0 until 4) {
+            val t = obsAt[q]
+            if (!fresh[q] || t == 0L || gatedFor[q] == t) continue
+            gatedFor[q] = t
+            if (prevAt[q] == 0L || t - prevAt[q] > 1500) { for (k in idx.indices) if (idx[k] >= 0 && (idx[k] ushr 24) == q) gb[k] = 1f; continue }
+            temporal.gate(q, idx, bw, bh, mpp, cx, cy, prevProb[q], prevAt[q], t, gb)
+        }
         for (k in idx.indices) {
             val e = idx[k]
-            out[k] = if (e < 0) 0f else { val q = e ushr 24; if (fresh[q]) prob[q][e and 0xFFFFFF] else 0f }
+            out[k] = if (e < 0) 0f else { val q = e ushr 24; if (fresh[q]) prob[q][e and 0xFFFFFF] * (gb?.get(k) ?: 1f) else 0f }
         }
     }
 

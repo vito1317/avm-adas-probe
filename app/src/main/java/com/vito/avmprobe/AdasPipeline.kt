@@ -995,6 +995,15 @@ class AdasPipeline(
         frame.sampleLut(table, bevArgb)
         // 車道線模型：取下一顆鏡頭的畫面（幾毫秒），丟到自己的執行緒跑
         laneSegOrNull()?.let { ls ->
+            // 車道線時間一致性用的自己車子移動：CAN 車速＋轉向角速度（陀螺儀／前方畫面；沒有就用方向盤）
+            run {
+                val vs0 = VehicleBus.signals.snapshot(); val v = vs0.speedKmh?.let { it / 3.6 }
+                val yaw = MotionCurvature.yawRate() ?: if (v != null && vs0.steerDeg != null) {
+                    val gm = VehicleGeometry(); v * kotlin.math.tan(Math.toRadians((vs0.steerDeg / gm.steerRatio).coerceIn(-gm.maxWheelDeg, gm.maxWheelDeg))) / gm.wheelbase
+                } else null
+                ls.temporal.odo(SystemClock.elapsedRealtime(), v, yaw)
+                ls.useTemporal = !Crumbs.off("lanetemp")
+            }
             if (!segBusy && ThermalGovernor.laneModelAllowed(segCounter++)) {
                 Crumbs.at(Crumbs.FRAME, "laneseg")
                 val q = ls.grab(frame)
@@ -1057,7 +1066,7 @@ class AdasPipeline(
                     // 有車道線模型、四顆鏡頭都有新結果 → 用模型決定哪裡是漆；否則照舊用亮度規則
                     val paint = laneSeg?.takeIf { prefs.laneModel && ThermalGovernor.level < 2 && it.ready(now) }?.let { ls ->
                         val a = segBev?.takeIf { it.size == bw * bh } ?: FloatArray(bw * bh).also { segBev = it }
-                        ls.bevProb(table, frame.width, a, now); a
+                        Crumbs.step(Crumbs.GROUND, "lanetemp") { ls.bevProb(table, frame.width, a, now, bw, bh, mpp, cx, cy) }; a
                     }
                     road = roadTrack.update(steepFilter(roadEx.extract(buf, bw, bh, mpp, cx, cy, excl, g.roadValidMask(), paint), VehicleBus.signals.snapshot().speedKmh), now); roadAt = now
                 }

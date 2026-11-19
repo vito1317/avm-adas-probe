@@ -36,6 +36,8 @@ object TrainCollector {
     private const val EVT_GAP_MS = 700L
     private const val EVT_BURST = 8
     private const val EVT_COOL_MS = 15_000L
+    private const val EVT_BLINK_GAP_MS = 200L
+    private const val EVT_BLINK_BURST = 6
     private var evtCount = 0
     private var evtLast = 0L
     private var evtCoolUntil = 0L
@@ -43,10 +45,13 @@ object TrainCollector {
     /** 有車燈事件時：這一幀要不要額外存（[evt] = null 表示目前沒有事件）。 */
     fun dueEvent(now: Long, evt: String?): Boolean {
         if (evt == null || busy || count >= MAX_FRAMES || now < evtCoolUntil) return false
-        if (now - evtLast < EVT_GAP_MS) return false
+        // 方向燈一亮一滅約 0.7～0.8 秒一輪：以前每 0.7 秒存一張，剛好跟閃的節奏差不多，常常一直存到「滅」的那一下
+        // （實際：1258 張事件影格只標到 4 台方向燈亮）→ 方向燈類的事件改成每 0.2 秒連存 6 張（約 1.2 秒，亮、滅都會拍到）
+        val blink = evt == "side_blink" || evt == "lead_turn" || evt == "lead_hazard"
+        if (now - evtLast < (if (blink) EVT_BLINK_GAP_MS else EVT_GAP_MS)) return false
         if (now - evtLast > 3000L) evtCount = 0            // 新的一次事件
         evtCount++; evtLast = now
-        if (evtCount >= EVT_BURST) { evtCoolUntil = now + EVT_COOL_MS; evtCount = 0 }
+        if (evtCount >= (if (blink) EVT_BLINK_BURST else EVT_BURST)) { evtCoolUntil = now + EVT_COOL_MS; evtCount = 0 }
         return true
     }
 
