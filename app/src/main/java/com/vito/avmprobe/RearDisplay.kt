@@ -94,10 +94,21 @@ object RearDisplay {
     private fun connectNow(mac: String) {
         val ad = BluetoothAdapter.getDefaultAdapter() ?: run { status = "車機沒有藍牙"; BleGate.done(GATE); return }
         if (!ad.isEnabled) { status = "車機藍牙是關的"; BleGate.done(GATE); return }
+        // 先掃描找到看板再連（[BleFind]）：以前開機後要到設定按一下裝置才連得上
+        status = "找看板中…"
+        val hh = h ?: run { BleGate.done(GATE); return }
+        BleFind.find(ad, mac, prefs?.rdName.orEmpty(), hh) { d, seen ->
+            if (seen && !d.address.equals(mac, true)) prefs?.rdMac = d.address      // 位址變了：記新的
+            if (!seen) status = "掃不到看板的廣播（手機 App 連著、或看板沒電），直接連看看…"
+            connectDev(d)
+        }
+    }
+
+    private fun connectDev(dev: BluetoothDevice) {
         status = "連線中…"
         Crumbs.at(Crumbs.OTHER, "rd-connect")
         try { gatt?.close() } catch (_: Throwable) {}
-        gatt = ad.getRemoteDevice(mac).connectGatt(ctx, false, cb, BluetoothDevice.TRANSPORT_LE)
+        gatt = dev.connectGatt(ctx, false, cb, BluetoothDevice.TRANSPORT_LE)
         val mine = gatt
         h?.postDelayed({
             if (gatt === mine) BleGate.done(GATE)

@@ -117,11 +117,21 @@ object AmbientLight {
     private fun connectNow(mac: String) {
         val ad = BluetoothAdapter.getDefaultAdapter() ?: run { status = "車機沒有藍牙"; BleGate.done(GATE); return }
         if (!ad.isEnabled) { status = "車機藍牙是關的"; BleGate.done(GATE); return }
+        // 先掃描找到燈再連（[BleFind]）：開機後藍牙快取是空的，直接用 MAC 連常逾時
+        status = "找氛圍燈中…"
+        val hh = h ?: run { BleGate.done(GATE); return }
+        BleFind.find(ad, mac, prefs?.ambientName.orEmpty(), hh) { d, seen ->
+            if (seen && !d.address.equals(mac, true)) prefs?.ambientMac = d.address
+            connectDev(d, mac)
+        }
+    }
+
+    private fun connectDev(dev: android.bluetooth.BluetoothDevice, mac: String) {
         status = "連線中（$mac）…"
         Crumbs.at(Crumbs.OTHER, "ambient-connect")
         try { gatt?.close() } catch (_: Throwable) {}
         // 一定要指定 BLE：車機的藍牙晶片預設可能走傳統藍牙，連上很容易斷、斷了就連不回來（錯誤 133）
-        gatt = ad.getRemoteDevice(mac).connectGatt(ctx, false, cb, android.bluetooth.BluetoothDevice.TRANSPORT_LE)
+        gatt = dev.connectGatt(ctx, false, cb, android.bluetooth.BluetoothDevice.TRANSPORT_LE)
         // 連線逾時：Android 有時一直不回報，會永遠卡在「連線中」→ 15 秒沒好就放掉重來
         val mine = gatt
         h?.postDelayed({
