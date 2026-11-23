@@ -38,6 +38,8 @@
   button{font:inherit;font-size:12px;font-weight:600;color:var(--muted);background:transparent;border:0;border-radius:8px;padding:8px 11px;white-space:nowrap}
   button:focus-visible{outline:2px solid var(--cyan);outline-offset:1px}
   .dock button[aria-pressed="true"]{background:rgba(56,225,255,.16);color:var(--cyan)}
+  /* FSD 簡潔風格：收掉統計面板與各種文字標籤，只留路徑、車道線、號誌 */
+  [data-style="fsd"] .hud.panel{display:none}
   .dock button.g[aria-pressed="true"]{background:rgba(94,240,138,.16);color:var(--green)}
   .topbtn{position:absolute;top:10px;right:10px;z-index:6;background:var(--panel);border:1px solid var(--line)}
   .topbtn[aria-pressed="true"]{color:var(--amber);border-color:rgba(255,194,75,.5)}
@@ -145,6 +147,8 @@
     <span class="sep" aria-hidden="true"></span>
     <button class="g" data-ground="real" aria-pressed="false">實景</button>
     <button class="g" data-ground="virtual" aria-pressed="false">虛擬道路</button>
+    <span class="sep" aria-hidden="true"></span>
+    <button id="styleBtn" aria-pressed="false" title="FSD 簡潔畫面：灰色車、藍色路徑、不顯示文字">FSD</button>
   </div>
 </div>
 
@@ -158,6 +162,7 @@
 <script src="vehicle3d.js"></script>
 <script src="map3d.js"></script>
 <script src="lca3d.js"></script>
+<script src="fsd.js"></script>
 <script>
 (function () {
   'use strict';
@@ -680,6 +685,19 @@
   var ego = makeCar(COL.ego, true);
   ego.rotation.y = Math.PI;
   scene.add(ego);
+  // 開車路徑預估線＋畫面風格（fsd.js）
+  if (window.AVM_FSD) {
+    AVM_FSD.init(THREE, scene);
+    var styleBtn = document.getElementById('styleBtn');
+    var setStyle = function (name) {
+      AVM_FSD.applyStyle(THREE, scene, labels.domElement, name);
+      styleBtn.setAttribute('aria-pressed', String(name === 'fsd'));
+      if (name !== 'fsd') tracks.forEach(function (tr) { AVM_FSD.undressObject(tr.mesh); });
+      obsGrp.visible = name !== 'fsd';          // 高度障礙物的黃框：FSD 風格不畫（太花）
+    };
+    styleBtn.addEventListener('click', function () { setStyle(AVM_FSD.style() === 'fsd' ? 'std' : 'fsd'); });
+    setTimeout(function () { setStyle(AVM_FSD.savedStyle()); }, 0);
+  }
 
   var MODELS = window.AVM_MODELS || null;
   var egoModel = null;          // 有 animate() 的自車模型（程式建模版才有，用來轉輪胎）
@@ -1273,6 +1291,7 @@
   var lastVeh = null, lastLca = null, lastObjs = [];
   window.setFrame = function (p) {
     var now = performance.now();
+    if (window.AVM_FSD) AVM_FSD.update(p.veh || null, p.road ? (p.road.lines || []) : null, now, true);
     lastData = now;
     if (p.src) setSrc(p.src);
     if (p.wm) { wm = p.wm; hm = p.hm || wm; }
@@ -1514,6 +1533,7 @@
       var dy = tr.yawT - tr.yaw;
       tr.yaw += Math.atan2(Math.sin(dy), Math.cos(dy)) * k;   // 走最短的方向轉
       tr.mesh.position.set(tr.x, 0, tr.z);
+      if (window.AVM_FSD) AVM_FSD.dressObject(THREE, tr.mesh);
       tr.mesh.rotation.y = Math.PI + tr.yaw;
       counts[tr.t]++;
       var anim = tr.mesh.userData.animate;
