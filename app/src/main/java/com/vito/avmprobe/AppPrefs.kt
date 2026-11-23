@@ -376,6 +376,11 @@ class AppPrefs(context: Context) {
         get() = sp.getBoolean("annotLaneRibbon", true)
         set(v) = sp.edit().putBoolean("annotLaneRibbon", v).apply()
 
+    /** 合併版：在 360 畫面上畫開車路徑預估線（像特斯拉的藍色路徑），預設開。 */
+    var annotDrivePath: Boolean
+        get() = sp.getBoolean("annotDrivePath", true)
+        set(v) = sp.edit().putBoolean("annotDrivePath", v).apply()
+
     /** 合併版：在俯視圖上畫出偵測到的車道線（除錯用，預設關）。 */
     var annotDrawRoad: Boolean
         get() = sp.getBoolean("annotRoad", false)

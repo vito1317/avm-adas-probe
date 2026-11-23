@@ -27,6 +27,8 @@ LINE_W = 4                   # 線寬（輸出像素）
 # 第一版不分顏色：夜間尾燈／路燈把白線照成黃橘色，審查者也分不準（同一段路兩批標成不同顏色）。
 # 模型只學「哪裡有線」（1），顏色交給後面的程式在線上取色判斷。要分顏色時改回 {"w": 1, "y": 2}。
 CLS = {"w": 1, "y": 1}
+# --color：黃線另外標成 5（白 1、黃 5；斑馬線等區域照舊 2～4），給「模型直接學顏色」的三類模型（train.py --classes 3）
+YELLOW = 5
 # 第二輪：區域類別（審查留下的 regions）。車道線 1、斑馬線 2（整塊）、網狀線 3（整塊）、停車格線 4（外框）
 REGION_CLS = {"cw": 2, "bj": 3, "slots": 4, "scooter_box": 4}   # 待轉區樣本太少，先併進停車格線那一類
 
@@ -65,6 +67,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--labels", required=True); ap.add_argument("--review", required=True)
     ap.add_argument("--train", required=True); ap.add_argument("--out", required=True)
+    ap.add_argument("--color", action="store_true", help="黃線標成 5（分顏色）")
     a = ap.parse_args()
     os.makedirs(os.path.join(a.out, "img"), exist_ok=True); os.makedirs(os.path.join(a.out, "mask"), exist_ok=True)
     # 可以給多組（逗號分隔、順序對應）：後面的同名影格蓋掉前面的（重審過的以新的為準）
@@ -130,7 +133,7 @@ def main():
                 if c is None: continue
                 g = L.get("geom", {}).get(str(cid))       # snap_labels.py 吸附到漆上的位置（有就用）
                 if g: c = dict(c, x1=g[0], z1=g[1], x2=g[2], z2=g[3])
-                cls = CLS.get(kind[0], 1)
+                cls = (YELLOW if (a.color and kind[0] == "y") else CLS.get(kind[0], 1))
                 t = np.linspace(0, 1, 200)
                 gx = c["x1"] + (c["x2"] - c["x1"]) * t; gz = c["z1"] + (c["z2"] - c["z1"]) * t
                 u, v, th, ok, _ = ag.ground_to_pixel(cam, gx, gz, 960, 540)

@@ -56,7 +56,7 @@ class DS(torch.utils.data.Dataset):
             m2 = np.zeros((self.size[1], self.size[0]), np.uint8)
             m2[np.asarray(ign) > 127] = 255
             # 整塊的（斑馬線 2、網狀線 3）照比例縮；細線（車道線 1、停車格線 4）放寬一點才不會縮到消失，最後畫
-            for c, thr in [(2, 127), (3, 127), (4, 60), (1, 60)]:
+            for c, thr in [(2, 127), (3, 127), (4, 60), (1, 60), (5, 60)]:
                 if (ma == c).any():
                     r = Image.fromarray(((ma == c) * 255).astype(np.uint8)).resize(self.size, Image.BILINEAR)
                     m2[np.asarray(r) > thr] = c
@@ -64,7 +64,13 @@ class DS(torch.utils.data.Dataset):
         img = np.asarray(im, np.float32) / 255.0
         m = np.asarray(mk, np.int64).copy()
         if self.n_cls == 2:
+            m[m == 5] = 1                    # 黃線也是車道線
             m[(m >= 2) & (m != 255)] = 0     # 只學車道線：斑馬線、網狀線、停車格線都當「不是車道線」
+        elif self.n_cls == 3:
+            # 三類：背景、白線、黃線（區域類別當背景）；沒標顏色的資料（困難負樣本）的「線」不計分
+            m[(m >= 2) & (m <= 4)] = 0
+            if it.get("nocolor"): m[m == 1] = 255
+            m[m == 5] = 2
         if self.aug:
             # 亮度／對比／色偏（夜間、路燈），小量雜訊；不做翻轉（左右鏡頭幾何不對稱，翻了線的位置就不對）
             img = img * random.uniform(0.6, 1.4) + random.uniform(-0.1, 0.1)
@@ -90,6 +96,13 @@ def metrics(logits, m):
     p = logits.argmax(1)
     valid = m != 255
     out = {}
+    if logits.shape[1] == 3:
+        # 三類（背景、白、黃）：車道線 = 白或黃；顏色 = 真的線、模型也說是線的像素裡，顏色對的比例（tp=對、fp=錯）
+        pl = (p >= 1); ml = (m == 1) | (m == 2)
+        out["line"] = ((pl & ml & valid).sum().item(), (pl & ~ml & valid).sum().item(), (~pl & ml).sum().item())
+        both = pl & ml
+        out["color"] = ((both & (p == m)).sum().item(), (both & (p != m)).sum().item(), 0)
+        return out
     for c, n in [(1, "line"), (2, "crosswalk"), (3, "boxjunc"), (4, "slot")]:
         if c >= logits.shape[1]: break
         tp = ((p == c) & (m == c) & valid).sum().item(); fp = ((p == c) & (m != c) & valid).sum().item(); fn = ((p != c) & (m == c)).sum().item()
@@ -115,7 +128,7 @@ def main():
     tr = tr * a.repeat
     if a.extra:
         ex = json.load(open(os.path.join(a.extra, "index.json")))
-        for it in ex: it["root"] = a.extra
+        for it in ex: it["root"] = a.extra; it["nocolor"] = True
         tr = tr + ex
     print(f"訓練 {len(tr)}、驗證 {len(va)} 張（裝置 {dev}）")
     sz = tuple(int(v) for v in a.size.split("x")) if a.size else None
@@ -123,11 +136,15 @@ def main():
     dv = torch.utils.data.DataLoader(DS(a.data, va, False, sz, a.classes), batch_size=a.bs, num_workers=6)
     net = LaneNet(n_cls=a.classes)
     if a.init:
-        net.load_state_dict(torch.load(a.init, map_location="cpu")); print("從", a.init, "接著訓練")
+        sd = torch.load(a.init, map_location="cpu"); own = net.state_dict()
+        for k, v in sd.items():
+            if k in own and own[k].shape != v.shape and v.shape[0] == 2 and own[k].shape[0] == 3:
+                sd[k] = torch.cat([v, v[1:2]], 0)          # 兩類 → 三類：黃線那一路先複製「線」
+        net.load_state_dict(sd); print("從", a.init, "接著訓練")
     net = net.to(dev)
     opt = torch.optim.AdamW(net.parameters(), lr=a.lr, weight_decay=1e-4)
     sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=a.lr, total_steps=a.epochs * max(1, len(dl)))
-    wts = torch.tensor([1.0, a.line_w, 3.0, 3.0, 8.0][:a.classes], device=dev)       # 線很細、很少：加權；斑馬線、網狀線是整塊，權重低一點
+    wts = torch.tensor([1.0, a.line_w, a.line_w] if a.classes == 3 else [1.0, a.line_w, 3.0, 3.0, 8.0][:a.classes], device=dev)       # 線很細、很少：加權；斑馬線、網狀線是整塊，權重低一點
     best, log = -1.0, []
     for ep in range(a.epochs):
         net.train(); t0 = time.time(); tl = 0.0
@@ -136,7 +153,7 @@ def main():
             lo = net(x)
             loss = F.cross_entropy(lo, m, weight=wts, ignore_index=255)
             opt.zero_grad(); loss.backward(); opt.step(); sched.step(); tl += loss.item()
-        names = ["line", "crosswalk", "boxjunc", "slot"][:a.classes - 1]
+        names = ["line", "color"] if a.classes == 3 else ["line", "crosswalk", "boxjunc", "slot"][:a.classes - 1]
         net.eval(); agg = {k: [0, 0, 0] for k in names}
         with torch.no_grad():
             for x, m in dv:

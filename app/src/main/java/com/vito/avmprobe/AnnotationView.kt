@@ -68,6 +68,39 @@ class AnnotationView(context: Context) : View(context) {
     @Volatile var drawRibbon = true
         set(v) { field = v; postInvalidate() }
     private val ribbon = LaneRibbon()
+    /** 開車路徑預估線（[DrivePath]，像特斯拉的藍色路徑）。 */
+    @Volatile var drawPath = true
+        set(v) { field = v; postInvalidate() }
+
+    private fun pathFor(p: JSONObject?): List<FloatArray>? {
+        val veh = p?.optJSONObject("veh") ?: return null
+        val sp = if (veh.isNull("speed")) null else veh.optDouble("speed").toFloat()
+        val st = if (veh.isNull("steer")) null else veh.optDouble("steer").toFloat()
+        val gear = veh.optString("gear"); val turn = veh.optString("turn").firstOrNull()
+        if (gear == "P" || (sp != null && sp < 1f && gear != "R")) return null      // 停著不畫
+        return DrivePath.predict(ribbon.current(), st, sp, turn, gear == "R")
+    }
+
+    /** 路徑帶：寬約 1 m 的藍色，近亮遠淡，中間一條亮線。[toXY] 把地面點轉成畫面座標（看不到回 null）。 */
+    private fun drawPathBand(c: Canvas, pts: List<FloatArray>, toXY: (Float, Float) -> FloatArray?) {
+        if (pts.size < 2) return
+        val hw = 0.5f
+        for (i in 0 until pts.size - 1) {
+            val a = pts[i]; val b = pts[i + 1]
+            val dx = b[0] - a[0]; val dz = b[1] - a[1]; val L = kotlin.math.hypot(dx, dz).coerceAtLeast(1e-3f)
+            val nx = dz / L * hw; val nz = -dx / L * hw
+            val q = listOf(toXY(a[0] - nx, a[1] - nz), toXY(b[0] - nx, b[1] - nz), toXY(b[0] + nx, b[1] + nz), toXY(a[0] + nx, a[1] + nz))
+            if (q.any { it == null }) continue
+            val f = i.toFloat() / (pts.size - 1)
+            path.reset(); path.moveTo(q[0]!![0], q[0]!![1]); for (k in 1..3) path.lineTo(q[k]!![0], q[k]!![1]); path.close()
+            fill.color = Color.rgb(40, 140, 255); fill.alpha = (150 * (1 - f) + 15).toInt(); c.drawPath(path, fill)
+        }
+        val cl = pts.mapNotNull { toXY(it[0], it[1]) }
+        if (cl.size >= 2) {
+            path.reset(); cl.forEachIndexed { i, q -> if (i == 0) path.moveTo(q[0], q[1]) else path.lineTo(q[0], q[1]) }
+            stroke.color = Color.rgb(150, 210, 255); stroke.alpha = 200; stroke.pathEffect = null; c.drawPath(path, stroke); stroke.alpha = 255
+        }
+    }
 
     /** 使用者正在拖動／縮放原廠 3D：先不畫 3D 標注（角度變了，畫了也對不上），停手重新對位後再畫。 */
     @Volatile var suspend3d = false
@@ -176,7 +209,8 @@ class AnnotationView(context: Context) : View(context) {
         c.clipRect(m.clipLeft, m.clipTop, m.clipRight, m.clipBottom)
         if (calibrating) drawCalibration(c, m)
         if (p != null) {
-            if (drawRibbon) ribbon.update(p)?.let { r -> drawRibbonTop(c, m, r) }
+            if (drawRibbon) ribbon.update(p)?.let { r -> drawRibbonTop(c, m, r) } else ribbon.update(p)
+            if (drawPath) pathFor(p)?.let { pts -> drawPathBand(c, pts) { x, z -> floatArrayOf(m.sx(x, z), m.sy(x, z)) } }
             if (drawRoad) p.optJSONObject("road")?.optJSONArray("lines")?.let { drawRoad(c, m, it) }
             if (drawRoad) p.optJSONArray("cw")?.let { drawCrosswalks(c, m, it) }
             p.optJSONArray("bj")?.let { drawBoxJunctions(c, m, it) }
@@ -206,6 +240,7 @@ class AnnotationView(context: Context) : View(context) {
         if (calibrating) drawCalibration3d(c, m)
         if (p != null) {
             if (drawRibbon) ribbon.current()?.let { r -> drawRibbon3d(c, m, r) }
+            if (drawPath) pathFor(p)?.let { pts -> drawPathBand(c, pts) { x, z -> m.project(x, 0f, z) } }
             p.optJSONArray("slots")?.let { drawSlots3d(c, m, it) }
             p.optJSONObject("turn")?.let { t ->
                 val col = if (t.optInt("hit") > 0) Color.rgb(255, 70, 60) else if (t.optInt("est") == 1) Color.rgb(90, 200, 230) else Color.rgb(255, 200, 60)
