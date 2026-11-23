@@ -69,7 +69,7 @@ def main():
     ap = argparse.ArgumentParser(); ap.add_argument("--avm", required=True); ap.add_argument("--out", required=True)
     a = ap.parse_args()
     rows = []; geos = {}
-    for r in ("", "2", "3", "4"):
+    for r in ("", "2", "3", "4", "5"):
         for f in sorted(glob.glob(os.path.join(a.avm, f"labels{r}", "out_*.jsonl"))):
             for line in open(f):
                 try: L = json.loads(line)

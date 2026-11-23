@@ -110,7 +110,7 @@ def main():
     dev = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
     net = T.LaneNet(pretrained=False); net.load_state_dict(torch.load(a.ckpt, map_location="cpu")); net.to(dev).eval()
     rows = []; luts = {}
-    for r in ("", "2", "3", "4"):
+    for r in ("", "2", "3", "4", "5"):
         for f in sorted(glob.glob(os.path.join(a.avm, f"labels{r}", "out_*.jsonl"))):
             for line in open(f):
                 try: L = json.loads(line)
