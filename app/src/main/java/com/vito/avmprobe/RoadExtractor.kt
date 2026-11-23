@@ -49,6 +49,8 @@ data class RoadResult(val lines: List<RoadLine>, val edgeL: Float?, val edgeR: F
 class RoadExtractor {
     /** 白／黃用 [LineColor]（關掉 = 舊的單像素門檻）；AdasPipeline 依「自動停用」設定。 */
     @Volatile var useColorModel = true
+    /** 虛實用 [LineDash]（關掉 = 舊的「最長一段 ≥ 5 m」規則）。 */
+    @Volatile var useDashModel = true
 
     companion object {
         /** 車道線模型的機率超過這個才算漆。 */
@@ -184,6 +186,14 @@ class RoadExtractor {
     private val histV = IntArray(511)
     private val histD = IntArray(511)
     private val edgeVals = DoubleArray(EDGE_ROWS)
+
+    /** 虛實：黃線一律實線；白線用 [LineDash]（算不出來就用舊判斷）；紅色路緣漆照舊。 */
+    private fun dashedOf(L: Cand, kind: Int, w: Int, h: Int, m: Double, ox: Double, oy: Double, paint: FloatArray?): Boolean {
+        if (!useDashModel || kind == 3) return L.dashed
+        if (kind == 2) return false
+        val p = LineDash.dashedProb(rgb, paint, w, h, m, ox, oy, L.phi, L.off) ?: return L.dashed
+        return p >= 0.5
+    }
 
     private class Cand(
         val kind: Int, val dashed: Boolean, val phi: Double, val phiDeg: Double, val off: Double,
@@ -445,7 +455,7 @@ class RoadExtractor {
             ) continue
             lines.add(
                 RoadLine(
-                    "wyr"[(kindOf[L] ?: L.kind) - 1], L.dashed,
+                    "wyr"[(kindOf[L] ?: L.kind) - 1], dashedOf(L, kindOf[L] ?: L.kind, w, h, m, ox, oy, paint),
                     (L.e0 * c + L.s0 * s).toFloat(), (-L.e0 * s + L.s0 * c).toFloat(),
                     (L.e1 * c + L.s1 * s).toFloat(), (-L.e1 * s + L.s1 * c).toFloat(),
                     min(1.0, L.conf).toFloat(), L.k.toFloat()

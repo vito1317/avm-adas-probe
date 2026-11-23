@@ -113,7 +113,7 @@ class RoadExtractorTest {
     private fun run(name: String): Pair<JSONObject, RoadResult> {
         val doc = F.json("$name.json")
         val img = F.image("$name.png")
-        val r = RoadExtractor().apply { useColorModel = false }.extract(
+        val r = RoadExtractor().apply { useColorModel = false; useDashModel = false }.extract(
             img.argb, img.w, img.h, doc.getDouble("mpp").toFloat(),
             doc.getDouble("cx").toFloat(), doc.getDouble("cy").toFloat(), F.exclude(doc)
         )
@@ -222,7 +222,7 @@ class RoadExtractorTest {
             val mpp = doc.getDouble("mpp").toFloat()
             val cx = doc.getDouble("cx").toFloat()
             val cy = doc.getDouble("cy").toFloat()
-            val re = RoadExtractor().apply { useColorModel = false }   // 這裡比的是舊的單像素顏色規則（跟 Python 原型一樣）
+            val re = RoadExtractor().apply { useColorModel = false; useDashModel = false }   // 這裡比的是舊的單像素顏色規則（跟 Python 原型一樣）
             repeat(30) { re.extract(img.argb, img.w, img.h, mpp, cx, cy, ex) }
             val t = ArrayList<Double>()
             val a0 = F.allocated()
@@ -292,7 +292,7 @@ class RoadExtractorTest {
     }
 
     private fun extractCv(img: PerceptionFixtures.Img) =
-        RoadExtractor().apply { useColorModel = false }.extract(img.argb, img.w, img.h, CV_MPP, CV_CX, CV_CY, EGO)
+        RoadExtractor().apply { useColorModel = false; useDashModel = false }.extract(img.argb, img.w, img.h, CV_MPP, CV_CX, CV_CY, EGO)
 
     /** 依 RoadLine.k 的定義取弧上的點：t ∈ [−1,1] 對應 s = t·L/2，d(s) = (k/2)((L/2)² − s²)。 */
     private fun arcPoint(L: RoadLine, t: Double): DoubleArray {
@@ -537,7 +537,7 @@ class RoadExtractorStreetTest {
                 ?: java.io.File("src/main/assets/avm_calib.json").readText()
         )
         val mask = if (withMask) geo.ipmValidMask() else null
-        return RoadExtractor().apply { useColorModel = false }.extract(
+        return RoadExtractor().apply { useColorModel = false; useDashModel = false }.extract(
             img.argb, img.w, img.h,
             doc.getDouble("mpp").toFloat(), doc.getDouble("cx").toFloat(), doc.getDouble("cy").toFloat(),
             F.exclude(doc), mask

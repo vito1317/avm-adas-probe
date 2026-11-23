@@ -1069,6 +1069,7 @@ class AdasPipeline(
                         Crumbs.step(Crumbs.GROUND, "lanetemp") { ls.bevProb(table, frame.width, a, now, bw, bh, mpp, cx, cy) }; a
                     }
                     roadEx.useColorModel = !Crumbs.off("linecolor")
+                    roadEx.useDashModel = !Crumbs.off("linedash")
                     road = roadTrack.update(steepFilter(roadEx.extract(buf, bw, bh, mpp, cx, cy, excl, g.roadValidMask(), paint), VehicleBus.signals.snapshot().speedKmh), now); roadAt = now
                 }
                 if (mode == AppPrefs.GROUND_REAL) {
