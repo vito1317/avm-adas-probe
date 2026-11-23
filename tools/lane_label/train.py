@@ -106,6 +106,7 @@ def main():
     ap.add_argument("--classes", type=int, default=2, help="類別數：2 = 背景／車道線；5 = 再加斑馬線、網狀線、停車格線")
     ap.add_argument("--init", default=None, help="從這個權重接著訓練（例：WoodScape 預訓練的 best.pt）")
     ap.add_argument("--epochs", type=int, default=40); ap.add_argument("--bs", type=int, default=16); ap.add_argument("--lr", type=float, default=2e-3)
+    ap.add_argument("--line_w", type=float, default=8.0, help="車道線類別的損失權重（越高越敢畫線；誤判多時調低）")
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
     dev = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
@@ -126,7 +127,7 @@ def main():
     net = net.to(dev)
     opt = torch.optim.AdamW(net.parameters(), lr=a.lr, weight_decay=1e-4)
     sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=a.lr, total_steps=a.epochs * max(1, len(dl)))
-    wts = torch.tensor([1.0, 8.0, 3.0, 3.0, 8.0][:a.classes], device=dev)       # 線很細、很少：加權；斑馬線、網狀線是整塊，權重低一點
+    wts = torch.tensor([1.0, a.line_w, 3.0, 3.0, 8.0][:a.classes], device=dev)       # 線很細、很少：加權；斑馬線、網狀線是整塊，權重低一點
     best, log = -1.0, []
     for ep in range(a.epochs):
         net.train(); t0 = time.time(); tl = 0.0

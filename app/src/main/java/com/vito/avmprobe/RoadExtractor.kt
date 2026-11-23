@@ -47,6 +47,8 @@ data class RoadResult(val lines: List<RoadLine>, val edgeL: Float?, val edgeR: F
  * 所有暫存陣列都留在物件裡重複用；同一個 instance 不要多執行緒同時呼叫。
  */
 class RoadExtractor {
+    /** 白／黃用 [LineColor]（關掉 = 舊的單像素門檻）；AdasPipeline 依「自動停用」設定。 */
+    @Volatile var useColorModel = true
 
     companion object {
         /** 車道線模型的機率超過這個才算漆。 */
@@ -412,6 +414,19 @@ class RoadExtractor {
         found.clear()
         if (kN > 0) findLines(w, h, m, ox, oy)
 
+        // ── 白／黃：線上 vs 旁邊柏油的顏色＋位置（[LineColor]；舊的單像素門檻黃線只認對約一成）──
+        val kindOf = HashMap<Cand, Int>()
+        if (useColorModel) {
+            val wy = found.filter { it.kind != 3 }
+            val x0s = wy.map { L -> val cc = cos(L.phi); if (abs(cc) > 0.3) L.off / cc else L.off }
+            val night = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY).let { it >= 18 || it < 6 }
+            val xmin = x0s.minOrNull(); val xmax = x0s.maxOrNull()
+            for ((L, x0) in wy.zip(x0s)) {
+                val f = LineColor.features(rgb, w, h, m, ox, oy, L.phi, L.off, L.s0, L.s1, night) ?: continue
+                kindOf[L] = if (LineColor.yellowProb(f, x0, x0 == xmin, x0 == xmax) >= 0.5f) 2 else 1
+            }
+        }
+
         // ── 斑馬紋：比一般標線粗、又跟某條細標線平行 ──
         val lines = ArrayList<RoadLine>(MAX_LINES)
         for (L in found) {
@@ -430,7 +445,7 @@ class RoadExtractor {
             ) continue
             lines.add(
                 RoadLine(
-                    "wyr"[L.kind - 1], L.dashed,
+                    "wyr"[(kindOf[L] ?: L.kind) - 1], L.dashed,
                     (L.e0 * c + L.s0 * s).toFloat(), (-L.e0 * s + L.s0 * c).toFloat(),
                     (L.e1 * c + L.s1 * s).toFloat(), (-L.e1 * s + L.s1 * c).toFloat(),
                     min(1.0, L.conf).toFloat(), L.k.toFloat()
