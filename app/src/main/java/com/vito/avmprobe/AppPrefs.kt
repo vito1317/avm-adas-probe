@@ -371,6 +371,11 @@ class AppPrefs(context: Context) {
         get() = sp.getBoolean("alertSound", true)
         set(v) = sp.edit().putBoolean("alertSound", v).apply()
 
+    /** 合併版：在 360 畫面上畫前方道路（自己車道的車道帶＋兩側車道線，像行駛軌跡一樣往前延伸），預設開。 */
+    var annotLaneRibbon: Boolean
+        get() = sp.getBoolean("annotLaneRibbon", true)
+        set(v) = sp.edit().putBoolean("annotLaneRibbon", v).apply()
+
     /** 合併版：在俯視圖上畫出偵測到的車道線（除錯用，預設關）。 */
     var annotDrawRoad: Boolean
         get() = sp.getBoolean("annotRoad", false)

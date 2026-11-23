@@ -554,6 +554,7 @@ object Engine360 {
             onTapGround = { x, z -> pipeline?.tapSlot(x, z) ?: false }
             viewKey = lastViewKey
             drawRoad = prefs.annotDrawRoad
+            drawRibbon = prefs.annotLaneRibbon
             heightScale = prefs.obj3dHeight
         }
         decor.addView(av, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))

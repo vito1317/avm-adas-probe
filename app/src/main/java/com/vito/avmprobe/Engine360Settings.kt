@@ -118,6 +118,9 @@ object Engine360Settings {
             label()
             setOnClickListener { prefs.ldwMinKmh = opts[(opts.indexOf(prefs.ldwMinKmh) + 1).mod(opts.size)]; label() }
         })
+        check("在 360 畫面上畫前方道路（自己車道的車道帶，像行駛軌跡一樣往前延伸）", { prefs.annotLaneRibbon }) {
+            prefs.annotLaneRibbon = it; av.drawRibbon = it
+        }
         check("在俯視圖上畫出偵測到的車道線（除錯用）", { prefs.annotDrawRoad }) {
             prefs.annotDrawRoad = it; av.drawRoad = it
         }

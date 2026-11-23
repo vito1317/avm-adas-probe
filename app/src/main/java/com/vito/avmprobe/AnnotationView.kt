@@ -64,6 +64,10 @@ class AnnotationView(context: Context) : View(context) {
      */
     @Volatile var drawRoad = false
         set(v) { field = v; postInvalidate() }
+    /** 前方道路車道帶（[LaneRibbon]）。 */
+    @Volatile var drawRibbon = true
+        set(v) { field = v; postInvalidate() }
+    private val ribbon = LaneRibbon()
 
     /** 使用者正在拖動／縮放原廠 3D：先不畫 3D 標注（角度變了，畫了也對不上），停手重新對位後再畫。 */
     @Volatile var suspend3d = false
@@ -172,6 +176,7 @@ class AnnotationView(context: Context) : View(context) {
         c.clipRect(m.clipLeft, m.clipTop, m.clipRight, m.clipBottom)
         if (calibrating) drawCalibration(c, m)
         if (p != null) {
+            if (drawRibbon) ribbon.update(p)?.let { r -> drawRibbonTop(c, m, r) }
             if (drawRoad) p.optJSONObject("road")?.optJSONArray("lines")?.let { drawRoad(c, m, it) }
             if (drawRoad) p.optJSONArray("cw")?.let { drawCrosswalks(c, m, it) }
             p.optJSONArray("bj")?.let { drawBoxJunctions(c, m, it) }
@@ -200,6 +205,7 @@ class AnnotationView(context: Context) : View(context) {
         c.clipRect(m.clipLeft, m.clipTop, m.clipRight, m.clipBottom)
         if (calibrating) drawCalibration3d(c, m)
         if (p != null) {
+            if (drawRibbon) ribbon.current()?.let { r -> drawRibbon3d(c, m, r) }
             p.optJSONArray("slots")?.let { drawSlots3d(c, m, it) }
             p.optJSONObject("turn")?.let { t ->
                 val col = if (t.optInt("hit") > 0) Color.rgb(255, 70, 60) else if (t.optInt("est") == 1) Color.rgb(90, 200, 230) else Color.rgb(255, 200, 60)
@@ -274,6 +280,41 @@ class AnnotationView(context: Context) : View(context) {
     }
 
     /** 地面（y = 0）上的多邊形。鏡頭背後的點丟掉（鏡頭在車後上方往前看，丟的都是看不到的部分）。 */
+    // ───────────────────────── 前方道路（車道帶） ─────────────────────────
+
+    private fun lineColor(kind: Char): Int = when (kind) { 'y' -> Color.rgb(255, 205, 50); 'r' -> Color.rgb(255, 80, 70); else -> Color.rgb(240, 240, 240) }
+
+    /** 俯視圖：自己車道的半透明帶＋兩側線（顏色、虛實照偵測結果；推出來的那側畫細的淡線）。 */
+    private fun drawRibbonTop(c: Canvas, m: AnnotationMapper, r: LaneRibbon.Lane) {
+        path.reset()
+        r.left.forEachIndexed { i, q -> if (i == 0) path.moveTo(m.sx(q[0], q[1]), m.sy(q[0], q[1])) else path.lineTo(m.sx(q[0], q[1]), m.sy(q[0], q[1])) }
+        for (q in r.right.asReversed()) path.lineTo(m.sx(q[0], q[1]), m.sy(q[0], q[1]))
+        path.close()
+        fill.color = Color.rgb(70, 190, 255); fill.alpha = 45; c.drawPath(path, fill)
+        for ((pts, side) in listOf(r.left to r.leftLine, r.right to r.rightLine)) {
+            path.reset()
+            pts.forEachIndexed { i, q -> if (i == 0) path.moveTo(m.sx(q[0], q[1]), m.sy(q[0], q[1])) else path.lineTo(m.sx(q[0], q[1]), m.sy(q[0], q[1])) }
+            stroke.color = lineColor(side?.kind ?: 'w'); stroke.alpha = if (side != null) 230 else 90
+            stroke.pathEffect = if (side == null || side.dashed) dash else null
+            c.drawPath(path, stroke)
+        }
+        stroke.pathEffect = null; stroke.alpha = 255
+    }
+
+    /** 3D 畫面：一樣的車道帶投影到地面上（像原廠的行駛軌跡），遠端漸淡。 */
+    private fun drawRibbon3d(c: Canvas, m: PerspectiveMapper, r: LaneRibbon.Lane) {
+        groundPolygon3d(c, m, r.left + r.right.asReversed(), Color.rgb(70, 190, 255), alpha = 40)
+        for ((pts, side) in listOf(r.left to r.leftLine, r.right to r.rightLine)) {
+            val proj = pts.mapNotNull { m.project(it[0], 0f, it[1]) }
+            if (proj.size < 2) continue
+            path.reset(); proj.forEachIndexed { i, q -> if (i == 0) path.moveTo(q[0], q[1]) else path.lineTo(q[0], q[1]) }
+            stroke.color = lineColor(side?.kind ?: 'w'); stroke.alpha = if (side != null) 230 else 90
+            stroke.pathEffect = if (side == null || side.dashed) dash else null
+            c.drawPath(path, stroke)
+        }
+        stroke.pathEffect = null; stroke.alpha = 255
+    }
+
     private fun groundPolygon3d(c: Canvas, m: PerspectiveMapper, poly: List<FloatArray>, col: Int, alpha: Int = 80) {
         val pts = m.projectGroundPolygon(poly)
         if (pts.size < 3) return
