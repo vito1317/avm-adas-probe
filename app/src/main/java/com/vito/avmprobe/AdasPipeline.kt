@@ -145,6 +145,7 @@ class AdasPipeline(
     private var laneSegFailed = false
     @Volatile private var segBusy = false
     private var segBev: FloatArray? = null
+    private var segYel: FloatArray? = null     // 三類車道線模型的「黃的比例」俯視圖
     private var segCounter = 0L
     private val segThread by lazy { android.os.Handler(android.os.HandlerThread("lane-seg").apply { start() }.looper) }
     private fun laneSegOrNull(): LaneSeg? {
@@ -1066,11 +1067,13 @@ class AdasPipeline(
                     // 有車道線模型、四顆鏡頭都有新結果 → 用模型決定哪裡是漆；否則照舊用亮度規則
                     val paint = laneSeg?.takeIf { prefs.laneModel && ThermalGovernor.level < 2 && it.ready(now) }?.let { ls ->
                         val a = segBev?.takeIf { it.size == bw * bh } ?: FloatArray(bw * bh).also { segBev = it }
-                        Crumbs.step(Crumbs.GROUND, "lanetemp") { ls.bevProb(table, frame.width, a, now, bw, bh, mpp, cx, cy) }; a
+                        segYel = if (ls.NC == 3) (segYel?.takeIf { it.size == bw * bh } ?: FloatArray(bw * bh)) else null
+                        Crumbs.step(Crumbs.GROUND, "lanetemp") { ls.bevProb(table, frame.width, a, now, bw, bh, mpp, cx, cy, segYel) }; a
                     }
                     roadEx.useColorModel = !Crumbs.off("linecolor")
                     roadEx.useDashModel = !Crumbs.off("linedash")
-                    road = roadTrack.update(steepFilter(roadEx.extract(buf, bw, bh, mpp, cx, cy, excl, g.roadValidMask(), paint), VehicleBus.signals.snapshot().speedKmh), now); roadAt = now
+                    val yel = if (paint != null) segYel else null
+                    road = roadTrack.update(steepFilter(roadEx.extract(buf, bw, bh, mpp, cx, cy, excl, g.roadValidMask(), paint, yel), VehicleBus.signals.snapshot().speedKmh), now); roadAt = now
                 }
                 if (mode == AppPrefs.GROUND_REAL) {
                     var bmp = bevBmp

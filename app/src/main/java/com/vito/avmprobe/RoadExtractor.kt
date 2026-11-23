@@ -187,6 +187,27 @@ class RoadExtractor {
     private val histD = IntArray(511)
     private val edgeVals = DoubleArray(EDGE_ROWS)
 
+    /** 沿線、模型很有把握是漆的地方（機率 ≥ 0.5，取線左右 ±0.12 m 最高的那點）的「黃的比例」加權平均；點太少回 null。 */
+    private fun modelYellow(paint: FloatArray, yl: FloatArray, w: Int, h: Int, m: Double, ox: Double, oy: Double, L: Cand): Double? {
+        val c = cos(L.phi); val s = sin(L.phi)
+        var sw = 0.0; var sy = 0.0; var n = 0
+        var u = L.s0
+        while (u <= L.s1) {
+            val x = L.off * c + u * s; val z = -L.off * s + u * c; u += 0.1
+            var bp = -1f; var bi = -1
+            for (k in -3..3) {
+                val o = k * 0.04
+                val i = floor((x + o * c) / m + ox).toInt(); val j = floor(oy - (z - o * s) / m).toInt()
+                if (i < 0 || j < 0 || i >= w || j >= h) continue
+                val q = j * w + i
+                if (paint[q] > bp) { bp = paint[q]; bi = q }
+            }
+            if (bi < 0 || bp < 0.5f) continue
+            sw += bp; sy += bp * yl[bi]; n++
+        }
+        return if (n >= 5) sy / sw else null
+    }
+
     /** 虛實：黃線一律實線；白線用 [LineDash]（算不出來就用舊判斷）；紅色路緣漆照舊。 */
     private fun dashedOf(L: Cand, kind: Int, w: Int, h: Int, m: Double, ox: Double, oy: Double, paint: FloatArray?): Boolean {
         if (!useDashModel || kind == 3) return L.dashed
@@ -274,7 +295,9 @@ class RoadExtractor {
         argb: IntArray, w: Int, h: Int, mpp: Float, cx: Float, cy: Float,
         exclude: List<FloatArray>, ipmValid: BooleanArray? = null,
         /** 車道線模型拼出來的俯視圖機率（[LaneSeg.bevProb]）；給了就用它決定哪些像素是漆，取代亮度規則。 */
-        paint: FloatArray? = null
+        paint: FloatArray? = null,
+        /** 三類車道線模型的「黃的比例」俯視圖（有就直接用模型判白／黃，比取色準：新路段 72% → 87%）。 */
+        paintYellow: FloatArray? = null
     ): RoadResult {
         val t0 = System.nanoTime()
         ensure(w, h)
@@ -432,6 +455,8 @@ class RoadExtractor {
             val night = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY).let { it >= 18 || it < 6 }
             val xmin = x0s.minOrNull(); val xmax = x0s.maxOrNull()
             for ((L, x0) in wy.zip(x0s)) {
+                val my = if (paint != null && paintYellow != null) modelYellow(paint, paintYellow, w, h, m, ox, oy, L) else null
+                if (my != null) { kindOf[L] = if (my > 0.5) 2 else 1; continue }
                 val f = LineColor.features(rgb, w, h, m, ox, oy, L.phi, L.off, L.s0, L.s1, night) ?: continue
                 kindOf[L] = if (LineColor.yellowProb(f, x0, x0 == xmin, x0 == xmax) >= 0.5f) 2 else 1
             }

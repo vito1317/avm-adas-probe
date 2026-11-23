@@ -21,6 +21,9 @@ class LaneSeg(ctx: Context, asset: String = ASSET) {
         const val ASSET = "lane_seg.tflite"
         const val QW = 960; const val QH = 540
         const val TTL_MS = 1500L
+        /** 三類模型白天的「是線」門檻（實測：白天 0.35 時抓到率跟舊模型差不多、誤判少很多；晚上 0.5 最好）。 */
+        const val DAY_THR = 0.35f
+        fun isNight(): Boolean = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY).let { it >= 18 || it < 6 }
         fun available(ctx: Context): Boolean = try { ctx.assets.openFd(ASSET).close(); true } catch (_: Throwable) { false }
     }
 
@@ -28,7 +31,11 @@ class LaneSeg(ctx: Context, asset: String = ASSET) {
     /** 模型輸入大小（從模型讀：480x272 或縮小版 224x128）；[SH] = 實際放影像的列數，下面補黑（訓練時 960x540 → 480x270 再補 2 列）。 */
     val W: Int; val H: Int; private val SH: Int
     private val inBuf: ByteBuffer
-    private val outBuf: ByteBuffer   // 背景、車道線兩類分數
+    private val outBuf: ByteBuffer   // 每像素 [NC] 類分數：背景、車道線（兩類）或 背景、白線、黃線（三類）
+    /** 模型輸出幾類：2 = 只分「是不是線」；3 = 直接分白線／黃線（顏色由模型判斷，見 [yellow]）。 */
+    val NC: Int
+    /** 三類模型時：每顆鏡頭每像素「線裡黃的比例」＝ 黃 /（白＋黃）；兩類模型時為 null。 */
+    val yellow: Array<FloatArray>?
     private val argb: IntArray
     /** 每顆鏡頭（quad 0 前、1 後、2 左、3 右）最近一次的機率圖，與時間。 */
     val prob: Array<FloatArray>
@@ -50,7 +57,9 @@ class LaneSeg(ctx: Context, asset: String = ASSET) {
         val shp = interp.getInputTensor(0).shape()          // [1, H, W, 3]
         H = shp[1]; W = shp[2]; SH = Math.round(H * 270f / 272f)
         inBuf = ByteBuffer.allocateDirect(4 * W * H * 3).order(ByteOrder.nativeOrder())
-        outBuf = ByteBuffer.allocateDirect(4 * W * H * 2).order(ByteOrder.nativeOrder())
+        NC = interp.getOutputTensor(0).shape().last().coerceIn(2, 3)
+        outBuf = ByteBuffer.allocateDirect(4 * W * H * NC).order(ByteOrder.nativeOrder())
+        yellow = if (NC == 3) Array(4) { FloatArray(W * H) } else null
         argb = IntArray(W * SH)
         prob = Array(4) { FloatArray(W * H) }
         prevProb = Array(4) { FloatArray(W * H) }
@@ -80,9 +89,23 @@ class LaneSeg(ctx: Context, asset: String = ASSET) {
         outBuf.rewind()
         val dst = prob[q]
         System.arraycopy(dst, 0, prevProb[q], 0, W * H); prevAt[q] = obsAt[q]
-        for (p in 0 until W * H) {
-            val bg = outBuf.getFloat(); val ln = outBuf.getFloat()
-            dst[p] = (1.0 / (1.0 + kotlin.math.exp((bg - ln).toDouble()))).toFloat()   // 兩類 softmax = sigmoid(差)
+        if (NC == 2) {
+            for (p in 0 until W * H) {
+                val bg = outBuf.getFloat(); val ln = outBuf.getFloat()
+                dst[p] = (1.0 / (1.0 + kotlin.math.exp((bg - ln).toDouble()))).toFloat()   // 兩類 softmax = sigmoid(差)
+            }
+        } else {
+            // 三類：線 = 1 − 背景；白天門檻放寬（實測白天 0.35、晚上 0.5 最好）→ 把那個門檻對到 0.5，後面照舊用 0.5
+            val thr = if (isNight()) 0.5f else DAY_THR
+            val yl = yellow!![q]
+            for (p in 0 until W * H) {
+                val bg = outBuf.getFloat(); val wt = outBuf.getFloat(); val yw = outBuf.getFloat()
+                val mx = maxOf(bg, wt, yw)
+                val eb = kotlin.math.exp((bg - mx).toDouble()); val ew = kotlin.math.exp((wt - mx).toDouble()); val ey = kotlin.math.exp((yw - mx).toDouble())
+                val line = ((ew + ey) / (eb + ew + ey)).toFloat()
+                dst[p] = if (line <= thr) line * 0.5f / thr else 0.5f + (line - thr) * 0.5f / (1f - thr)
+                yl[p] = (ey / (ew + ey)).toFloat()
+            }
         }
         probAt[q] = SystemClock.elapsedRealtime(); obsAt[q] = grabAt[q]
         lastMs = probAt[q] - t0
@@ -96,7 +119,7 @@ class LaneSeg(ctx: Context, asset: String = ASSET) {
      * [lut] 是 [AvmGeometry.buildBevLut] 的結果（俯視圖像素 → 整幀像素索引），[frameW] 整幀寬。
      */
     fun bevProb(lut: IntArray, frameW: Int, out: FloatArray, now: Long,
-                bw: Int = 0, bh: Int = 0, mpp: Float = 0f, cx: Float = 0f, cy: Float = 0f) {
+                bw: Int = 0, bh: Int = 0, mpp: Float = 0f, cx: Float = 0f, cy: Float = 0f, outYellow: FloatArray? = null) {
         val key = (lut.size.toLong() shl 20) xor frameW.toLong() xor System.identityHashCode(lut).toLong()
         var idx = bevIdx
         if (idx == null || idx.size != lut.size || bevKey != key) {
@@ -125,6 +148,9 @@ class LaneSeg(ctx: Context, asset: String = ASSET) {
             val e = idx[k]
             out[k] = if (e < 0) 0f else { val q = e ushr 24; if (fresh[q]) prob[q][e and 0xFFFFFF] * (gb?.get(k) ?: 1f) else 0f }
         }
+        val yl = yellow
+        if (outYellow != null && yl != null && outYellow.size == idx.size)
+            for (k in idx.indices) { val e = idx[k]; outYellow[k] = if (e < 0) 0f else { val q = e ushr 24; if (fresh[q]) yl[q][e and 0xFFFFFF] else 0f } }
     }
 
     /** 四顆鏡頭都有夠新的結果。 */

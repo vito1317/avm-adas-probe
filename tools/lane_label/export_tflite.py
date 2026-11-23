@@ -42,7 +42,8 @@ def main():
     ap.add_argument("--size", default="480x272", help="輸入 寬x高（跟訓練一樣，要能被 16 整除）")
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
-    net = T.LaneNet(pretrained=False); net.load_state_dict(torch.load(a.ckpt, map_location="cpu")); net.eval()
+    sd = torch.load(a.ckpt, map_location="cpu"); ncls = sd["head.1.weight"].shape[0]      # 2 類（背景／線）或 3 類（背景／白／黃）
+    net = T.LaneNet(n_cls=ncls, pretrained=False); net.load_state_dict(sd); net.eval()
     m = Deploy(net).eval()
     onnx_path = os.path.join(a.out, "lane.onnx")
     W, H = (int(v) for v in a.size.split("x"))
