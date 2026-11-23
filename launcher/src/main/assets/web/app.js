@@ -286,6 +286,8 @@
   window.addEventListener('message', function (e) {
     var t = e.data && e.data.__slotTap;
     if (t && t.length === 2) control('slot_tap', Number(t[0]).toFixed(2) + ',' + Number(t[1]).toFixed(2));
+    // 3D 道路畫面在實景模式：請 360 引擎送碗面貼圖（3D 畫面每 3 秒送一次，停了引擎 10 秒後就不再做）
+    if (e.data && e.data.__realView) { try { Car.engine('realview', '1'); } catch (er) {} }
   });
 
   // ───────── 按鈕 ─────────

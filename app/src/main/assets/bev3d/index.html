@@ -163,6 +163,7 @@
 <script src="map3d.js"></script>
 <script src="lca3d.js"></script>
 <script src="fsd.js"></script>
+<script src="real3d.js"></script>
 <script>
 (function () {
   'use strict';
@@ -1292,6 +1293,7 @@
   window.setFrame = function (p) {
     var now = performance.now();
     if (window.AVM_FSD) AVM_FSD.update(p.veh || null, p.road ? (p.road.lines || []) : null, now, true);
+    if (window.AVM_REAL && p.bowl) AVM_REAL.onFrame(THREE, scene, p.bowl, p.bowlG);
     lastData = now;
     if (p.src) setSrc(p.src);
     if (p.wm) { wm = p.wm; hm = p.hm || wm; }
@@ -1517,8 +1519,15 @@
 
   // ---------- loop（限 30fps，把 GPU 留給偵測） ----------
   var lastT = 0;
+  var bowlWas = false;
   function update(dt, now) {
     var k = 1 - Math.pow(0.002, dt);   // 位置平滑
+    // 實景模式（碗面貼圖）：碗在用時藏掉虛擬路面、平面實景、地面格線；別台車的 3D 模型也藏（畫面裡本來就有真的車）
+    var bowlOn = window.AVM_REAL ? AVM_REAL.update(groundMode === 'real', now) : false;
+    if (bowlOn) { real.visible = false; road.visible = false; grid.visible = false; base.visible = false; obsGrp.visible = false; }
+    else if (bowlWas) { applyGround(groundMode); obsGrp.visible = !(window.AVM_FSD && AVM_FSD.style() === 'fsd'); }
+    if (bowlOn !== bowlWas) labels.domElement.style.display = (bowlOn || (window.AVM_FSD && AVM_FSD.style() === 'fsd')) ? 'none' : '';
+    bowlWas = bowlOn;
     var counts = { car: 0, van: 0, truck: 0, bus: 0, moto: 0, bigbike: 0, bike: 0, ped: 0, cone: 0 };
     var anyWarn = false, anyCrit = false, ts = now / 1000;
     // 車速停止更新就當 0，不然行人會一直踏步、車輪一直轉
@@ -1533,6 +1542,7 @@
       var dy = tr.yawT - tr.yaw;
       tr.yaw += Math.atan2(Math.sin(dy), Math.cos(dy)) * k;   // 走最短的方向轉
       tr.mesh.position.set(tr.x, 0, tr.z);
+      tr.mesh.visible = !bowlOn;
       if (window.AVM_FSD) AVM_FSD.dressObject(THREE, tr.mesh);
       tr.mesh.rotation.y = Math.PI + tr.yaw;
       counts[tr.t]++;
@@ -1646,6 +1656,10 @@
 
   // ---------- 示範資料（瀏覽器預覽用：index.html#demo、#demo-cam） ----------
   if (DEMO) {
+    // 預覽實景模式：index.html#demo-real&bowljs=<碗面貼圖 js 檔路徑>（那個 js 設 window.__BOWL_DEMO = data URL）
+    var bj = /bowljs=([^&]+)/.exec(location.hash);
+    if (bj) { var sc = document.createElement('script'); sc.src = 'file://' + decodeURIComponent(bj[1]); document.head.appendChild(sc);
+      setTimeout(function () { applyGround('real'); }, 0); }
     // 除錯用（僅示範模式）
     window.__bev3d = { renderer: renderer, camera: camera, controls: controls, lines: lineTracks,
       scene: scene, road: road, strip: strip };
@@ -1725,6 +1739,7 @@
         lanes: 2, hw: 'secondary', oneway: 0, maxspeed: 50, name: '示範路', signals: [120, 420],
         roads: [mapPts], rc: [1], acc: 6 };
       window.setFrame({ objs: objs, wm: 8, hm: 6, flip: false, ground: (n++ % 10 === 0) ? demoGround : null,
+        bowl: window.__BOWL_DEMO || undefined, bowlG: window.__BOWL_DEMO ? { w: 512, h: 192, rf: 0.5, flat: 5, rmax: 14, k: 0.15 } : undefined,
         stat: { eng: 'GPU', res: 320, inf: 48, e2e: 66, fps: 9.6 }, road: rd,
         tl: { s: cyc < 5 ? 'red' : cyc < 10 ? 'green' : 'yellow', c: 0.86, ax: 4 },
         veh: veh, lca: lca, slots: slots, obs: obs, map: mp, start: st, ldw: ld,

@@ -144,6 +144,43 @@ class AdasPipeline(
     private var laneSeg: LaneSeg? = null
     private var laneSegFailed = false
     @Volatile private var segBusy = false
+    // ── 實景模式（[BowlTexture]）──
+    private var bowlTex: BowlTexture? = null
+    @Volatile private var bowlLut: IntArray? = null
+    private var bowlGeo: AvmGeometry? = null
+    @Volatile private var texBusy = false
+    private var bowlShotAt = 0L
+    private var bowlArgb = IntArray(BowlTexture.W * BowlTexture.H)
+    @Volatile private var bowlUrl: String? = null
+    @Volatile private var bowlAt = 0L
+    private val bowlThread by lazy { android.os.Handler(android.os.HandlerThread("bowl-tex").apply { start() }.looper) }
+
+    private fun realViewTick(g: AvmGeometry, frame: YuvFrame) {
+        if (bowlGeo !== g) {                    // 校正換了：重算查表（背景，約幾百毫秒）
+            bowlGeo = g; bowlLut = null
+            val bt = BowlTexture(g).also { bowlTex = it }
+            val fw = frame.width; val fh = frame.height
+            bowlThread.post { try { bowlLut = bt.lut(fw, fh) } catch (t: Throwable) { Log.w(TAG, "實景查表", t) } }
+        }
+        val lut = bowlLut ?: return
+        val now = SystemClock.elapsedRealtime()
+        if (texBusy || now - bowlShotAt < 200) return      // 最多每秒 5 張（跟送給中控台的頻率一樣）
+        bowlShotAt = now
+        val buf = if (bowlArgb.size == lut.size) bowlArgb else IntArray(lut.size).also { bowlArgb = it }
+        frame.sampleLut(lut, buf)
+        texBusy = true
+        bowlThread.post {
+            try {
+                val bmp = Bitmap.createBitmap(BowlTexture.W, BowlTexture.H, Bitmap.Config.ARGB_8888)
+                bmp.setPixels(buf, 0, BowlTexture.W, 0, 0, BowlTexture.W, BowlTexture.H)
+                val os = java.io.ByteArrayOutputStream(48 * 1024)
+                bmp.compress(Bitmap.CompressFormat.JPEG, 70, os); bmp.recycle()
+                bowlUrl = "data:image/jpeg;base64," + Base64.encodeToString(os.toByteArray(), Base64.NO_WRAP)
+                bowlAt = SystemClock.elapsedRealtime()
+            } catch (t: Throwable) { Log.w(TAG, "實景貼圖", t) } finally { texBusy = false }
+        }
+    }
+
     private var segBev: FloatArray? = null
     private var segYel: FloatArray? = null     // 三類車道線模型的「黃的比例」俯視圖
     private var segCounter = 0L
@@ -994,6 +1031,8 @@ class AdasPipeline(
             }
         }
         frame.sampleLut(table, bevArgb)
+        // 中控台 3D 道路畫面的實景模式：碗面貼圖（中控台開著、而且在實景模式才做）
+        if (LauncherLink.realViewWanted() && !Crumbs.off("realview")) try { realViewTick(g, frame) } catch (t: Throwable) { Log.w(TAG, "實景", t) }
         // 車道線模型：取下一顆鏡頭的畫面（幾毫秒），丟到自己的執行緒跑
         laneSegOrNull()?.let { ls ->
             // 車道線時間一致性用的自己車子移動：CAN 車速＋轉向角速度（陀螺儀／前方畫面；沒有就用方向盤）
@@ -1151,6 +1190,11 @@ class AdasPipeline(
                 .put("e2e", emaProc.toInt()).put("eng", det.engineName).put("res", det.inputSize))
         val mode = prefs.groundMode
         if (mode == AppPrefs.GROUND_REAL && now - groundAt < BEV_TTL_MS) groundUrl?.let { p.put("ground", it) }
+        // 實景模式的碗面貼圖＋碗的參數（中控台照同一組參數建網格）
+        if (LauncherLink.realViewWanted() && now - bowlAt < 1000) bowlUrl?.let {
+            p.put("bowl", it).put("bowlG", JSONObject().put("w", BowlTexture.W).put("h", BowlTexture.H).put("rf", BowlTexture.RF)
+                .put("flat", BowlTexture.FLAT_R).put("rmax", BowlTexture.R_MAX).put("k", BowlTexture.K))
+        }
         val rd = road
         // 停車場裡不畫道路線（停車格的白線、輪擋會被當成車道線，實車：一堆奇怪的線）
         if (mode == AppPrefs.GROUND_VIRTUAL && rd != null && now - roadAt < BEV_TTL_MS && !inLot) {
