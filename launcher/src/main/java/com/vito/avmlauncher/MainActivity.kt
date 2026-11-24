@@ -59,11 +59,12 @@ class MainActivity : Activity(), PhoneLink.Host {
         setContentView(web)
         hideBars()
         startLocation()
-        phone.start("E60", try { packageManager.getPackageInfo(packageName, 0).versionName ?: "" } catch (_: Throwable) { "" })
+        phoneClient.start()   // 反向連線：車機主動連手機（CarServer）
     }
 
     // ── 手機 App 互聯（[PhoneLink]）──
-    private val phone = PhoneLink(this)
+    private val phone = PhoneLink(this)   // 留著型別；這台 ROM 綁不了埠，不啟動
+    private val phoneClient = PhoneClient(this, this)
     @Volatile private var phoneLoc: Location? = null
     @Volatile private var phoneAt = 0L
     @Volatile private var navGuide: String = ""
@@ -317,7 +318,7 @@ class MainActivity : Activity(), PhoneLink.Host {
         @JavascriptInterface fun phonePaired(): String = phoneTokens().toString().let { t ->
             org.json.JSONArray().also { out -> val a = org.json.JSONArray(t); for (i in 0 until a.length()) out.put(a.getJSONObject(i).optString("name")) }.toString() }
         @JavascriptInterface fun phoneUnpairAll() { prefs.edit().putString("phoneTokens", "[]").apply() }
-        @JavascriptInterface fun linkStatus(): String = phone.status
+        @JavascriptInterface fun linkStatus(): String = phoneClient.status
         @JavascriptInterface fun pref(k: String): String = prefs.getString(k, "") ?: ""
         @JavascriptInterface fun setPref(k: String, v: String) { prefs.edit().putString(k, v).apply() }
     }
