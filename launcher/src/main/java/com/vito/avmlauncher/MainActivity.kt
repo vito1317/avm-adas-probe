@@ -80,6 +80,15 @@ class MainActivity : Activity(), PhoneLink.Host {
         o.put("ver", try { packageManager.getPackageInfo(packageName, 0).versionName } catch (_: Throwable) { "" })
         return o.toString()
     }
+    @Volatile private var sceneAliveAt = 0L
+    override fun sceneJson(): String {
+        // 手機在看 360 狀態：中控台就算不在前景也要叫引擎繼續送偵測結果（引擎只在有人看時才送）
+        val now = System.currentTimeMillis()
+        if (now - sceneAliveAt > 1500) { sceneAliveAt = now; car.engineCmd("alive", "") }
+        return car.sceneJson()
+    }
+    override fun routeJson(): String =
+        (getSharedPreferences("launcher", Context.MODE_PRIVATE).getString("navRoute", "") ?: "").ifEmpty { "null" }
     override fun navTo(name: String, lat: Double, lon: Double) {
         main.post { web.evaluateJavascript("window.navTo && window.navTo(" + org.json.JSONObject.quote(name) + ", $lat, $lon)", null) }
     }

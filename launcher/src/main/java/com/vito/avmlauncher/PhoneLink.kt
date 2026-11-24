@@ -18,6 +18,8 @@ import kotlin.concurrent.thread
  * - UDP 廣播（埠 [BEACON_PORT]，每 2 秒）：「我在這」——手機 App 收到就知道車機的 IP，不用自己輸入。
  * - 小 HTTP 伺服器（埠 [HTTP_PORT]）：
  *     GET  /status    車況、導航進度、配件狀態、版本
+ *     GET  /route     目前的導航路線（OSRM 規劃結果；沒在導航 = null）
+ *     GET  /scene     360 環景狀態（周圍物件、車道線、警示；不含影像）
  *     POST /nav       {"name","lat","lon"}：設定目的地（中控台規劃路線、開始導航）
  *     POST /nav/stop  結束導航
  *     POST /loc       {"lat","lon","hdg","acc","spd"}：手機的 GPS（比車上的準，新的優先用）
@@ -26,6 +28,8 @@ import kotlin.concurrent.thread
 class PhoneLink(private val host: Host) {
     interface Host {
         fun statusJson(): String
+        fun sceneJson(): String
+        fun routeJson(): String
         fun navTo(name: String, lat: Double, lon: Double)
         fun navStop()
         fun phoneFix(lat: Double, lon: Double, hdg: Double?, acc: Double?, spd: Double?)
@@ -96,6 +100,8 @@ class PhoneLink(private val host: Host) {
         when {
             method == "OPTIONS" -> reply(s, 204, "")
             method == "GET" && path == "/status" -> reply(s, 200, host.statusJson())
+            method == "GET" && path == "/scene" -> reply(s, 200, host.sceneJson())
+            method == "GET" && path == "/route" -> reply(s, 200, host.routeJson())
             method == "POST" && path == "/nav" -> {
                 val j = JSONObject(body)
                 host.navTo(j.optString("name", "目的地"), j.getDouble("lat"), j.getDouble("lon")); reply(s, 200, "{\"ok\":true}")

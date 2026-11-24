@@ -1,139 +1,415 @@
 <!doctype html>
 <html lang="zh-Hant"><head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
 <title>E60 車機</title>
 <style>
-:root{--bg:#0b0f14;--card:#131a22;--line:#223040;--fg:#e8eef5;--dim:#8b9aab;--acc:#2f8fff;--ok:#3ccf7a;--warn:#ffb020;--bad:#ff5050}
-*{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.45 system-ui,-apple-system,"Noto Sans TC",sans-serif}
-.wrap{padding:14px 16px 40px;max-width:560px;margin:0 auto}
-h1{font-size:20px;margin:6px 0 12px;display:flex;align-items:center;gap:10px}
-.dot{width:10px;height:10px;border-radius:50%;background:var(--bad);box-shadow:0 0 8px var(--bad)}.dot.on{background:var(--ok);box-shadow:0 0 8px var(--ok)}
-.sub{color:var(--dim);font-size:13px;font-weight:400}
-.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:12px}
-.card h2{font-size:13px;color:var(--dim);margin:0 0 10px;font-weight:600;letter-spacing:.05em}
-.big{display:flex;align-items:baseline;gap:18px}.spd{font-size:54px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1}
-.spd small{font-size:15px;color:var(--dim);margin-left:4px}.gear{font-size:32px;font-weight:700;color:var(--acc)}
-.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:12px}
-.kv{background:#0f151c;border-radius:10px;padding:8px}.kv b{display:block;font-size:17px;font-variant-numeric:tabular-nums}.kv span{font-size:12px;color:var(--dim)}
-.tags{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}.tag{font-size:12px;padding:3px 9px;border-radius:99px;background:#1b2530;color:var(--dim)}.tag.w{background:#3a2a0a;color:var(--warn)}
-.nav .act{font-size:22px;font-weight:700}.nav .road{color:var(--dim)}
-.lanes{display:flex;gap:4px;margin-top:8px}.lane{min-width:34px;padding:6px 4px;text-align:center;border-radius:6px;background:#1b2530;color:var(--dim);font-size:16px}.lane.go{background:var(--acc);color:#fff}.lane.cur{outline:2px solid #fff}
-input{width:100%;padding:11px 12px;border-radius:10px;border:1px solid var(--line);background:#0f151c;color:var(--fg);font-size:16px}
-button{padding:10px 14px;border-radius:10px;border:0;background:var(--acc);color:#fff;font-size:15px;font-weight:600}
-button.ghost{background:#1b2530;color:var(--fg)}button.red{background:#5a1c1c;color:#ffb3b3}
+:root{--bg:#07090c;--p:#0d1117;--p2:#121821;--line:#1b2430;--fg:#e9eef4;--dim:#7d8a99;--acc:#2f8fff;--cy:#38d6ff;--amb:#ffb020;--red:#ff3b3b;--ok:#2fd67a;--glow:47,143,255}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}[hidden]{display:none!important}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);font:15px/1.45 system-ui,-apple-system,"Noto Sans TC",sans-serif;overflow:hidden}
+.top{display:flex;align-items:center;gap:10px;padding:12px 16px 8px}
+.dot{width:9px;height:9px;border-radius:50%;background:var(--red);box-shadow:0 0 10px var(--red);flex:none}.dot.on{background:var(--ok);box-shadow:0 0 10px var(--ok)}
+.top b{font-size:16px;letter-spacing:.04em}.top .sub{color:var(--dim);font-size:12px;margin-left:auto;text-align:right}
+main{position:absolute;top:46px;bottom:64px;left:0;right:0;overflow:auto}
+section{display:none;padding:4px 16px 24px}section.on{display:block}
+#s360.on{display:flex;flex-direction:column;padding:0;height:100%}
+nav.tabs{position:fixed;left:0;right:0;bottom:0;height:64px;display:flex;background:linear-gradient(#0a0d12,#07090c);border-top:1px solid var(--line)}
+nav.tabs button{flex:1;background:none;border:0;color:var(--dim);font-size:12px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;position:relative}
+nav.tabs button svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1.8}
+nav.tabs button.on{color:var(--fg)}nav.tabs button.on::before{content:"";position:absolute;top:0;left:28%;right:28%;height:2px;background:var(--acc);box-shadow:0 0 10px var(--acc)}
+.card{background:var(--p);border:1px solid var(--line);border-radius:16px;padding:14px;margin-bottom:12px}
+.card h2{font-size:12px;color:var(--dim);margin:0 0 10px;font-weight:600;letter-spacing:.12em}
+.muted{color:var(--dim);font-size:13px}.err{color:var(--red);font-size:13px;margin-top:6px}
+
+/* ── 行駛 ── */
+.dash{position:relative;margin:2px -4px 8px;border-radius:22px;overflow:hidden;background:radial-gradient(120% 90% at 50% 40%,#101824 0%,#07090c 70%);border:1px solid var(--line);transition:box-shadow .25s}
+.dash.brake{box-shadow:inset 0 -40px 60px -30px rgba(255,40,40,.55)}
+#gauge{display:block;width:100%;height:auto}
+.turn{position:absolute;top:14px;width:34px;height:34px;opacity:.12;transition:opacity .1s}
+.turn svg{width:100%;height:100%;fill:var(--ok)}.turn.l{left:14px}.turn.r{right:14px}
+.turn.on{animation:blink .7s steps(1) infinite}@keyframes blink{0%{opacity:1;filter:drop-shadow(0 0 8px var(--ok))}50%{opacity:.12}}
+.limit{position:absolute;top:14px;left:50%;transform:translateX(-50%);width:42px;height:42px;border-radius:50%;background:#fff;border:5px solid #e02020;color:#111;font-weight:800;display:none;align-items:center;justify-content:center;font-size:16px}
+.limit.on{display:flex}
+.lamps{display:flex;justify-content:center;gap:8px;padding:0 8px 12px;margin-top:-14px;position:relative}
+.lamp{font-size:11px;color:#2b3542;letter-spacing:.05em;padding:3px 8px;border-radius:6px;border:1px solid #1a222c}
+.lamp.g{color:var(--ok);border-color:rgba(47,214,122,.4);text-shadow:0 0 8px var(--ok)}
+.lamp.b{color:#5aa8ff;border-color:rgba(90,168,255,.45);text-shadow:0 0 8px #5aa8ff}
+.lamp.a{color:var(--amb);border-color:rgba(255,176,32,.45);text-shadow:0 0 8px var(--amb)}
+.lamp.r{color:var(--red);border-color:rgba(255,59,59,.5);text-shadow:0 0 8px var(--red)}
+.meters{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.m{background:var(--p);border:1px solid var(--line);border-radius:14px;padding:10px 12px}
+.m .v{font-size:22px;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:.01em}.m .v small{font-size:12px;color:var(--dim);font-weight:500;margin-left:3px}
+.m .k{font-size:11px;color:var(--dim);letter-spacing:.1em}
+.bar{height:4px;border-radius:4px;background:#18202a;margin-top:7px;overflow:hidden}.bar i{display:block;height:100%;border-radius:4px;background:var(--acc);box-shadow:0 0 8px var(--acc);transition:width .5s}
+.trip{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;text-align:center}
+.trip b{display:block;font-size:18px;font-variant-numeric:tabular-nums}.trip span{font-size:11px;color:var(--dim)}
+.carbox{display:flex;gap:14px;align-items:center}
+.carbox .cv{position:relative;width:74px;height:180px;flex:none}
+.carbox img{width:100%;height:100%;object-fit:contain;filter:drop-shadow(0 0 10px rgba(47,143,255,.25))}
+.dr{position:absolute;width:12px;height:30px;border-radius:4px;background:var(--red);box-shadow:0 0 10px var(--red);display:none}.dr.on{display:block}
+.alerts{flex:1;display:flex;flex-direction:column;gap:6px}
+.al{font-size:13px;padding:7px 10px;border-radius:10px;background:#1a1410;color:var(--amb);border:1px solid rgba(255,176,32,.25)}
+.al.ok{background:#0e1a14;color:var(--ok);border-color:rgba(47,214,122,.25)}
+
+/* ── 360 ── */
+.vwrap{position:relative;flex:1;min-height:300px;background:#000}
+.vwrap iframe{position:absolute;inset:0;width:100%;height:100%;border:0}
+.ov{position:absolute;left:10px;right:10px;pointer-events:none}
+.chips{top:10px;display:flex;gap:6px;flex-wrap:wrap}
+.chip{font-size:11px;padding:4px 9px;border-radius:99px;background:rgba(7,9,12,.72);backdrop-filter:blur(6px);border:1px solid rgba(255,255,255,.08);color:var(--dim)}
+.chip.live{color:var(--ok)}.chip.red{color:var(--red)}.chip.amb{color:var(--amb)}.chip.grn{color:var(--ok)}
+.warns{top:44px;display:flex;flex-direction:column;gap:6px;align-items:center}
+.w{font-size:14px;font-weight:600;padding:8px 14px;border-radius:12px;background:rgba(40,28,6,.85);color:var(--amb);border:1px solid rgba(255,176,32,.4)}
+.w.d{background:rgba(60,8,8,.88);color:#ff8a8a;border-color:rgba(255,59,59,.55);animation:pulse 1s infinite}
+@keyframes pulse{50%{box-shadow:0 0 22px rgba(255,59,59,.6)}}
+.sideL,.sideR{position:absolute;top:0;bottom:0;width:28px;pointer-events:none;opacity:0;transition:opacity .2s}
+.sideL{left:0;background:linear-gradient(90deg,rgba(255,59,59,.55),transparent)}.sideR{right:0;background:linear-gradient(270deg,rgba(255,59,59,.55),transparent)}
+.sideL.a,.sideR.a{opacity:.6;background-image:none}.sideL.a{background:linear-gradient(90deg,rgba(255,176,32,.5),transparent)}.sideR.a{background:linear-gradient(270deg,rgba(255,176,32,.5),transparent)}
+.sideL.on,.sideR.on{opacity:1}
+.wait{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:var(--dim);background:rgba(7,9,12,.6);text-align:center;padding:20px}
+.vbar{display:flex;gap:6px;padding:10px 12px;background:var(--bg);border-top:1px solid var(--line);overflow-x:auto}
+.vbar button{flex:none;padding:8px 12px;border-radius:10px;border:1px solid var(--line);background:var(--p2);color:var(--dim);font-size:13px}
+.vbar button[aria-pressed=true]{color:#fff;border-color:var(--acc);box-shadow:0 0 10px rgba(47,143,255,.35) inset}
+
+/* ── 導航 ── */
+.nav .act{font-size:24px;font-weight:700}.nav .road{color:var(--dim)}
+.lanes{display:flex;gap:4px;margin-top:10px}.lane{min-width:36px;padding:6px 4px;text-align:center;border-radius:8px;background:#18202a;color:var(--dim);font-size:17px}.lane.go{background:var(--acc);color:#fff;box-shadow:0 0 10px rgba(47,143,255,.5)}.lane.cur{outline:2px solid #fff}
+input{width:100%;padding:12px;border-radius:12px;border:1px solid var(--line);background:var(--p2);color:var(--fg);font-size:16px;outline:none}
+input:focus{border-color:var(--acc)}
+.btn{padding:11px 16px;border-radius:12px;border:0;background:var(--acc);color:#fff;font-size:15px;font-weight:600}
+.btn.ghost{background:var(--p2);color:var(--fg);border:1px solid var(--line)}.btn.red{background:#4a1416;color:#ffb3b3}
 .row{display:flex;gap:8px;align-items:center}.row input{flex:1}
-.res{margin-top:8px}.res div{padding:10px 4px;border-bottom:1px solid var(--line)}.res div:active{background:#1b2530}
+.res>div{padding:11px 4px;border-bottom:1px solid var(--line)}.res>div:active{background:var(--p2)}
 .res b{display:block}.res span{font-size:12px;color:var(--dim)}
-.sw{display:flex;justify-content:space-between;align-items:center}
-.tg{width:50px;height:30px;border-radius:99px;background:#2a3542;position:relative;flex:none}.tg::after{content:"";position:absolute;top:3px;left:3px;width:24px;height:24px;border-radius:50%;background:#fff;transition:.2s}.tg.on{background:var(--ok)}.tg.on::after{left:23px}
-.muted{color:var(--dim);font-size:13px}.err{color:var(--bad);font-size:13px;margin-top:6px}
-details summary{color:var(--dim);font-size:13px;cursor:pointer}
-</style></head><body><div class="wrap">
-<h1><span class="dot" id="dot"></span><span id="title">尋找車機…</span><span class="sub" id="ver"></span></h1>
+.sw{display:flex;justify-content:space-between;align-items:center;gap:10px}
+.tg{width:50px;height:30px;border-radius:99px;background:#26303c;position:relative;flex:none;transition:.2s}.tg::after{content:"";position:absolute;top:3px;left:3px;width:24px;height:24px;border-radius:50%;background:#fff;transition:.2s}.tg.on{background:var(--ok)}.tg.on::after{left:23px}
+.kv{display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--line);font-size:14px}.kv:last-child{border:0}.kv span{color:var(--dim)}
+details summary{color:var(--dim);font-size:13px}
+</style></head><body>
+<div class="top"><span class="dot" id="dot"></span><b id="title">尋找車機…</b><span class="sub" id="sub"></span></div>
+<main>
+<!-- 行駛 -->
+<section id="sDrive" class="on">
+  <div class="dash" id="dash">
+    <canvas id="gauge" width="720" height="600"></canvas>
+    <div class="turn l" id="tL"><svg viewBox="0 0 24 24"><path d="M10 5 3 12l7 7v-4h11V9H10z"/></svg></div>
+    <div class="turn r" id="tR"><svg viewBox="0 0 24 24"><path d="M14 5l7 7-7 7v-4H3V9h11z"/></svg></div>
+    <div class="limit" id="limit"></div>
+    <div class="lamps">
+      <span class="lamp" id="lLow">近光</span><span class="lamp" id="lHigh">遠光</span><span class="lamp" id="lFog">霧燈</span>
+      <span class="lamp" id="lHand">手煞車</span><span class="lamp" id="lBelt">安全帶</span>
+    </div>
+  </div>
+  <div class="meters" id="meters"></div>
+  <div class="card" style="margin-top:12px"><h2>本次行程　<a id="tripReset" style="color:var(--acc);float:right;letter-spacing:0">歸零</a></h2>
+    <div class="trip"><div><b id="tDist">0.0</b><span>公里</span></div><div><b id="tTime">0:00</b><span>行駛時間</span></div><div><b id="tAvg">0</b><span>平均 km/h</span></div><div><b id="tMax">0</b><span>最高 km/h</span></div></div>
+    <div class="muted" style="margin-top:8px;font-size:11px">手機 App 開著時才會累計（用車上的車速）</div>
+  </div>
+  <div class="card"><h2>車身</h2>
+    <div class="carbox"><div class="cv"><img src="e60_top.png" alt="">
+      <i class="dr" id="dFL" style="left:-4px;top:58px"></i><i class="dr" id="dFR" style="right:-4px;top:58px"></i>
+      <i class="dr" id="dRL" style="left:-4px;top:100px"></i><i class="dr" id="dRR" style="right:-4px;top:100px"></i>
+      <i class="dr" id="dHood" style="left:31px;top:4px;width:12px;height:18px"></i><i class="dr" id="dTrunk" style="left:31px;bottom:4px;width:12px;height:18px"></i></div>
+      <div class="alerts" id="alerts"></div></div>
+  </div>
+</section>
 
-<div class="card" id="carCard"><h2>車況</h2>
-  <div class="big"><div class="spd" id="spd">--<small>km/h</small></div><div class="gear" id="gear">-</div></div>
-  <div class="grid" id="grid"></div>
-  <div class="tags" id="tags"></div>
-  <div class="muted" id="canSt" style="margin-top:8px"></div>
-</div>
+<!-- 360 -->
+<section id="s360">
+  <div class="vwrap">
+    <iframe id="road" src="about:blank" title="360 環景"></iframe>
+    <div class="sideL" id="sideL"></div><div class="sideR" id="sideR"></div>
+    <div class="ov chips" id="chips"></div>
+    <div class="ov warns" id="warns"></div>
+    <div class="wait" id="wait" hidden><div style="font-size:15px;color:var(--fg)">等 360 送偵測結果</div><div class="muted">車機連上、360 背景偵測開著才有。也可以到「車機」頁開示範看看。</div></div>
+  </div>
+  <div class="vbar" id="vbar">
+    <button data-view="front">前方斜視</button><button data-view="chase">追車</button><button data-view="top">俯視</button><button data-view="orbit">環繞</button>
+    <button id="fsdBtn">FSD 風格</button>
+  </div>
+</section>
 
-<div class="card nav" id="navCard"><h2>導航</h2>
-  <div id="navNow" class="muted">沒有在導航</div>
-  <div class="lanes" id="lanes"></div>
-  <div style="margin-top:10px" id="stopRow" hidden><button class="red" id="stop">結束導航</button></div>
-</div>
+<!-- 導航 -->
+<section id="sNav">
+  <div class="card nav"><h2>導航中</h2>
+    <div id="navNow" class="muted">沒有在導航</div><div class="lanes" id="lanes"></div>
+    <div style="margin-top:12px" id="stopRow" hidden><button class="btn red" id="stop">結束導航</button></div>
+  </div>
+  <div class="card"><h2>設定目的地</h2>
+    <div class="row"><input id="q" placeholder="地址、店名、地標" enterkeyhint="search"><button class="btn" id="go">搜尋</button></div>
+    <div class="err" id="sErr"></div><div class="res" id="res"></div>
+  </div>
+</section>
 
-<div class="card"><h2>設定目的地</h2>
-  <div class="row"><input id="q" placeholder="搜尋地點（例：台北車站、全聯）" enterkeyhint="search"><button id="go">搜尋</button></div>
-  <div class="err" id="sErr"></div>
-  <div class="res" id="res"></div>
-</div>
-
-<div class="card"><h2>手機定位</h2>
-  <div class="sw"><div>分享手機 GPS 給車機<div class="muted">手機的 GPS 比車上的準，車機導航會優先用</div></div><div class="tg" id="share"></div></div>
-  <div class="muted" id="shareSt" style="margin-top:6px"></div>
-</div>
-
-<div class="card"><h2>連線</h2>
-  <div class="muted" id="howto">車機連上這支手機的熱點後會自動找到（中控台 1.8 以上）。</div>
-  <details style="margin-top:8px"><summary>手動輸入車機 IP</summary>
-    <div class="row" style="margin-top:8px"><input id="ip" placeholder="例：192.168.43.120" inputmode="decimal"><button class="ghost" id="setIp">設定</button></div>
-  </details>
-</div>
-</div>
+<!-- 車機 -->
+<section id="sCar">
+  <div class="card"><h2>手機定位</h2>
+    <div class="sw"><div>分享手機 GPS 給車機<div class="muted">中控台導航、360 地圖（路名、速限）都會優先用手機的</div></div><div class="tg" id="share"></div></div>
+    <div class="muted" id="shareSt" style="margin-top:6px"></div>
+  </div>
+  <div class="card"><h2>車機</h2><div id="sys"></div></div>
+  <div class="card"><h2>配件</h2><div id="accs" class="muted">沒有資料</div></div>
+  <div class="card"><h2>示範</h2>
+    <div class="sw"><div>示範模式<div class="muted">沒連車機時用假資料看看各頁長怎樣</div></div><div class="tg" id="demo"></div></div>
+  </div>
+  <div class="card"><h2>連線</h2>
+    <div class="muted">車機連上這支手機的熱點後會自動找到（中控台 1.8 以上）。</div>
+    <details style="margin-top:8px"><summary>手動輸入車機 IP</summary>
+      <div class="row" style="margin-top:8px"><input id="ip" placeholder="例：192.168.43.120" inputmode="decimal"><button class="btn ghost" id="setIp">設定</button></div>
+    </details>
+  </div>
+</section>
+</main>
+<nav class="tabs" id="tabs">
+  <button data-t="sDrive" class="on"><svg viewBox="0 0 24 24"><path d="M4 16a8 8 0 1 1 16 0"/><path d="m12 16 4-5"/></svg>行駛</button>
+  <button data-t="s360"><svg viewBox="0 0 24 24"><rect x="8" y="5" width="8" height="14" rx="3"/><path d="M3 9a10 10 0 0 0 0 6M21 9a10 10 0 0 1 0 6"/></svg>360</button>
+  <button data-t="sNav"><svg viewBox="0 0 24 24"><path d="m4 11 16-7-7 16-2-7z"/></svg>導航</button>
+  <button data-t="sCar"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M5 19l2-2M17 7l2-2"/></svg>車機</button>
+</nav>
 <script>
+'use strict';
 const $=id=>document.getElementById(id);
 const esc=s=>String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-const ACT={turn:'轉',left:'左轉',right:'右轉','slight left':'靠左','slight right':'靠右','sharp left':'急左轉','sharp right':'急右轉',straight:'直行',uturn:'迴轉',depart:'出發',arrive:'抵達',merge:'匯入','on ramp':'上匝道','off ramp':'下匝道',fork:'岔路',roundabout:'圓環',rotary:'圓環','end of road':'路底',continue:'繼續','new name':'繼續'};
-function actText(n){ if(n.arrive) return '已抵達目的地'; if(/[^\x00-\x7f]/.test(n.act||'')) return n.act; const m=n.mod&&ACT[n.mod]; if(n.act==='turn'||n.act==='end of road'||n.act==='fork') return m||ACT[n.act]||n.act; return (ACT[n.act]||n.act||'')+(m&&n.act!=='depart'?'（'+m+'）':''); }
-function dist(m){ if(m==null) return ''; return m>=1000?(m/1000).toFixed(1)+' 公里':Math.round(m/10)*10+' 公尺'; }
-const ARROW={left:'↰',right:'↱',straight:'↑','slight left':'↖','slight right':'↗','sharp left':'↰',through:'↑',uturn:'↶','直行':'↑','左轉':'↰','右轉':'↱'};
-let online=false;
+const LS={get(k,d){try{const v=localStorage.getItem(k);return v==null?d:JSON.parse(v);}catch(e){return d;}},set(k,v){try{localStorage.setItem(k,JSON.stringify(v));}catch(e){}}};
 
-function kv(label,val){ return val==null||val===''?'':`<div class="kv"><b>${esc(val)}</b><span>${label}</span></div>`; }
-function render(s){
-  $('spd').innerHTML=(s.speed!=null?Math.round(s.speed):'--')+'<small>km/h</small>';
-  $('gear').textContent=s.gear||'-';
-  $('grid').innerHTML=[
-    kv('轉速',s.rpm!=null?s.rpm:null), kv('油量',s.fuel!=null?s.fuel+' L':null), kv('續航',s.range!=null?s.range+' km':null),
-    kv('水溫',s.water!=null?s.water+'°':null), kv('機油',s.oil!=null?s.oil+'°':null), kv('車外',s.out!=null?s.out+'°':null),
-    kv('電壓',s.volt!=null?s.volt+' V':null), kv('平均油耗',s.avgFuel!=null?s.avgFuel:null), kv('里程',s.odo!=null?s.odo+' km':null),
-    kv('道路',s.road&&s.road.name), kv('速限',s.road&&s.road.maxspeed)
+// ── 跟 App 講話（非同步，不卡畫面）──
+let rid=0;const pend={};
+window.__res=(id,t)=>{const f=pend[id];delete pend[id];if(f)f(t);};
+function req(kind,arg){return new Promise(r=>{const id=++rid;pend[id]=r;try{App.req(id,kind,arg||'');}catch(e){delete pend[id];r('');}});}
+
+// ── 分頁 ──
+let tab='sDrive';
+document.querySelectorAll('#tabs button').forEach(b=>b.onclick=()=>{
+  tab=b.dataset.t;document.querySelectorAll('#tabs button').forEach(x=>x.classList.toggle('on',x===b));
+  document.querySelectorAll('main section').forEach(s=>s.classList.toggle('on',s.id===tab));
+  if(tab==='s360'&&$('road').src==='about:blank'){$('road').src='web/bev3d/index.html';}
+  LS.set('tab',tab);
+});
+{const t=LS.get('tab','sDrive');const b=document.querySelector(`#tabs button[data-t="${t}"]`);if(b)b.click();}
+
+// ── 狀態 ──
+let S={},online=false,demo=LS.get('demo',false);
+$('demo').classList.toggle('on',demo);
+$('demo').onclick=()=>{demo=!demo;LS.set('demo',demo);$('demo').classList.toggle('on',demo);};
+
+// ════ 行駛：跑車儀表（車速弧＋轉速弧，顏色跟車速、轉速連動）════
+const G=$('gauge'),gx=G.getContext('2d');
+let shownSpd=0,shownRpm=0;
+const A0=Math.PI*0.75,SW=Math.PI*1.5,VMAX=260,RMAX=7000;
+function spdColor(v,lim){if(lim&&v>lim+3)return[255,59,59];if(v<60)return[47,143,255];if(v<110){const t=(v-60)/50;return[47+t*9,143+t*71,255];}const t=Math.min(1,(v-110)/60);return[56+t*199,214-t*38,255-t*223];}
+function drawGauge(){
+  const W=G.width,H=G.height,cx=W/2,cy=H*0.54,R=W*0.37;
+  gx.clearRect(0,0,W,H);
+  const spd=Math.max(0,S.speed||0),rpm=Math.max(0,S.rpm||0),lim=S.road&&+S.road.maxspeed||0;
+  shownSpd+=(spd-shownSpd)*0.18;shownRpm+=(rpm-shownRpm)*0.25;
+  const c=spdColor(shownSpd,lim),col=`rgb(${c.join(',')})`;
+  // 刻度
+  gx.lineCap='round';
+  for(let v=0;v<=VMAX;v+=10){const a=A0+SW*v/VMAX,maj=v%20===0,r1=R+16,r2=R+(maj?32:24);
+    gx.strokeStyle=v<=shownSpd?`rgba(${c.join(',')},.9)`:'#2a3441';gx.lineWidth=maj?4:2;
+    gx.beginPath();gx.moveTo(cx+Math.cos(a)*r1,cy+Math.sin(a)*r1);gx.lineTo(cx+Math.cos(a)*r2,cy+Math.sin(a)*r2);gx.stroke();
+    if(v%40===0){gx.fillStyle=v<=shownSpd?'#cfd8e3':'#4a5664';gx.font='600 20px system-ui';gx.textAlign='center';gx.textBaseline='middle';
+      gx.fillText(v,cx+Math.cos(a)*(R+54),cy+Math.sin(a)*(R+54));}}
+  // 車速弧
+  gx.lineWidth=14;gx.strokeStyle='#121922';gx.beginPath();gx.arc(cx,cy,R,A0,A0+SW);gx.stroke();
+  const ae=A0+SW*Math.min(shownSpd,VMAX)/VMAX;
+  const gr=gx.createLinearGradient(cx-R,cy,cx+R,cy);gr.addColorStop(0,'rgba(47,143,255,.55)');gr.addColorStop(1,col);
+  gx.save();gx.shadowColor=col;gx.shadowBlur=26;gx.strokeStyle=gr;gx.beginPath();gx.arc(cx,cy,R,A0,Math.max(A0+0.001,ae));gx.stroke();gx.restore();
+  gx.fillStyle='#fff';gx.save();gx.shadowColor=col;gx.shadowBlur=20;gx.beginPath();gx.arc(cx+Math.cos(ae)*R,cy+Math.sin(ae)*R,9,0,7);gx.fill();gx.restore();
+  // 速限位置標記
+  if(lim){const a=A0+SW*lim/VMAX;gx.strokeStyle='#ff3b3b';gx.lineWidth=4;gx.beginPath();gx.moveTo(cx+Math.cos(a)*(R-12),cy+Math.sin(a)*(R-12));gx.lineTo(cx+Math.cos(a)*(R+12),cy+Math.sin(a)*(R+12));gx.stroke();}
+  // 轉速弧（內圈，6000 以上紅區）
+  const r2=R-36;gx.lineWidth=7;gx.strokeStyle='#111820';gx.beginPath();gx.arc(cx,cy,r2,A0,A0+SW);gx.stroke();
+  gx.strokeStyle='rgba(255,59,59,.28)';gx.beginPath();gx.arc(cx,cy,r2,A0+SW*6000/RMAX,A0+SW);gx.stroke();
+  const ra=A0+SW*Math.min(shownRpm,RMAX)/RMAX,hot=shownRpm>5500;
+  gx.save();gx.strokeStyle=hot?'#ff3b3b':'#cfd8e3';gx.shadowColor=hot?'#ff3b3b':'#9fb4cc';gx.shadowBlur=12;gx.beginPath();gx.arc(cx,cy,r2,A0,Math.max(A0+0.001,ra));gx.stroke();gx.restore();
+  // 中間數字
+  const over=lim&&spd>lim+3;
+  gx.textAlign='center';gx.textBaseline='alphabetic';
+  gx.fillStyle=over?'#ff6060':'#f4f7fb';gx.font='700 128px system-ui';gx.save();gx.shadowColor=over?'#ff3b3b':col;gx.shadowBlur=over?30:14;
+  gx.fillText(S.speed==null?'--':Math.round(shownSpd),cx,cy+30);gx.restore();
+  gx.fillStyle='#7d8a99';gx.font='500 22px system-ui';gx.fillText('km/h',cx,cy+64);
+  gx.font='600 20px system-ui';gx.fillStyle='#596676';gx.fillText(S.rpm!=null?Math.round(shownRpm/100)*100+' rpm':'',cx,cy+96);
+  // 檔位
+  const gear=S.gear||'-',gc={D:'#2f8fff',R:'#ff3b3b',N:'#ffb020',P:'#7d8a99',S:'#ff7a1a',M:'#ff7a1a'}[gear]||'#7d8a99';
+  gx.font='800 50px system-ui';gx.save();gx.fillStyle=gc;gx.shadowColor=gc;gx.shadowBlur=18;gx.fillText(gear,cx,cy+168);gx.restore();
+}
+function meter(k,v,u,pct,color){return `<div class="m"><div class="k">${k}</div><div class="v">${v==null?'--':esc(v)}<small>${u||''}</small></div>${pct==null?'':`<div class="bar"><i style="width:${Math.max(0,Math.min(100,pct))}%;${color?`background:${color};box-shadow:0 0 8px ${color}`:''}"></i></div>`}</div>`;}
+function renderDrive(){
+  const s=S;
+  $('dash').classList.toggle('brake',!!s.brake);
+  $('tL').classList.toggle('on',!!(s.turnL||s.hazard));$('tR').classList.toggle('on',!!(s.turnR||s.hazard));
+  const lim=s.road&&s.road.maxspeed;$('limit').classList.toggle('on',!!lim);$('limit').textContent=lim||'';
+  const L=(id,on,c)=>{$(id).className='lamp'+(on?' '+c:'');};
+  L('lLow',s.lowBeam,'g');L('lHigh',s.highBeam,'b');L('lFog',s.fogF||s.fogR,'g');L('lHand',s.handbrake,'r');L('lBelt',s.belt===false,'r');
+  const wt=s.water,ot=s.oil;
+  $('meters').innerHTML=[
+    meter('油量',s.fuel!=null?s.fuel:null,'L',s.fuel!=null?s.fuel/70*100:null,s.fuel!=null&&s.fuel<10?'#ff3b3b':null),
+    meter('續航',s.range,'km',s.range!=null?s.range/800*100:null),
+    meter('水溫',wt,'°C',wt!=null?(wt-40)/90*100:null,wt>110?'#ff3b3b':wt!=null&&wt<70?'#38d6ff':null),
+    meter('機油',ot,'°C',ot!=null?(ot-40)/110*100:null,ot>130?'#ff3b3b':ot!=null&&ot<80?'#38d6ff':null),
+    meter('電壓',s.volt,'V',s.volt!=null?(s.volt-11)/4*100:null,s.volt!=null&&s.volt<12?'#ffb020':null),
+    meter('車外',s.out,'°C'),
+    meter('瞬間油耗',s.instFuel,''),meter('平均油耗',s.avgFuel,''),
   ].join('');
-  const t=[];
-  if(s.turnL) t.push(['左方向燈',1]); if(s.turnR) t.push(['右方向燈',1]); if(s.hazard) t.push(['警示燈',1]);
-  if(s.handbrake) t.push(['手煞車',1]); if(s.belt===false) t.push(['未繫安全帶',1]);
-  if(s.lowBeam) t.push(['近光燈']); if(s.highBeam) t.push(['遠光燈']); if(s.fogF) t.push(['前霧燈']);
-  if(s.doors){ const d=s.doors,n={fl:'左前門',fr:'右前門',rl:'左後門',rr:'右後門',trunk:'後車廂',hood:'引擎蓋'}; for(const k in n) if(d[k]) t.push([n[k]+'開',1]); }
-  if(s.phoneGps) t.push(['使用手機 GPS']);
-  $('tags').innerHTML=t.map(x=>`<span class="tag${x[1]?' w':''}">${esc(x[0])}</span>`).join('');
-  $('canSt').textContent=s.can?'':(s.canStatus||'');
-  // 導航
-  const n=s.nav, d=s.dest;
-  if(n||d){
-    $('stopRow').hidden=false;
-    let h='';
-    if(n) h+=`<div class="act">${esc(n.arrive?'':dist(n.dist))} ${esc(actText(n))}</div><div class="road">${esc(n.name||'')}</div>`;
-    if(n&&n.tip) h+=`<div class="muted">${esc(n.tip)}</div>`;
-    if(d) h+=`<div class="muted" style="margin-top:4px">目的地：${esc(d.name||'')}</div>`;
-    $('navNow').className=''; $('navNow').innerHTML=h||'導航中';
+  // 車門與提醒
+  const d=s.doors||{};
+  [['dFL','fl'],['dFR','fr'],['dRL','rl'],['dRR','rr'],['dHood','hood'],['dTrunk','trunk']].forEach(([id,k])=>$(id).classList.toggle('on',!!d[k]));
+  const al=[];const DN={fl:'左前門',fr:'右前門',rl:'左後門',rr:'右後門',trunk:'後車廂',hood:'引擎蓋'};
+  for(const k in DN)if(d[k])al.push(DN[k]+'沒關');
+  if(s.handbrake&&s.speed>3)al.push('手煞車還拉著');if(s.belt===false&&s.speed>5)al.push('安全帶沒繫');
+  if(s.fuel!=null&&s.fuel<10)al.push('油快沒了');if(wt>110)al.push('水溫過高');if(s.volt!=null&&s.volt<11.8)al.push('電瓶電壓低');
+  $('alerts').innerHTML=al.length?al.map(a=>`<div class="al">${esc(a)}</div>`).join(''):`<div class="al ok">${online||demo?'一切正常':'沒有連上車機'}</div>`;
+}
+// 行程（用 CAN 車速積分）
+let trip=LS.get('trip',{d:0,t:0,max:0}),lastT=0;
+function tripTick(){
+  const now=Date.now(),dt=lastT?Math.min(3,(now-lastT)/1000):0;lastT=now;
+  const v=S.speed;if((online||demo)&&v!=null){if(v>1){trip.d+=v*dt/3600;trip.t+=dt;}trip.max=Math.max(trip.max,v);}
+  $('tDist').textContent=trip.d.toFixed(1);const m=Math.floor(trip.t/60);$('tTime').textContent=Math.floor(m/60)+':'+String(m%60).padStart(2,'0');
+  $('tAvg').textContent=trip.t>30?Math.round(trip.d/(trip.t/3600)):0;$('tMax').textContent=Math.round(trip.max);
+  if(Math.random()<0.1)LS.set('trip',trip);
+}
+$('tripReset').onclick=()=>{trip={d:0,t:0,max:0};LS.set('trip',trip);};
+
+// ════ 360：中控台同一套 3D 畫面（E60 與周圍車輛模型）════
+let roadReady=false,fsd=LS.get('fsd',false),view=LS.get('view','front');
+$('road').addEventListener('load',()=>{if($('road').src.indexOf('bev3d')<0)return;roadReady=true;routeSent=false;lastRoute=0;setTimeout(()=>{post({__view:view});post({__style:fsd?'fsd':'std'});},600);});
+function post(m){try{if(roadReady)$('road').contentWindow.postMessage(m,'*');}catch(e){}}
+document.querySelectorAll('#vbar [data-view]').forEach(b=>{b.setAttribute('aria-pressed',String(b.dataset.view===view));b.onclick=()=>{view=b.dataset.view;LS.set('view',view);post({__view:view});document.querySelectorAll('#vbar [data-view]').forEach(x=>x.setAttribute('aria-pressed',String(x===b)));};});
+$('fsdBtn').setAttribute('aria-pressed',String(fsd));
+$('fsdBtn').onclick=()=>{fsd=!fsd;LS.set('fsd',fsd);$('fsdBtn').setAttribute('aria-pressed',String(fsd));post({__style:fsd?'fsd':'std'});};
+function idleRoad(){const L=(k,d,x)=>({k,d,x1:x,z1:-8,x2:x,z2:30,c:.9,kv:0});
+  return{objs:[],road:{lines:[L('w',1,-1.8),L('w',1,1.8),L('y',0,-5.4),L('w',0,5.4)],el:-5.6,er:5.6},veh:{turn:S.turnL?'L':S.turnR?'R':null,gear:S.gear||'P',speed:S.speed||0}};}
+const TL={red:['紅燈','red'],yellow:['黃燈','amb'],green:['綠燈','grn']};
+function render360(sc){
+  const live=sc&&sc.live;
+  $('wait').hidden=!!live||!roadReady;
+  post(live?sc:idleRoad());
+  post({__car:{brake:S.brake,turnL:S.turnL,turnR:S.turnR,hazard:S.hazard,lowBeam:S.lowBeam,highBeam:S.highBeam,ill:S.ill,fogF:S.fogF,fogR:S.fogR,doors:S.doors}});
+  // 狀態列
+  const ch=[];
+  if(live){ch.push(['● 360 即時','live']);const st=sc.stat;if(st)ch.push([`${(+st.fps||0).toFixed(1)} fps · ${st.eng||''}`,'']);
+    const objs=(sc.objs||[]).filter(o=>o.t!=='cone');if(objs.length)ch.push([`周圍 ${objs.length} 個物件`,'']);
+    if(sc.lot)ch.push(['停車場','']);if(sc.tl&&TL[sc.tl.s])ch.push(TL[sc.tl.s]);
+    if(sc.lead&&sc.lead.brake)ch.push(['前車煞車','red']);
+    const slots=(sc.slots||[]).filter(x=>!x.o);if(slots.length)ch.push([`空車位 ${slots.length}`,'grn']);}
+  else ch.push([online?'360 沒在送偵測':'沒連上車機','']);
+  $('chips').innerHTML=ch.map(c=>`<span class="chip ${c[1]}">${esc(c[0])}</span>`).join('');
+  // 警示
+  const w=[];
+  if(live){(sc.aids||[]).forEach(a=>w.push([a.t,a.l>=2]));
+    if(sc.cutin)w.push([(sc.cutin.side==='L'?'左':'右')+'側有車切入',true]);
+    if(sc.ldw&&(sc.ldw.l||sc.ldw.r))w.push(['偏離車道',false]);
+    if(sc.start&&sc.start.green)w.push(['綠燈了',false]);else if(sc.start&&sc.start.lead)w.push(['前車已起步',false]);}
+  $('warns').innerHTML=w.slice(0,3).map(x=>`<div class="w${x[1]?' d':''}">${esc(x[0])}</div>`).join('');
+  const lca=live&&sc.lca||{};
+  $('sideL').className='sideL'+(lca.L>=2?' on':lca.L===1?' on a':'');$('sideR').className='sideR'+(lca.R>=2?' on':lca.R===1?' on a':'');
+}
+
+// ════ 導航 ════
+const ARROW={left:'↰',right:'↱',straight:'↑','slight left':'↖','slight right':'↗','sharp left':'↰','sharp right':'↱',uturn:'↶',through:'↑',none:'↑'};
+function dist(m){if(m==null)return'';return m>=1000?(m/1000).toFixed(1)+' 公里':Math.round(m/10)*10+' 公尺';}
+function renderNav(){
+  const n=S.nav,d=S.dest;
+  if(n||d){$('stopRow').hidden=false;let h='';
+    if(n&&n.arrive)h+='<div class="act">已抵達目的地</div>';
+    else if(n)h+=`<div class="act">${esc(dist(n.dist))} ${esc(n.act||'')}</div><div class="road">${esc(n.name||'')}</div>`;
+    if(n&&n.tip)h+=`<div class="muted">${esc(n.tip)}</div>`;
+    if(d)h+=`<div class="muted" style="margin-top:4px">目的地：${esc(d.name||'')}</div>`;
+    $('navNow').className='';$('navNow').innerHTML=h||'導航中';
     const L=(n&&n.lanes)||[];
-    $('lanes').innerHTML=L.map((l,i)=>{ const ind=(l.ind||[]); const a=Array.isArray(ind)?ind.map(x=>ARROW[x]||'↑').join(''):(ARROW[ind]||'↑');
-      return `<div class="lane${l.valid?' go':''}${n.cur===i?' cur':''}">${a}</div>`; }).join('');
-  } else { $('stopRow').hidden=true; $('navNow').className='muted'; $('navNow').textContent='沒有在導航'; $('lanes').innerHTML=''; }
+    $('lanes').innerHTML=L.map((l,i)=>`<div class="lane${l.valid?' go':''}${n.cur===i?' cur':''}">${(l.ind||[]).map(x=>ARROW[x]||'↑').join('')||'↑'}</div>`).join('');
+  }else{$('stopRow').hidden=true;$('navNow').className='muted';$('navNow').textContent='沒有在導航';$('lanes').innerHTML='';}
 }
-
-function tick(){
-  let info={}; try{ info=JSON.parse(App.carInfo()); }catch(e){}
-  let raw=''; try{ raw=App.status(); }catch(e){}
-  online=!!raw;
-  $('dot').classList.toggle('on',online);
-  if(online){ let s={}; try{ s=JSON.parse(raw); }catch(e){}
-    $('title').textContent=(info.name||'E60')+' 已連線'; $('ver').textContent=(s.ver?'中控台 '+s.ver:'')+(info.ip?' · '+info.ip:''); render(s);
-  } else { $('title').textContent=info.ip?'連不上車機':'尋找車機…'; $('ver').textContent=info.ip||''; }
-  try{ const g=JSON.parse(App.sharing()); $('share').classList.toggle('on',g.on);
-    $('shareSt').textContent=g.on?(g.age<0?'等 GPS 定位…':g.age<5?'正在送給車機':'最後送出 '+g.age+' 秒前（車機沒連上？）'):''; }catch(e){}
-}
-setInterval(tick,1000); setTimeout(tick,200);
-
 async function search(){
-  const q=$('q').value.trim(); if(!q) return;
-  $('sErr').textContent=''; $('res').innerHTML='<div class="muted">搜尋中…</div>';
-  await new Promise(r=>setTimeout(r,30));
-  let r; try{ r=JSON.parse(App.search(q)); }catch(e){ r={err:String(e)}; }
-  if(r.err){ $('res').innerHTML=''; $('sErr').textContent='搜尋失敗：'+r.err; return; }
-  if(!r.length){ $('res').innerHTML='<div class="muted">找不到，換個關鍵字試試</div>'; return; }
-  r.sort((a,b)=>(a.dist??1e9)-(b.dist??1e9));
+  const q=$('q').value.trim();if(!q)return;
+  $('sErr').textContent='';$('res').innerHTML='<div class="muted">搜尋中…</div>';
+  let r;try{r=JSON.parse(await req('search',q));}catch(e){r={err:'沒有回應'};}
+  if(r.err){$('res').innerHTML='';$('sErr').textContent='搜尋失敗：'+r.err;return;}
+  if(!r.length){$('res').innerHTML='<div class="muted">找不到，換個關鍵字試試</div>';return;}
   $('res').innerHTML=r.map((x,i)=>`<div data-i="${i}"><b>${esc(x.name)}${x.dist!=null?' <span>· '+dist(x.dist)+'</span>':''}</b><span>${esc(x.addr)}</span></div>`).join('');
-  $('res').querySelectorAll('[data-i]').forEach(el=>el.onclick=()=>{ const x=r[+el.dataset.i];
-    if(App.navTo(x.name,x.lat,x.lon)){ $('res').innerHTML='<div>已送到車機：'+esc(x.name)+'</div>'; setTimeout(tick,1500); }
-    else $('sErr').textContent='送不到車機（確認車機連上手機熱點、中控台有開）'; });
+  $('res').querySelectorAll('[data-i]').forEach(el=>el.onclick=()=>{const x=r[+el.dataset.i];
+    if(App.navTo(x.name,x.lat,x.lon)){$('res').innerHTML='<div>已送到車機：'+esc(x.name)+'</div>';}
+    else $('sErr').textContent='送不到車機（確認車機連上手機熱點、中控台有開）';});
 }
-$('go').onclick=search; $('q').addEventListener('keydown',e=>{ if(e.key==='Enter') search(); });
-$('stop').onclick=()=>{ if(!App.navStop()) alert('送不到車機'); setTimeout(tick,800); };
-$('share').onclick=()=>{ const on=!$('share').classList.contains('on'); App.shareGps(on); setTimeout(tick,500); };
-$('setIp').onclick=()=>{ App.setIp($('ip').value); tick(); };
-window.onPerm=()=>{ if(App.wantShare()) App.shareGps(true); };
-if(App.wantShare()) App.shareGps(true);
+$('go').onclick=search;$('q').addEventListener('keydown',e=>{if(e.key==='Enter'){e.target.blur();search();}});
+$('stop').onclick=()=>{if(!App.navStop())alert('送不到車機');};
+
+// ════ 車機 ════
+function renderCar(info){
+  const k=(a,b)=>`<div class="kv"><span>${a}</span><b>${esc(b)}</b></div>`;
+  $('sys').innerHTML=k('連線',online?'已連線':'未連線')+k('車機 IP',info.ip||'—')+k('中控台版本',S.ver||'—')+k('CAN',S.can?'有資料':(S.canStatus||'—'))+k('手機 GPS',S.phoneGps?'車機正在用':'沒在用');
+  const a=S.acc;
+  if(a){const st=(on,t)=>on===false?'關閉':(t||'—');
+    $('accs').innerHTML=k('氛圍燈',st(a.ambientOn,a.ambient))+k('後擋看板',st(a.rearOn,a.rear))+k('遠端模組',a.remoteReady?(a.remote||'—'):'未設定');$('accs').className='';}
+}
+$('share').onclick=()=>{const on=!$('share').classList.contains('on');App.shareGps(on);};
+$('setIp').onclick=()=>{App.setIp($('ip').value);};
+window.onPerm=()=>{if(App.wantShare())App.shareGps(true);};
+if(App.wantShare())App.shareGps(true);
+
+// ════ 示範資料 ════
+function demoStatus(t){const sp=Math.max(0,62+Math.sin(t/7)*38+Math.sin(t/2.3)*6),cyc=t%14;
+  return{speed:sp,rpm:900+sp*32+Math.sin(t)*120,gear:sp<1?'P':'D',fuel:38,range:460,water:92,oil:104,volt:14.2,out:21,instFuel:8.4,avgFuel:9.6,
+    lowBeam:true,brake:cyc>11,turnL:cyc>6&&cyc<9,belt:true,doors:{trunk:cyc>12.5},road:{name:'示範路',maxspeed:90},ver:'示範',can:true,
+    nav:{act:'右轉',dist:Math.round(420-(t*12)%400),name:'光復路二段',lanes:[{ind:['left'],valid:false},{ind:['straight'],valid:false},{ind:['straight','right'],valid:true}],cur:1},dest:{name:'新竹火車站'}};}
+function demoScene(t){const cyc=t%12,zOver=-14+((t*9)%26);
+  const objs=[{t:'car',x:-3.4,z:9,yaw:0},{t:'car',x:3.5,z:-6+Math.sin(t*.5)*3},{t:'truck',x:-3.6,z:-10},{t:'bus',x:3.6,z:18},{t:'moto',x:1.3,z:-5},
+    {t:'car',x:-3.45,z:zOver,blink:cyc<6?1:0},{t:'car',x:0,z:14+Math.sin(t*.4)*3},{t:'ped',x:6.5,z:6+Math.sin(t*.3)*3}];
+  const L=(k,d,x)=>({k,d,x1:x,z1:-14,x2:x,z2:30,c:.9,kv:0});
+  const ttc=zOver<-1?(-zOver-1)/9:null;
+  return{live:true,objs,road:{lines:[L('y',0,-5.3),L('w',1,-1.75),L('w',1,1.75),L('w',0,5.3)],el:-5.6,er:5.6},
+    veh:{turn:cyc<6?'L':null,gear:'D',speed:60,steer:Math.sin(t*.3)*20,pdc:{f:[99,99,99,99],r:[99,99,99,99]}},
+    lca:{L:zOver>-16&&zOver<-1?(ttc!==null&&ttc<2.2?2:1):0,R:0,intent:cyc<6?'L':null,path:null,pathOk:true},
+    tl:{s:cyc<5?'red':cyc<10?'green':'yellow',c:.8},lead:{brake:cyc>9},stat:{fps:9.6,eng:'GPU'},
+    aids:cyc>9?[{k:'fcw',t:'前車煞車',l:2}]:[]};}
+
+// 示範路線：往北 500 m 後右轉（車道：左轉／直行／直行右轉，該走最右邊）
+const D0={lat:24.80,lon:120.97},M2LAT=1/111195,M2LON=1/(111195*Math.cos(24.8*Math.PI/180));
+function demoRoute(){const c=[];for(let m=0;m<=500;m+=25)c.push([D0.lon,D0.lat+m*M2LAT]);for(let m=25;m<=300;m+=25)c.push([D0.lon+m*M2LON,D0.lat+500*M2LAT]);
+  return{coords:c,dest:{name:'示範目的地',lat:c[c.length-1][1],lon:c[c.length-1][0]},dist:800,dur:90,steps:[
+    {loc:c[0],type:'depart',modifier:'',name:'示範路',lanes:[]},
+    {loc:[D0.lon,D0.lat+500*M2LAT],type:'turn',modifier:'right',name:'光復路二段',lanes:[{ind:['left'],valid:false},{ind:['straight'],valid:false},{ind:['straight','right'],valid:true}]},
+    {loc:c[c.length-1],type:'arrive',modifier:'',name:'',lanes:[]}]};}
+function demoMap(t){const m=(t*14)%480;return{lat:D0.lat+m*M2LAT,lon:D0.lon,hdg:0,matched:true,spd:14,name:'示範路',maxspeed:60,t:Math.floor(t*5),path:[[0,-16],[0,0],[0,40],[0,100]],roads:[],rc:[],lanes:3,hw:'primary',oneway:0,off:0,od:0,acc:5};}
+
+// ════ 主迴圈 ════
+let lastStatus=0,lastScene=0,lastRoute=0,routeStr=null,info={};
+// 導航路線：每 4 秒問一次，有變才送進 3D 畫面（導航卡、車道導引列、地上的綠色路線都由它畫）
+async function pollRoute(){
+  let t;
+  if(demo){t=JSON.stringify(demoRoute());}
+  else{t=await req('route');if(!t)return;}
+  if(t!==routeStr||!routeSent){routeStr=t;let r=null;try{r=JSON.parse(t);}catch(e){}if(roadReady){post({__route:r});routeSent=true;}}
+}
+let routeSent=false;
+async function pollStatus(){
+  if(demo){S=demoStatus(Date.now()/1000);online=false;return;}
+  try{info=JSON.parse(App.carInfo());}catch(e){}
+  const t=await req('status');online=!!t;
+  if(t){try{S=JSON.parse(t);}catch(e){}}else S={};
+}
+async function pollScene(){
+  if(demo){const t=Date.now()/1000,sc=demoScene(t);sc.map=demoMap(t);render360(sc);return;}
+  const t=online?await req('scene'):'';let sc=null;try{sc=t?JSON.parse(t):null;}catch(e){}
+  render360(sc);
+}
+function header(){
+  $('dot').classList.toggle('on',online||demo);
+  $('title').textContent=demo?'示範模式':online?(info.name||'E60')+' 已連線':(info.ip?'連不上車機':'尋找車機…');
+  $('sub').textContent=demo?'':online?(S.road&&S.road.name?S.road.name:'')+(S.ver?'　中控台 '+S.ver:''):(info.ip||'');
+  try{const g=JSON.parse(App.sharing());$('share').classList.toggle('on',g.on);
+    $('shareSt').textContent=g.on?(g.age<0?'等 GPS 定位…':g.age<5?'正在送給車機':'最後送出 '+g.age+' 秒前（車機沒連上？）'):'';}catch(e){}
+}
+async function loop(){
+  const now=Date.now();
+  const sGap=tab==='sDrive'?400:1000;
+  if(now-lastStatus>=sGap){lastStatus=now;await pollStatus();header();tripTick();
+    if(tab==='sDrive')renderDrive();if(tab==='sNav')renderNav();if(tab==='sCar')renderCar(info);}
+  if(tab==='s360'&&now-lastScene>=170){lastScene=now;await pollScene();}
+  if(tab==='s360'&&roadReady&&now-lastRoute>=4000){lastRoute=now;await pollRoute();}
+  setTimeout(loop,60);
+}
+(function anim(){if(tab==='sDrive')drawGauge();requestAnimationFrame(anim);})();
+loop();
 </script></body></html>

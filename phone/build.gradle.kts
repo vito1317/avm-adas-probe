@@ -19,8 +19,8 @@ android {
         applicationId = "com.vito.avmphone"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "1.1"
     }
 
     signingConfigs {
@@ -53,3 +53,14 @@ android {
 dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
 }
+
+// 360 環景頁用中控台同一套 3D 道路畫面（bev3d：three.js、E60 與周圍車輛／行人模型），
+// 直接拿中控台建置時產生的那份（已注入接收資料、藏起自帶按鈕），加上車身特效 carfx.js；不在版控放第三份。
+val phoneWebOut = layout.buildDirectory.dir("generated/phoneWeb")
+val copyCarFx by tasks.registering(Copy::class) {
+    from(rootProject.file("launcher/src/main/assets/web/carfx.js"))
+    into(phoneWebOut.map { it.dir("web") })
+}
+android.sourceSets["main"].assets.srcDir(phoneWebOut)
+android.sourceSets["main"].assets.srcDir(project(":launcher").layout.buildDirectory.dir("generated/bev3dAssets"))
+tasks.named("preBuild") { dependsOn(copyCarFx, ":launcher:copyBev3d") }

@@ -29,6 +29,8 @@ class CarData(private val ctx: Context) {
         const val ACTION_ACC = "com.vito.adas.ACC"
         const val ACTION_CAR = "com.vito.adas.CAR"
         const val ENGINE_PKG = "com.baony.avm360"
+        private val SCENE_KEYS = listOf("objs", "road", "obs", "aids", "ldw", "lca", "lead", "cutin", "tl", "lot", "slots", "park",
+            "cw", "veh", "stat", "start", "shoulder", "speed", "gear", "turn", "wm", "hm", "lp", "nav")
     }
 
     @Volatile private var base: IntArray? = null
@@ -36,6 +38,8 @@ class CarData(private val ctx: Context) {
     @Volatile private var baseAt = 0L
     @Volatile private var adas: JSONObject? = null
     @Volatile private var adasAt = 0L
+    @Volatile private var lastMap: JSONObject? = null
+    @Volatile private var lastMapAt = 0L
     @Volatile var canStatus = "連線中"; private set
     @Volatile private var acc: JSONObject? = null
     @Volatile private var accAt = 0L
@@ -48,7 +52,10 @@ class CarData(private val ctx: Context) {
             if (i?.action == ACTION_CAR) { i.getStringExtra("json")?.let { onCar(it) }; return }
             if (i?.action == ACTION_ACC) { i.getStringExtra("json")?.let { try { acc = JSONObject(it); accAt = SystemClock.elapsedRealtime() } catch (_: Throwable) {} }; return }
             val s = i?.getStringExtra("json") ?: return
-            try { adas = JSONObject(s); adasAt = SystemClock.elapsedRealtime() } catch (_: Throwable) {}
+            try {
+                val j = JSONObject(s); adas = j; adasAt = SystemClock.elapsedRealtime()
+                j.optJSONObject("map")?.let { lastMap = it; lastMapAt = adasAt }   // 地圖只在有新定位時才附上：記著最後一筆
+            } catch (_: Throwable) {}
         }
     }
 
@@ -129,6 +136,19 @@ class CarData(private val ctx: Context) {
         }
         // 配件狀態（遠端模組、氛圍燈、看板）：引擎每次收到心跳／指令就回報
         acc?.takeIf { SystemClock.elapsedRealtime() - accAt < 10_000 }?.let { o.put("acc", it) }
+        return o.toString()
+    }
+
+    /**
+     * 給手機 App 的 360 環景狀態：引擎每幀的偵測結果，只留畫俯視圖要的（周圍物件、車道線、障礙物、
+     * 警示、盲點、前車、紅綠燈、停車格、雷達、效能），不含任何影像（實景貼圖、地面影像都拿掉）。
+     */
+    fun sceneJson(): String {
+        val a = adas; val age = SystemClock.elapsedRealtime() - adasAt
+        val o = JSONObject().put("live", a != null && age < 3000).put("age", if (a == null) JSONObject.NULL else age)
+        if (a != null && age < 3000) for (k in SCENE_KEYS) a.opt(k)?.let { o.put(k, it) }
+        // 地圖（位置、航向、附近道路）：手機的 3D 畫面拿來畫車道級導航
+        lastMap?.takeIf { SystemClock.elapsedRealtime() - lastMapAt < 5000 }?.let { o.put("map", it) }
         return o.toString()
     }
 

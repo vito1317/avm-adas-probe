@@ -325,20 +325,50 @@
   function navMsg(t) { $('navMsg').textContent = t || ''; $('navMsg').hidden = !t; }
   $('navBtn').onclick = function () { $('nav').hidden = false; navMsg(curPos() ? '' : '還沒有定位（等 GPS 有訊號；第一次開要允許「位置」權限）'); setTimeout(function () { $('navQ').focus(); }, 50); };
   $('navStop').onclick = function () { setPref('navRoute', ''); sendRoute(); $('nav').hidden = true; };
+  // 搜尋目的地：ArcGIS（台灣門牌地址準）＋ OpenStreetMap（店名、地標）一起查、合併；
+  // 地址帶「號」兩邊都找不到 → 去掉門牌再查整條路
+  function esc(t) { return String(t == null ? '' : t).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+  function geoArc(q, cp) {
+    var u = 'https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/findAddressCandidates?f=json&maxLocations=5&countryCode=TWN&outFields=PlaceName,Place_addr&SingleLine=' + encodeURIComponent(q);
+    if (cp) u += '&location=' + cp.lon + ',' + cp.lat;
+    return fetch(u).then(function (r) { return r.ok ? r.json() : { candidates: [] }; }).then(function (j) {
+      return (j.candidates || []).filter(function (c) { var y = c.location.y, x = c.location.x; return c.score >= 80 && y > 21.5 && y < 26.5 && x > 118 && x < 122.5; })
+        .map(function (c) { var a = c.attributes || {}; return { name: a.PlaceName || c.address.split(',')[0], addr: a.Place_addr || c.address, lat: c.location.y, lon: c.location.x }; });
+    }).catch(function () { return []; });
+  }
+  function geoOsm(q, cp) {
+    var u = 'https://nominatim.openstreetmap.org/search?format=jsonv2&limit=8&countrycodes=tw&accept-language=zh-TW&q=' + encodeURIComponent(q);
+    if (cp) u += '&viewbox=' + (cp.lon - 0.3) + ',' + (cp.lat + 0.3) + ',' + (cp.lon + 0.3) + ',' + (cp.lat - 0.3);
+    return fetch(u).then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); }).then(function (a) {
+      return a.map(function (p) { return { name: p.name || p.display_name.split(',')[0], addr: p.display_name, lat: +p.lat, lon: +p.lon }; });
+    });
+  }
+  function geocode(q, cp) {
+    var osmErr = null;
+    return Promise.all([geoArc(q, cp), geoOsm(q, cp).catch(function (e) { osmErr = e; return []; })]).then(function (r) {
+      var out = [];
+      r[0].concat(r[1]).forEach(function (p) {   // 同一個地點（50 m 內）只留一個
+        if (!out.some(function (o) { return Math.abs(o.lat - p.lat) < 0.0005 && Math.abs(o.lon - p.lon) < 0.0005; })) out.push(p);
+      });
+      if (out.length) return out;
+      var street = q.replace(/\d+(之\d+)?號.*$/, '').replace(/\d+(巷|弄).*$/, '').trim();
+      if (street && street !== q) return geocode(street, cp).then(function (a) { a.forEach(function (p) { p.addr = '（找不到門牌，先到這條路）' + p.addr; }); return a; });
+      if (osmErr) throw osmErr;
+      return out;
+    });
+  }
   function navSearch() {
     var q = $('navQ').value.trim(); if (!q) return;
-    var url = 'https://nominatim.openstreetmap.org/search?format=jsonv2&limit=8&countrycodes=tw&accept-language=zh-TW&q=' + encodeURIComponent(q);
     var cp = curPos();
-    if (cp) url += '&viewbox=' + (cp.lon - 0.3) + ',' + (cp.lat + 0.3) + ',' + (cp.lon + 0.3) + ',' + (cp.lat - 0.3);
     navMsg('搜尋中…'); $('navList').innerHTML = '';
-    fetch(url).then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); }).then(function (a) {
+    geocode(q, cp).then(function (a) {
       if (!a.length) { navMsg('找不到「' + q + '」'); return; }
       navMsg('');
       a.forEach(function (p) {
-        var b = document.createElement('button'), lat = +p.lat, lon = +p.lon;
-        var dkm = cp ? (Math.hypot((lon - cp.lon) * 111.32 * Math.cos(lat * Math.PI / 180), (lat - cp.lat) * 110.54)).toFixed(1) + ' km' : '';
-        b.innerHTML = (p.name || p.display_name.split(',')[0]) + '<small>' + dkm + '　' + p.display_name + '</small>';
-        b.onclick = function () { navPlan({ name: p.name || p.display_name.split(',')[0], lat: lat, lon: lon }); };
+        var b = document.createElement('button');
+        var dkm = cp ? (Math.hypot((p.lon - cp.lon) * 111.32 * Math.cos(p.lat * Math.PI / 180), (p.lat - cp.lat) * 110.54)).toFixed(1) + ' km' : '';
+        b.innerHTML = esc(p.name) + '<small>' + dkm + '　' + esc(p.addr) + '</small>';
+        b.onclick = function () { navPlan({ name: p.name, lat: p.lat, lon: p.lon }); };
         $('navList').appendChild(b);
       });
     }).catch(function (e) { navMsg('搜尋失敗：' + (e && e.message ? e.message : e) + '（車機有沒有上網？）'); });
