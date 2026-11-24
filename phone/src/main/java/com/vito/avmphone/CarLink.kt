@@ -73,21 +73,66 @@ object CarLink {
 
     private fun req(method: String, path: String, body: String?): String? = raw(method, path, body, null)?.takeIf { it.first in 200..299 }?.second
 
-    /** 回傳 (HTTP 狀態碼, 內容)；連不上 null。 */
+    /**
+     * 找「跟車機同一個網段」的本機位址——手機當熱點時，車機在 192.168.x.x，這張卡才通到車機。
+     * 綁到它，連線就不會被系統丟去走行動數據（有行動數據時連內網失敗的經典坑）。
+     */
+    private fun localBindFor(target: String): java.net.InetAddress? = try {
+        val t = java.net.InetAddress.getByName(target).address
+        if (t.size != 4) null else {
+            var best: java.net.InetAddress? = null
+            for (ni in java.net.NetworkInterface.getNetworkInterfaces()) {
+                if (!ni.isUp || ni.isLoopback) continue
+                for (ia in ni.interfaceAddresses) {
+                    val a = ia.address
+                    if (a !is java.net.Inet4Address) continue
+                    val la = a.address; val p = ia.networkPrefixLength.toInt()
+                    if (sameSubnet(la, t, p)) { best = a }
+                }
+            }
+            best
+        }
+    } catch (_: Throwable) { null }
+
+    private fun sameSubnet(a: ByteArray, b: ByteArray, prefix: Int): Boolean {
+        var bits = prefix
+        for (i in 0 until 4) {
+            if (bits <= 0) break
+            val m = if (bits >= 8) 0xFF else (0xFF shl (8 - bits)) and 0xFF
+            if ((a[i].toInt() and m) != (b[i].toInt() and m)) return false
+            bits -= 8
+        }
+        return true
+    }
+
+    /** 回傳 (HTTP 狀態碼, 內容)；連不上 null。用原生 socket＋綁本機網卡，手動 HTTP（繞開多網路路由問題）。 */
     private fun raw(method: String, path: String, body: String?, token: String?): Pair<Int, String>? {
         val h = ip ?: return null
+        val b = body?.toByteArray(Charsets.UTF_8)
+        val sb = StringBuilder()
+        sb.append("$method $path HTTP/1.1\r\nHost: $h:$port\r\n")
+        if (token != null) sb.append("Authorization: Bearer $token\r\n")
+        if (b != null) sb.append("Content-Type: application/json\r\nContent-Length: ${b.size}\r\n")
+        sb.append("Connection: close\r\n\r\n")
         return try {
-            val c = URL("http://$h:$port$path").openConnection() as HttpURLConnection
-            c.connectTimeout = 1500; c.readTimeout = 3000; c.requestMethod = method
-            if (token != null) c.setRequestProperty("Authorization", "Bearer $token")
-            if (body != null) {
-                c.doOutput = true; c.setRequestProperty("Content-Type", "application/json")
-                c.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+            java.net.Socket().use { s ->
+                localBindFor(h)?.let { try { s.bind(java.net.InetSocketAddress(it, 0)) } catch (_: Throwable) {} }
+                s.connect(java.net.InetSocketAddress(h, port), 2000); s.soTimeout = 5000
+                val out = s.getOutputStream()
+                out.write(sb.toString().toByteArray(Charsets.US_ASCII)); if (b != null) out.write(b); out.flush()
+                val ins = java.io.BufferedInputStream(s.getInputStream())
+                // 讀 header
+                val head = java.io.ByteArrayOutputStream(); var last4 = 0
+                while (true) { val c = ins.read(); if (c < 0) break; head.write(c); last4 = (last4 shl 8) or c; if (last4 == 0x0D0A0D0A) break }
+                val lines = head.toString("UTF-8").split("\r\n")
+                val code = lines.firstOrNull()?.split(" ")?.getOrNull(1)?.toIntOrNull() ?: return null
+                val len = lines.firstOrNull { it.lowercase().startsWith("content-length:") }?.substringAfter(':')?.trim()?.toIntOrNull()
+                val bodyBuf = java.io.ByteArrayOutputStream()
+                if (len != null) { val buf = ByteArray(8192); var got = 0; while (got < len) { val n = ins.read(buf, 0, minOf(buf.size, len - got)); if (n < 0) break; bodyBuf.write(buf, 0, n); got += n } }
+                else { val buf = ByteArray(8192); while (true) { val n = ins.read(buf); if (n < 0) break; bodyBuf.write(buf, 0, n) } }
+                if (code in 200..299) seenAt = System.currentTimeMillis()
+                code to bodyBuf.toString("UTF-8")
             }
-            val code = c.responseCode
-            val t = (if (code in 200..299) c.inputStream else c.errorStream)?.bufferedReader()?.use { it.readText() } ?: ""
-            if (code in 200..299) seenAt = System.currentTimeMillis()
-            code to t
         } catch (_: Throwable) { null }
     }
 
