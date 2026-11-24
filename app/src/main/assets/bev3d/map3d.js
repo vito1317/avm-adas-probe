@@ -391,6 +391,14 @@
         g.beginPath(); g.arc(cx + pt[0] * s, cy - pt[1] * s, 3.5, 0, Math.PI * 2); g.fill(); g.stroke();
       }
     }
+    // 導航路線（nav3d.js）：粗藍線
+    var nav = window.AVM_NAV && AVM_NAV.miniPath ? AVM_NAV.miniPath() : null;
+    if (nav && nav.length >= 2) {
+      g.strokeStyle = 'rgba(47,140,255,.95)'; g.lineWidth = 5;
+      g.beginPath();
+      for (i = 0; i < nav.length; i++) { var X4 = cx + nav[i][0] * s, Y4 = cy - nav[i][1] * s; if (i === 0) g.moveTo(X4, Y4); else g.lineTo(X4, Y4); }
+      g.stroke();
+    }
     // 自車箭頭
     g.save();
     g.translate(cx, cy);

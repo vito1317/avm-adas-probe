@@ -389,6 +389,8 @@ class MapAssist {
             o.put("hw", s.highway ?: JSONObject.NULL)
             o.put("od", r1(s.odoM))
             o.put("t", s.timeMs)
+            // 導航用（中控台車道級導航：算走到路線的哪裡、下一個路口）：只在車機內部傳，不往外送
+            if (s.lat != 0.0 || s.lon != 0.0) o.put("lat", Math.round(s.lat * 1e6) / 1e6).put("lon", Math.round(s.lon * 1e6) / 1e6).put("hdg", r1(s.headingDeg))
             return o
         }
 

@@ -52,6 +52,8 @@
   <span class="vsep" aria-hidden="true"></span>
   <button id="styleFsd" aria-pressed="false" title="FSD 簡潔畫面：灰色車、藍色路徑、不顯示文字">FSD</button>
   <button id="groundReal" aria-pressed="false" title="實景：四顆鏡頭的真實畫面貼成碗面">實景</button>
+  <span class="vsep" aria-hidden="true"></span>
+  <button id="navBtn" aria-pressed="false" title="車道級導航（OpenStreetMap）">導航</button>
 </div>
 <div id="roadWait" class="roadwait" hidden>示意畫面：沒有偵測資料（要看到周圍的車，到 360 設定「中控台」勾選背景偵測）</div>
 
@@ -140,6 +142,17 @@
   <div class="sheet-in">
     <header><h2>所有 App <small class="hint">長按可以釘到快捷列</small></h2><button class="x" data-close aria-label="關閉"><svg class="i"><use href="#i-x"/></svg></button></header>
     <div id="appGrid" class="appgrid"></div>
+  </div>
+</div>
+
+<!-- 導航（車道級）：OpenStreetMap 搜尋目的地、OSRM 規劃路線；導引畫在道路畫面上 -->
+<div id="nav" class="sheet" hidden>
+  <div class="sheet-in narrow">
+    <header><h2>導航 <small class="hint">地圖 © OpenStreetMap · 路線 OSRM</small></h2><button class="x" data-close aria-label="關閉"><svg class="i"><use href="#i-x"/></svg></button></header>
+    <div class="navrow"><input id="navQ" type="search" placeholder="輸入目的地（地址、地標、店名）" autocomplete="off"><button id="navGo">搜尋</button></div>
+    <p id="navMsg" class="navmsg" hidden></p>
+    <div id="navList" class="navlist"></div>
+    <button id="navStop" class="navstop" hidden>結束導航</button>
   </div>
 </div>
 

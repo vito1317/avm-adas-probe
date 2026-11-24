@@ -216,3 +216,13 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid 
 #ui .col,#ui .alerts,#ui .views,#ui .roadwait{pointer-events:none}
 #ui .col>*,#ui .views.on{pointer-events:auto}
 #ui .sheet{position:absolute}
+
+/* 導航面板 */
+.navrow{display:flex;gap:8px}
+.navrow input{flex:1;font:inherit;font-size:18px;padding:10px 12px;background:#1c2027;color:var(--fg);border:1px solid rgba(255,255,255,.15);border-radius:8px}
+.navrow button,.navstop{font:inherit;font-size:16px;padding:10px 18px;border-radius:8px;background:var(--accent);color:#fff;border:0}
+.navstop{margin-top:12px;width:100%;background:#a33}
+.navmsg{color:var(--muted);margin:10px 2px}
+.navlist{display:flex;flex-direction:column;gap:6px;margin-top:10px}
+.navlist button{text-align:left;font:inherit;padding:10px 12px;border-radius:8px;background:rgba(255,255,255,.05);color:var(--fg);border:1px solid rgba(255,255,255,.08)}
+.navlist button small{display:block;color:var(--muted);font-size:12px;margin-top:2px}
