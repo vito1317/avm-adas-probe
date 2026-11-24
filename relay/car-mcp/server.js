@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import * as store from './store.js';
 import { createOAuth } from './oauth.js';
+import * as hyll from './hyll.js';
 import {
   generateRegistrationOptions, verifyRegistrationResponse,
   generateAuthenticationOptions, verifyAuthenticationResponse,
@@ -267,9 +268,21 @@ const TOOLS = [
   { name: 'nav_search', description: 'Search a destination (Taiwan street address incl. house number, shop name or landmark), nearest to the car first. Returns candidates with lat/lon; pass one to nav_start.', inputSchema: obj({ ...DEV, query: { type: 'string' } }, ['query']), annotations: { ...RO, title: '搜尋目的地' } },
   { name: 'nav_start', description: 'Start head-unit navigation to a destination. Give lat+lon (+name) from nav_search, or just "query" to navigate to the best search match. Confirm with the user first if the match is ambiguous.', inputSchema: obj({ ...DEV, query: { type: 'string' }, name: { type: 'string' }, lat: { type: 'number' }, lon: { type: 'number' } }), annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false, title: '開始導航' } },
   { name: 'nav_stop', description: 'Stop the head-unit navigation.', inputSchema: obj({ ...DEV }), annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false, title: '結束導航' } },
+  {
+    name: 'car_control',
+    description: 'Remote-control the car. lock, unlock, windows_up, windows_down, trunk_open, trunk_close, start_engine, stop_engine go straight to the car\'s own cellular module (work even when the car is off and the head unit is asleep). ac_on/ac_off, ambient_* and rear_* go through the phone + head unit. ALWAYS confirm with the user in plain words before each call (e.g. "要幫你鎖車嗎？"), one action per call. start_engine remotely cranks the car (the module enforces park/brake) — never in an enclosed space (carbon monoxide). stop_engine is refused while the car is moving.',
+    inputSchema: obj({
+      ...DEV,
+      action: { type: 'string', enum: ['lock', 'unlock', 'windows_up', 'windows_down', 'trunk_open', 'trunk_close', 'start_engine', 'stop_engine', 'ac_on', 'ac_off', 'ambient_on', 'ambient_off', 'ambient_color', 'ambient_brightness', 'rear_message', 'rear_auto'] },
+      color: { type: 'string', description: 'ambient_color: hex like "#ff3300"' },
+      brightness: { type: 'integer', minimum: 5, maximum: 100 },
+      slot: { type: 'integer', minimum: 0, maximum: 99, description: 'rear_message preset index' },
+    }, ['action']),
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true, title: '車控' },
+  },
 ];
 // 手機 App 認得的方法（給 /api/call 用；網頁控制台只用得到只讀的）
-const DEVICE_METHODS = new Set(['status', 'scene', 'camera', 'location', 'route', 'search', 'nav_to', 'nav_stop']);
+const DEVICE_METHODS = new Set(['status', 'scene', 'camera', 'location', 'route', 'search', 'nav_to', 'nav_stop', 'control']);
 const WEB_METHODS = new Set(['status', 'scene', 'location', 'route']);
 
 function deviceList(ctx) {
@@ -426,6 +439,42 @@ async function callTool(ctx, name, args = {}) {
       return text(`已送到車機，開始導航到「${name || '目的地'}」（${lat}, ${lon}）。中控台會自己規劃路線。`);
     }
     case 'nav_stop': { await one(ctx, dev, 'nav_stop', {}); return text('已結束導航。'); }
+    case 'car_control': {
+      const CY = { lock: '鎖車', unlock: '開鎖', windows_up: '升窗', windows_down: '降窗', trunk_open: '開尾箱', trunk_close: '關尾箱', start_engine: '發動', stop_engine: '熄火' };
+      // 車體／引擎：走車上遠端模組的車聯網（cyhy 雲端），車熄火、中控台關著也能發
+      if (CY[args.action]) {
+        if (!hyll.configured()) return { content: [{ type: 'text', text: '遠端模組（亮波）還沒在這台 relay 設定（CYHY_SSK/UID/TID）。' }], isError: true };
+        // 行駛中不熄火：手機在車上、讀得到車速就先檢查；車停好／讀不到時視為停著可熄火
+        if (args.action === 'stop_engine') {
+          const st = await one(ctx, dev, 'status', {}).then((r) => r.result).catch(() => null);
+          if (st && typeof st.speed === 'number' && st.speed > 3) return { content: [{ type: 'text', text: `車子正在移動（${Math.round(st.speed)} km/h），不熄火。` }], isError: true };
+        }
+        const r = await hyll.sendCode(hyll.CODES[args.action]).catch((e) => ({ ok: false, ret_msg: e.message }));
+        if (!r.ok) return { content: [{ type: 'text', text: `${CY[args.action]}送出失敗：${r.ret_msg || r.ret_code || '未知'}` }], isError: true };
+        log(`car_control ${ctx.user} -> ${CY[args.action]} (cyhy ${r.ret_code})`);
+        const note = args.action === 'start_engine' ? '（已送發動；室內／地下室勿發動——廢氣。用 car_status 看車況）'
+          : args.action === 'stop_engine' ? '（已送熄火）' : '（用 car_status 確認車門／車鎖）';
+        return text(`已遠端${CY[args.action]}。${note}`);
+      }
+      // 氛圍燈／空調／後擋看板：走手機＋中控台
+      const R = { ambient_on: ['ambient_power', '1', '氛圍燈開'], ambient_off: ['ambient_power', '0', '氛圍燈關'], ac_on: ['remote', 'AC_ON', '開空調'], ac_off: ['remote', 'AC_OFF', '關空調'], rear_auto: ['rear_idle', '', '後擋看板回到自動'] };
+      let cmd, arg, label;
+      if (R[args.action]) [cmd, arg, label] = R[args.action];
+      else if (args.action === 'ambient_color') {
+        const c = String(args.color || '').replace(/^#/, '');
+        if (!/^[0-9a-fA-F]{6}$/.test(c)) throw new Error('color must be hex like #ff3300');
+        [cmd, arg, label] = ['ambient_color', c.toLowerCase(), `氛圍燈顏色 #${c}`];
+      } else if (args.action === 'ambient_brightness') {
+        const b = Math.round(Number(args.brightness)); if (!(b >= 5 && b <= 100)) throw new Error('brightness 5-100');
+        [cmd, arg, label] = ['ambient_bright', String(b), `氛圍燈亮度 ${b}`];
+      } else if (args.action === 'rear_message') {
+        const n = Math.round(Number(args.slot)); if (!(n >= 0 && n <= 99)) throw new Error('slot 0-99');
+        [cmd, arg, label] = ['rear_play', String(n), `後擋看板第 ${n} 則`];
+      } else throw new Error(`unknown action ${args.action}`);
+      await one(ctx, dev, 'control', { cmd, arg });
+      log(`car_control ${ctx.user} -> ${label} (phone)`);
+      return text(`已送出：${label}（走中控台；用 car_status 確認）。`);
+    }
   }
   throw new Error(`unknown tool ${name}`);
 }

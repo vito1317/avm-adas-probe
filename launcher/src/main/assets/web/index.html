@@ -172,6 +172,14 @@
         <button data-remote="AC_OFF" data-ask="關空調？"><svg class="i"><use href="#i-off"/></svg><span>關空調</span></button>
       </div>
     </section>
+    <section class="cg" id="engineSec" hidden>
+      <h3>引擎（雲端遠端）<small id="stEngine"></small></h3>
+      <p class="hint" style="color:var(--muted);font-size:13px;margin:2px 0 8px">車熄火、不在藍牙範圍也能發（走亮波車聯網）。室內／地下室請勿發動——廢氣。行駛中不會送熄火。</p>
+      <div class="cbtns">
+        <button data-cloud="start_engine" data-ask="遠端發動引擎？（確認車在通風處、P 檔）"><svg class="i"><use href="#i-on"/></svg><span>發動</span></button>
+        <button data-cloud="stop_engine" data-ask="遠端熄火？"><svg class="i"><use href="#i-off"/></svg><span>熄火</span></button>
+      </div>
+    </section>
     <section class="cg">
       <h3>氛圍燈 <small id="stAmb"></small></h3>
       <div class="cbtns">
@@ -189,6 +197,14 @@
       </div>
       <div id="ctlAmbDots" class="dots big"></div>
       <label class="slider"><span>亮度</span><input id="ambBright" type="range" min="5" max="100" value="80"></label>
+    </section>
+    <section class="cg">
+      <h3>手機遠端控制 <small id="stPhone"></small></h3>
+      <p id="pinBox" hidden style="color:var(--muted);font-size:15px;margin:4px 0 10px">在手機「E60 車機」App →「車機」頁 →「車控」輸入 PIN：<b id="pairPin" style="font-size:26px;letter-spacing:.15em;margin-left:6px"></b>（5 分鐘內有效）</p>
+      <div class="cbtns">
+        <button id="phonePair"><svg class="i"><use href="#i-on"/></svg><span>配對手機</span></button>
+        <button id="phoneUnpair"><svg class="i"><use href="#i-off"/></svg><span>取消全部配對</span></button>
+      </div>
     </section>
     <section class="cg">
       <h3>後擋看板 <small id="stRear"></small></h3>
@@ -212,6 +228,14 @@
     <header><h2>設定</h2><button class="x" data-close aria-label="關閉"><svg class="i"><use href="#i-x"/></svg></button></header>
     <label class="f"><span>車牌</span><input id="plate" maxlength="10" placeholder="ABC-1234" autocomplete="off"></label>
     <label class="f chk"><input id="plateFront" type="checkbox"> <span>前面也掛車牌</span></label>
+    <details style="margin:8px 0"><summary class="hint" style="color:var(--muted)">遠端模組雲端（亮波）— 遠端發動／鎖車等 <span id="cyhyState"></span></summary>
+      <p class="hint" style="color:var(--muted);font-size:12px;margin:6px 0">從亮波 App 取得的 ssk／uid／tid（等於車鑰匙，只存在本機）。填好後「車控」會多出引擎、且鎖車等走雲端（車熄火也能用）。</p>
+      <label class="f"><span>ssk</span><input id="cyhySsk" placeholder="261124..." autocomplete="off"></label>
+      <label class="f"><span>uid</span><input id="cyhyUid" placeholder="1002..." inputmode="numeric" autocomplete="off"></label>
+      <label class="f"><span>tid</span><input id="cyhyTid" placeholder="6600..." inputmode="numeric" autocomplete="off"></label>
+      <label class="f"><span>txnkey（可空）</span><input id="cyhyTxn" placeholder="選填" autocomplete="off"></label>
+      <div class="cbtns" style="margin-top:8px"><button id="cyhySave"><span>儲存</span></button><button id="cyhyClear"><span>清除</span></button></div>
+    </details>
     <div class="f"><span>車漆</span><div id="paints" class="dots"></div></div>
     <div class="f"><span>中間畫面</span>
       <select id="viewMode"><option value="road">Tesla 式 3D 道路畫面（首頁）</option><option value="auto">停車顯示 3D 車、行車切成 3D 道路</option><option value="car">一直顯示 3D 車</option></select>

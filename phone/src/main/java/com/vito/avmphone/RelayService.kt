@@ -30,7 +30,8 @@ import java.util.concurrent.TimeUnit
 /**
  * 遠端 AI（MCP）：手機在車上當中繼——用 WebSocket 連到 Spark 上的 car-mcp relay（照 android-control 的架構），
  * relay 收到 AI 的工具呼叫就轉給這裡，這裡再去問車機（中控台，熱點區網）後回傳。
- * 只轉發「看」與「導航」：車況、360 偵測、360 畫面、手機定位、搜尋目的地、開始／結束導航。沒有任何車控。
+ * 轉發：車況、360 偵測、360 畫面、手機定位、搜尋目的地、開始／結束導航；車控（車窗、車鎖、尾箱、空調、氛圍燈、看板）
+ * 只有手機上打開「允許 AI 遠端控制」、而且跟中控台用 PIN 配對過才會送，中控台還會再檢查白名單。發動、熄火、斷油一律沒有。
  * 前景服務＋通知（Android 規定），手機鎖螢幕也繼續連。
  */
 class RelayService : Service() {
@@ -204,6 +205,12 @@ class RelayService : Service() {
         "nav_to" -> {
             val body = JSONObject().put("name", p.optString("name", "目的地")).put("lat", p.getDouble("lat")).put("lon", p.getDouble("lon"))
             CarLink.post("/nav", body.toString()) ?: throw IllegalStateException("送不到車機")
+            JSONObject().put("ok", true)
+        }
+        "control" -> {
+            // AI 遠端車控：手機上要另外打開「允許 AI 控制」，而且要先跟中控台配對
+            if (!prefs(this).getBoolean("allowControl", false)) throw IllegalStateException("手機 App 沒有開「允許 AI 遠端控制」")
+            CarLink.control(p.optString("cmd"), p.optString("arg"))?.let { throw IllegalStateException(it) }
             JSONObject().put("ok", true)
         }
         "nav_stop" -> { CarLink.post("/nav/stop", "{}") ?: throw IllegalStateException("送不到車機"); JSONObject().put("ok", true) }

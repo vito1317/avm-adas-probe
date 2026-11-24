@@ -65,6 +65,8 @@ class MainActivity : Activity() {
             if (!busy.add(kind)) { reply(id, null); return }
             kotlin.concurrent.thread {
                 val r = try { when (kind) { "status" -> CarLink.get("/status"); "scene" -> CarLink.get("/scene" + (if (arg.isNotEmpty()) "?$arg" else "")); "route" -> CarLink.get("/route"); "search" -> search(arg)
+                    "carpair" -> (CarLink.controlPair(arg, "${android.os.Build.MODEL}")?.let { e -> JSONObject().put("err", e) } ?: JSONObject().put("ok", true)).toString()
+                    "control" -> JSONObject(arg).let { a -> (CarLink.control(a.optString("cmd"), a.optString("arg"))?.let { e -> JSONObject().put("err", e) } ?: JSONObject().put("ok", true)).toString() }
                     "pair" -> JSONObject(arg).let { a -> RelayService.pair(this@MainActivity, a.optString("server"), a.optString("code"), a.optString("name"))
                         ?.let { e -> JSONObject().put("err", e).toString() } ?: JSONObject().put("ok", true).toString().also { RelayService.start(this@MainActivity) } }
                     else -> null } }
@@ -119,6 +121,11 @@ class MainActivity : Activity() {
             if (on && RelayService.paired(this@MainActivity)) RelayService.start(this@MainActivity) else RelayService.stop(this@MainActivity)
         }
         @JavascriptInterface fun relayUnpair() { RelayService.unpair(this@MainActivity) }
+        /** 車控：{paired, aiAllowed} */
+        @JavascriptInterface fun ctlInfo(): String = JSONObject().put("paired", CarLink.controlPaired())
+            .put("aiAllowed", RelayService.prefs(this@MainActivity).getBoolean("allowControl", false)).toString()
+        @JavascriptInterface fun ctlUnpair() { CarLink.controlUnpair() }
+        @JavascriptInterface fun setAiControl(on: Boolean) { RelayService.prefs(this@MainActivity).edit().putBoolean("allowControl", on).apply() }
         @JavascriptInterface fun wantShare(): Boolean = getSharedPreferences("car", MODE_PRIVATE).getBoolean("share", true)
     }
 

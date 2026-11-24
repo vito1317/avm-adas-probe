@@ -21,15 +21,21 @@ import javax.crypto.spec.SecretKeySpec
  * - 握手：送 27/01（要亂數，btkey 加密）→ 模組回 6701 帶亂數 → 送 27/02（亂數用 btkey 加密後回傳）→ 回 6702 `01` = 通過，
  *   之後指令都用亂數當金鑰。
  *
- * 安全：只允許下面 [Cmd] 白名單（鎖車、開鎖、尾箱、車窗、空調）。遠端啟動（01）、熄火（02）、修理廠模式（0E/0F）
- * 等其他代碼一律丟例外，送不出去。
+ * 安全：只允許下面 [Cmd] 白名單。發動（2F/01）、熄火（2F/02）由使用者明確開啟後才可用，而且在上層（中控台
+ * [com.vito.avmlauncher] 的 phoneControl）會先擋「移動中熄火」「非 P 檔發動」；修理廠模式（0E/0F）一律不收。
+ * 發動／熄火的 data = 運轉時間（預設 0x1E=30 分）＋設定碼，照模組 app（cmdStart）的格式。
  */
 object CyProtocol {
-    enum class Cmd(val label: String, val id: String, val data: String) {
+    /** 發動／熄火的 data（運轉時間＋設定碼）；可由 AppPrefs 覆寫，預設照 app 的 fallback。 */
+    @Volatile var engineData = "1E00"
+
+    enum class Cmd(val label: String, val id: String, private val rawData: String) {
         LOCK("鎖車", "03", ""), UNLOCK("開鎖", "04", ""),
         TRUNK_OPEN("開尾箱", "05", ""), TRUNK_CLOSE("關尾箱", "06", ""),
         WINDOW_UP("升窗", "08", "02"), WINDOW_DOWN("降窗", "09", "02"),
-        AC_ON("開空調", "22", "01"), AC_OFF("關空調", "22", "00")
+        AC_ON("開空調", "22", "01"), AC_OFF("關空調", "22", "00"),
+        START_ENGINE("發動", "01", "@engine"), STOP_ENGINE("熄火", "02", "@engine");
+        val data: String get() = if (rawData == "@engine") engineData else rawData
     }
 
     /** 允許送出的 (type, id)：握手兩個 + 白名單指令。 */

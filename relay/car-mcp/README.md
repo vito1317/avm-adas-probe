@@ -7,7 +7,8 @@
 AI ──https /mcp（OAuth 2.1 + passkey 登入）──▶ relay（Spark） ◀──wss /device（裝置 token）── 手機 App ──熱點區網──▶ 中控台 ──▶ 360 引擎
 ```
 
-- 只讀＋導航：`car_status`、`car_surroundings`、`car_camera`、`phone_location`、`nav_status`、`nav_search`、`nav_start`、`nav_stop`。**沒有車控工具**。
+- 查看＋導航：`car_status`、`car_surroundings`、`car_camera`、`phone_location`、`nav_status`、`nav_search`、`nav_start`、`nav_stop`。
+- 車控 `car_control`：鎖車／開鎖、車窗、尾箱、空調、氛圍燈、看板。手機 App 要打開「允許 AI 遠端控制」，手機與中控台要 PIN 配對；中控台再檢查白名單。**不能發動、熄火、斷油**。
 - 登入：passkey（WebAuthn）；AI 客戶端用 OAuth 2.1（動態註冊、PKCE S256、refresh token 輪替），或固定 MCP key。
 - 手機配對：網頁控制台「新增裝置」→ 配對碼 → App「車機」頁「遠端 AI（MCP）」。
 

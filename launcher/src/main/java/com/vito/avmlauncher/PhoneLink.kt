@@ -22,8 +22,11 @@ import kotlin.concurrent.thread
  *     GET  /scene     360 環景狀態（周圍物件、車道線、警示）；?real=1 加碗面實景貼圖、?ground=1 加俯視地面影像
  *     POST /nav       {"name","lat","lon"}：設定目的地（中控台規劃路線、開始導航）
  *     POST /nav/stop  結束導航
+ *     POST /pair      {"pin","name"}：用中控台「車控 → 配對手機」顯示的 PIN 換金鑰
+ *     POST /control   {"cmd","arg"}＋Authorization: Bearer <金鑰>：車控（只認中控台車控面板同一份白名單）
  *     POST /loc       {"lat","lon","hdg","acc","spd"}：手機的 GPS（比車上的準，新的優先用）
- * 只接受區網內的裝置（私人 IP）；只有導航與狀態，不碰任何車控（車窗、車鎖、遠端模組都不經過這裡）。
+ * 只接受區網內的裝置（私人 IP）。車控一定要先用 PIN 配對（同一個熱點上的其他裝置拿不到金鑰），而且只有白名單：
+ * 車窗、車鎖、尾箱、空調、氛圍燈、看板；發動、熄火、斷油一律沒有。
  */
 class PhoneLink(private val host: Host) {
     interface Host {
@@ -34,6 +37,10 @@ class PhoneLink(private val host: Host) {
         fun navTo(name: String, lat: Double, lon: Double)
         fun navStop()
         fun phoneFix(lat: Double, lon: Double, hdg: Double?, acc: Double?, spd: Double?)
+        /** 手機用中控台顯示的 PIN 配對：成功回傳金鑰（只給這一次），失敗 null。 */
+        fun pairPhone(pin: String, name: String): String?
+        /** 已配對手機的車控：金鑰不對回 401、指令不在白名單回錯誤訊息，成功回 null。 */
+        fun phoneControl(token: String, cmd: String, arg: String): Pair<Int, String>?
     }
 
     companion object {
@@ -108,6 +115,18 @@ class PhoneLink(private val host: Host) {
                 host.navTo(j.optString("name", "目的地"), j.getDouble("lat"), j.getDouble("lon")); reply(s, 200, "{\"ok\":true}")
             }
             method == "POST" && path == "/nav/stop" -> { host.navStop(); reply(s, 200, "{\"ok\":true}") }
+            method == "POST" && path == "/pair" -> {
+                val j = JSONObject(body)
+                val tok = host.pairPhone(j.optString("pin"), j.optString("name", "手機"))
+                if (tok == null) reply(s, 403, "{\"err\":\"PIN 錯誤或過期（中控台 → 車控 → 配對手機）\"}")
+                else reply(s, 200, JSONObject().put("token", tok).toString())
+            }
+            method == "POST" && path == "/control" -> {
+                val auth = lines.firstOrNull { it.lowercase().startsWith("authorization:") }?.substringAfter(':')?.trim()?.removePrefix("Bearer ")?.trim() ?: ""
+                val j = JSONObject(body)
+                val e = host.phoneControl(auth, j.optString("cmd"), j.optString("arg"))
+                if (e == null) reply(s, 200, "{\"ok\":true}") else reply(s, e.first, JSONObject().put("err", e.second).toString())
+            }
             method == "POST" && path == "/loc" -> {
                 val j = JSONObject(body)
                 host.phoneFix(j.getDouble("lat"), j.getDouble("lon"), j.optDouble("hdg").takeIf { !it.isNaN() },
@@ -130,7 +149,7 @@ class PhoneLink(private val host: Host) {
 
     private fun reply(s: Socket, code: Int, body: String) {
         val b = body.toByteArray(Charsets.UTF_8)
-        val msg = when (code) { 200 -> "OK"; 204 -> "No Content"; 403 -> "Forbidden"; else -> "Not Found" }
+        val msg = when (code) { 200 -> "OK"; 204 -> "No Content"; 400 -> "Bad Request"; 401 -> "Unauthorized"; 403 -> "Forbidden"; 429 -> "Too Many Requests"; else -> "Not Found" }
         val h = "HTTP/1.1 $code $msg\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: ${b.size}\r\n" +
             "Access-Control-Allow-Origin: *\r\nAccess-Control-Allow-Headers: Content-Type\r\nConnection: close\r\n\r\n"
         s.getOutputStream().apply { write(h.toByteArray()); write(b); flush() }

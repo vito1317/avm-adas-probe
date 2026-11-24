@@ -95,6 +95,64 @@ class MainActivity : Activity(), PhoneLink.Host {
         }
         return car.sceneJson()
     }
+    // ── 手機遠端車控（PIN 配對；金鑰只存 SHA-256）──
+    @Volatile private var pairPin: String? = null
+    @Volatile private var pairPinExp = 0L
+    @Volatile private var pairFails = 0
+    private fun sha(t: String) = java.security.MessageDigest.getInstance("SHA-256").digest(t.toByteArray()).joinToString("") { "%02x".format(it.toInt() and 255) }
+    private fun lp() = getSharedPreferences("launcher", Context.MODE_PRIVATE)
+    private fun phoneTokens(): org.json.JSONArray = try { org.json.JSONArray(lp().getString("phoneTokens", "[]")) } catch (_: Throwable) { org.json.JSONArray() }
+    private val REMOTE_OK = setOf("LOCK", "UNLOCK", "TRUNK_OPEN", "TRUNK_CLOSE", "WINDOW_UP", "WINDOW_DOWN", "AC_ON", "AC_OFF")
+    private val REMOTE_LABEL = mapOf("LOCK" to "鎖車", "UNLOCK" to "開鎖", "TRUNK_OPEN" to "開尾箱", "TRUNK_CLOSE" to "關尾箱",
+        "WINDOW_UP" to "升窗", "WINDOW_DOWN" to "降窗", "AC_ON" to "開空調", "AC_OFF" to "關空調")
+    private val CYHY_LABEL = mapOf("lock" to "鎖車", "unlock" to "開鎖", "windows_up" to "升窗", "windows_down" to "降窗",
+        "trunk_open" to "開尾箱", "trunk_close" to "關尾箱", "start_engine" to "發動", "stop_engine" to "熄火")
+    private fun cloudRes(id: Int, ok: Boolean, msg: String) {
+        main.post { web.evaluateJavascript("window.__cloudRes&&window.__cloudRes($id,$ok,${org.json.JSONObject.quote(msg)})", null) }
+    }
+    @Synchronized override fun pairPhone(pin: String, name: String): String? {
+        val p = pairPin
+        if (p == null || System.currentTimeMillis() > pairPinExp) return null
+        if (pin.trim() != p) { if (++pairFails >= 5) pairPin = null; return null }   // 猜 5 次錯就作廢
+        pairPin = null
+        val tok = "ct_" + java.util.UUID.randomUUID().toString().replace("-", "") + java.util.UUID.randomUUID().toString().replace("-", "")
+        val a = phoneTokens(); a.put(org.json.JSONObject().put("h", sha(tok)).put("name", name.take(40)).put("at", System.currentTimeMillis()))
+        lp().edit().putString("phoneTokens", a.toString()).apply()
+        main.post { android.widget.Toast.makeText(this, "已配對手機：$name（可以遠端車控）", android.widget.Toast.LENGTH_LONG).show()
+            web.evaluateJavascript("window.onPhonePaired && window.onPhonePaired()", null) }
+        return tok
+    }
+    override fun phoneControl(token: String, cmd: String, arg: String): Pair<Int, String>? {
+        val h = sha(token); val a = phoneTokens()
+        val who = (0 until a.length()).map { a.getJSONObject(it) }.firstOrNull { it.optString("h") == h } ?: return 401 to "沒有配對或已取消配對"
+        val label = when (cmd) {
+            "remote" -> when {
+                arg in REMOTE_OK -> REMOTE_LABEL[arg]!!
+                (arg == "START_ENGINE" || arg == "STOP_ENGINE") -> {
+                    if (!lp().getBoolean("allowEngine", false)) return 403 to "引擎遠端發動／熄火沒有開啟（中控台 → 車控 → 手機遠端控制 → 允許引擎）"
+                    val st = try { org.json.JSONObject(car.json()) } catch (_: Throwable) { org.json.JSONObject() }
+                    val spd = st.optDouble("speed", Double.NaN); val gear = st.optString("gear")
+                    // 行駛中不熄火；非 P 檔不發動（擋不到就寧可不送）
+                    if (arg == "STOP_ENGINE" && !(spd.isNaN() || spd < 1.0)) return 409 to "車子正在移動（${Math.round(spd)} km/h），不熄火"
+                    if (arg == "START_ENGINE" && gear.isNotEmpty() && gear != "P") return 409 to "不是 P 檔（目前 $gear），不發動"
+                    if (arg == "START_ENGINE" && st.has("handbrake") && st.opt("handbrake") == false) return 409 to "手煞車沒拉，不發動"
+                    REMOTE_LABEL[arg]!!
+                }
+                else -> return 400 to "不允許的指令"
+            }
+            "ambient_power" -> if (arg == "1" || arg == "0") "氛圍燈${if (arg == "1") "開" else "關"}" else return 400 to "arg 要 0 或 1"
+            "ambient_color" -> if (Regex("^[0-9a-fA-F]{6}$").matches(arg)) "氛圍燈顏色 #$arg" else return 400 to "顏色要 6 碼 hex"
+            "ambient_mode" -> if (Regex("^[0-9a-fA-F]{4}$").matches(arg)) "氛圍燈模式" else return 400 to "模式碼不對"
+            "ambient_bright" -> if ((arg.toIntOrNull() ?: -1) in 5..100) "氛圍燈亮度 $arg" else return 400 to "亮度 5–100"
+            "rear_play" -> if ((arg.toIntOrNull() ?: -1) in 0..99) "後擋看板第 $arg 則" else return 400 to "看板編號不對"
+            "rear_idle" -> "後擋看板回到自動"
+            else -> return 400 to "不允許的指令"
+        }
+        CmdProvider.push(org.json.JSONObject().put("cmd", cmd).put("arg", arg).toString())
+        car.engineCmd("poll", "")
+        main.post { android.widget.Toast.makeText(this, "手機遠端（${who.optString("name")}）：$label", android.widget.Toast.LENGTH_LONG).show() }
+        return null
+    }
     override fun routeJson(): String =
         (getSharedPreferences("launcher", Context.MODE_PRIVATE).getString("navRoute", "") ?: "").ifEmpty { "null" }
     override fun navTo(name: String, lat: Double, lon: Double) {
@@ -226,6 +284,39 @@ class MainActivity : Activity(), PhoneLink.Host {
             car.engineCmd("poll", "")
         }
 
+        // ── 遠端模組雲端控制（cyhy）：車熄火、模組不在藍牙範圍也能發。非同步，結果呼叫 window.__cloudRes(id, ok, msg) ──
+        @JavascriptInterface fun cloudReady(): Boolean = CyCloud.configured(lp())
+        @JavascriptInterface fun cloudSaved(): String = org.json.JSONObject()
+            .put("ready", CyCloud.configured(lp())).put("uid", lp().getString("cyhyUid", "")).put("tid", lp().getString("cyhyTid", "")).toString()
+        @JavascriptInterface fun setCyhy(ssk: String, uid: String, tid: String, txnkey: String, hosts: String, port: Int) {
+            lp().edit().putString("cyhySsk", ssk.trim()).putString("cyhyUid", uid.trim()).putString("cyhyTid", tid.trim())
+                .putString("cyhyTxnkey", txnkey.trim()).putString("cyhyHosts", hosts.trim()).putInt("cyhyPort", if (port in 1..65535) port else 6050).apply()
+        }
+        @JavascriptInterface fun cloudClear() { lp().edit().remove("cyhySsk").remove("cyhyUid").remove("cyhyTid").remove("cyhyTxnkey").apply() }
+        @JavascriptInterface fun cloudControl(id: Int, action: String) {
+            Thread {
+                val label = CYHY_LABEL[action] ?: run { cloudRes(id, false, "不允許的指令"); return@Thread }
+                // 安全攔截：移動中不熄火；非 P 檔／手煞車沒拉不發動（讀得到車況才擋）
+                val st = try { org.json.JSONObject(car.json()) } catch (_: Throwable) { org.json.JSONObject() }
+                val spd = st.optDouble("speed", Double.NaN); val gear = st.optString("gear")
+                if (action == "stop_engine" && !(spd.isNaN() || spd < 1.0)) { cloudRes(id, false, "車子正在移動（${Math.round(spd)} km/h），不熄火"); return@Thread }
+                if (action == "start_engine" && gear.isNotEmpty() && gear != "P") { cloudRes(id, false, "不是 P 檔（目前 $gear），不發動"); return@Thread }
+                if (action == "start_engine" && st.has("handbrake") && st.opt("handbrake") == false) { cloudRes(id, false, "手煞車沒拉，不發動"); return@Thread }
+                val (ok, msg) = CyCloud.send(lp(), action)
+                if (ok) main.post { android.widget.Toast.makeText(this@MainActivity, "雲端$label：已送出", android.widget.Toast.LENGTH_SHORT).show() }
+                cloudRes(id, ok, if (ok) label else msg)
+            }.start()
+        }
+
+        /** 車控面板「配對手機」：產生 6 位數 PIN（5 分鐘有效）。 */
+        @JavascriptInterface fun phonePairPin(): String {
+            val pin = (100000 + java.security.SecureRandom().nextInt(900000)).toString()
+            pairPin = pin; pairPinExp = System.currentTimeMillis() + 5 * 60_000; pairFails = 0
+            return pin
+        }
+        @JavascriptInterface fun phonePaired(): String = phoneTokens().toString().let { t ->
+            org.json.JSONArray().also { out -> val a = org.json.JSONArray(t); for (i in 0 until a.length()) out.put(a.getJSONObject(i).optString("name")) }.toString() }
+        @JavascriptInterface fun phoneUnpairAll() { prefs.edit().putString("phoneTokens", "[]").apply() }
         @JavascriptInterface fun pref(k: String): String = prefs.getString(k, "") ?: ""
         @JavascriptInterface fun setPref(k: String, v: String) { prefs.edit().putString(k, v).apply() }
     }

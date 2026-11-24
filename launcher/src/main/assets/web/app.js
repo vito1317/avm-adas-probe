@@ -446,9 +446,40 @@
   function ask(text, cb) { $('askText').textContent = text; askCb = cb; show('ask', true); }
   $('askYes').onclick = function () { show('ask', false); if (askCb) askCb(); askCb = null; };
   $('askNo').onclick = function () { show('ask', false); askCb = null; };
+  // 遠端模組雲端（亮波 cyhy）：車熄火、不在藍牙範圍也能發。非同步。
+  var cloudReady = false; try { cloudReady = Car.cloudReady(); } catch (e) {}
+  var REMOTE2CLOUD = { LOCK: 'lock', UNLOCK: 'unlock', WINDOW_UP: 'windows_up', WINDOW_DOWN: 'windows_down', TRUNK_OPEN: 'trunk_open', TRUNK_CLOSE: 'trunk_close' };
+  var cloudPend = {}, cloudId = 0;
+  window.__cloudRes = function (id, ok, msg) { var f = cloudPend[id]; delete cloudPend[id]; if (f) f(ok, msg); };
+  function cloudCtl(action, done) { var id = ++cloudId; cloudPend[id] = done || function () {}; try { Car.cloudControl(id, action); } catch (e) { delete cloudPend[id]; (done || function () {})(false, '送不出'); } }
   document.querySelectorAll('[data-remote]').forEach(function (b) {
-    b.onclick = function () { ask(b.dataset.ask, function () { control('remote', b.dataset.remote); }); };
+    b.onclick = function () {
+      ask(b.dataset.ask, function () {
+        var ca = REMOTE2CLOUD[b.dataset.remote];
+        if (cloudReady && ca) cloudCtl(ca, function (ok, msg) { toast((ok ? '雲端：' : '') + msg); });
+        else control('remote', b.dataset.remote);
+      });
+    };
   });
+  // 引擎（只走雲端）
+  document.querySelectorAll('[data-cloud]').forEach(function (b) {
+    b.onclick = function () { ask(b.dataset.ask, function () { cloudCtl(b.dataset.cloud, function (ok, msg) { toast(msg); }); }); };
+  });
+  function toast(t) { try { var e = $('toast'); if (!e) { e = document.createElement('div'); e.id = 'toast'; e.style.cssText = 'position:fixed;left:50%;bottom:80px;transform:translateX(-50%);background:#111c;color:#fff;padding:10px 16px;border-radius:12px;z-index:99;font-size:15px'; document.body.appendChild(e); } e.textContent = t; e.style.opacity = '1'; clearTimeout(toast._t); toast._t = setTimeout(function () { e.style.opacity = '0'; }, 2500); } catch (x) {} }
+  function cloudUi() { try { cloudReady = Car.cloudReady(); } catch (e) {} $('engineSec').hidden = !cloudReady; $('stRemote').textContent = cloudReady ? '雲端' : ''; if ($('cyhyState')) $('cyhyState').textContent = cloudReady ? '（已設定）' : ''; }
+  cloudUi();
+  // 設定：亮波憑證
+  (function () {
+    try { var c = JSON.parse(Car.cloudSaved()); $('cyhyUid').value = c.uid || ''; $('cyhyTid').value = c.tid || ''; } catch (e) {}
+    $('cyhySave').onclick = function () { Car.setCyhy($('cyhySsk').value, $('cyhyUid').value, $('cyhyTid').value, $('cyhyTxn').value, 's1.cyhycdd.com,s2.cyhycdd.com', 6050); $('cyhySsk').value = ''; $('cyhyTxn').value = ''; cloudUi(); toast('已儲存亮波憑證'); };
+    $('cyhyClear').onclick = function () { ask('清除亮波雲端憑證？', function () { Car.cloudClear(); cloudUi(); toast('已清除'); }); };
+  })();
+  // 手機遠端控制：PIN 配對（手機拿到金鑰才能送車控；車控只認上面這份白名單）
+  function phoneList() { var a = []; try { a = JSON.parse(Car.phonePaired()); } catch (e) {} $('stPhone').textContent = a.length ? '已配對：' + a.join('、') : '沒有配對的手機'; }
+  $('phonePair').onclick = function () { var pin = ''; try { pin = Car.phonePairPin(); } catch (e) {} $('pairPin').textContent = pin; $('pinBox').hidden = !pin; };
+  $('phoneUnpair').onclick = function () { ask('取消所有手機的遠端控制配對？', function () { try { Car.phoneUnpairAll(); } catch (e) {} $('pinBox').hidden = true; phoneList(); }); };
+  window.onPhonePaired = function () { $('pinBox').hidden = true; phoneList(); };
+  try { phoneList(); } catch (e) {}
   document.querySelectorAll('[data-ctl]').forEach(function (b) { b.onclick = function () { control(b.dataset.ctl, b.dataset.arg); }; });
   var bt = null;
   $('ambBright').addEventListener('input', function () { clearTimeout(bt); var v = $('ambBright').value; bt = setTimeout(function () { setPref('ambBright', v); control('ambient_bright', v); }, 250); });

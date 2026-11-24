@@ -71,17 +71,42 @@ object CarLink {
     fun get(path: String): String? = req("GET", path, null)
     fun post(path: String, body: String): String? = req("POST", path, body)
 
-    private fun req(method: String, path: String, body: String?): String? {
+    private fun req(method: String, path: String, body: String?): String? = raw(method, path, body, null)?.takeIf { it.first in 200..299 }?.second
+
+    /** 回傳 (HTTP 狀態碼, 內容)；連不上 null。 */
+    private fun raw(method: String, path: String, body: String?, token: String?): Pair<Int, String>? {
         val h = ip ?: return null
         return try {
             val c = URL("http://$h:$port$path").openConnection() as HttpURLConnection
             c.connectTimeout = 1500; c.readTimeout = 3000; c.requestMethod = method
+            if (token != null) c.setRequestProperty("Authorization", "Bearer $token")
             if (body != null) {
                 c.doOutput = true; c.setRequestProperty("Content-Type", "application/json")
                 c.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
             }
-            val t = c.inputStream.bufferedReader().use { it.readText() }
-            if (c.responseCode in 200..299) { seenAt = System.currentTimeMillis(); t } else null
+            val code = c.responseCode
+            val t = (if (code in 200..299) c.inputStream else c.errorStream)?.bufferedReader()?.use { it.readText() } ?: ""
+            if (code in 200..299) seenAt = System.currentTimeMillis()
+            code to t
         } catch (_: Throwable) { null }
+    }
+
+    // ───── 遠端車控（要先用中控台顯示的 PIN 配對）─────
+    fun controlPaired(): Boolean = !prefs?.getString("ctok", null).isNullOrEmpty()
+    fun controlUnpair() { prefs?.edit()?.remove("ctok")?.apply() }
+    /** 用 PIN 配對；成功回 null，失敗回錯誤訊息。 */
+    fun controlPair(pin: String, name: String): String? {
+        val r = raw("POST", "/pair", JSONObject().put("pin", pin.trim()).put("name", name).toString(), null) ?: return "連不上車機（手機要連著車機、中控台 2.1 以上）"
+        if (r.first !in 200..299) return try { JSONObject(r.second).optString("err", "HTTP ${r.first}") } catch (_: Throwable) { "HTTP ${r.first}" }
+        prefs?.edit()?.putString("ctok", JSONObject(r.second).getString("token"))?.apply()
+        return null
+    }
+    /** 送車控；成功回 null，失敗回錯誤訊息。 */
+    fun control(cmd: String, arg: String): String? {
+        val tok = prefs?.getString("ctok", null) ?: return "還沒跟中控台配對車控（中控台 → 車控 → 配對手機）"
+        val r = raw("POST", "/control", JSONObject().put("cmd", cmd).put("arg", arg).toString(), tok) ?: return "連不上車機"
+        if (r.first == 401) { controlUnpair(); return "中控台已取消配對，請重新配對" }
+        if (r.first !in 200..299) return try { JSONObject(r.second).optString("err", "HTTP ${r.first}") } catch (_: Throwable) { "HTTP ${r.first}" }
+        return null
     }
 }
