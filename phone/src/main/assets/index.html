@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="zh-Hant"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>E60 車機</title>
+<style>
+:root{--bg:#0b0f14;--card:#131a22;--line:#223040;--fg:#e8eef5;--dim:#8b9aab;--acc:#2f8fff;--ok:#3ccf7a;--warn:#ffb020;--bad:#ff5050}
+*{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.45 system-ui,-apple-system,"Noto Sans TC",sans-serif}
+.wrap{padding:14px 16px 40px;max-width:560px;margin:0 auto}
+h1{font-size:20px;margin:6px 0 12px;display:flex;align-items:center;gap:10px}
+.dot{width:10px;height:10px;border-radius:50%;background:var(--bad);box-shadow:0 0 8px var(--bad)}.dot.on{background:var(--ok);box-shadow:0 0 8px var(--ok)}
+.sub{color:var(--dim);font-size:13px;font-weight:400}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:12px}
+.card h2{font-size:13px;color:var(--dim);margin:0 0 10px;font-weight:600;letter-spacing:.05em}
+.big{display:flex;align-items:baseline;gap:18px}.spd{font-size:54px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1}
+.spd small{font-size:15px;color:var(--dim);margin-left:4px}.gear{font-size:32px;font-weight:700;color:var(--acc)}
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:12px}
+.kv{background:#0f151c;border-radius:10px;padding:8px}.kv b{display:block;font-size:17px;font-variant-numeric:tabular-nums}.kv span{font-size:12px;color:var(--dim)}
+.tags{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}.tag{font-size:12px;padding:3px 9px;border-radius:99px;background:#1b2530;color:var(--dim)}.tag.w{background:#3a2a0a;color:var(--warn)}
+.nav .act{font-size:22px;font-weight:700}.nav .road{color:var(--dim)}
+.lanes{display:flex;gap:4px;margin-top:8px}.lane{min-width:34px;padding:6px 4px;text-align:center;border-radius:6px;background:#1b2530;color:var(--dim);font-size:16px}.lane.go{background:var(--acc);color:#fff}.lane.cur{outline:2px solid #fff}
+input{width:100%;padding:11px 12px;border-radius:10px;border:1px solid var(--line);background:#0f151c;color:var(--fg);font-size:16px}
+button{padding:10px 14px;border-radius:10px;border:0;background:var(--acc);color:#fff;font-size:15px;font-weight:600}
+button.ghost{background:#1b2530;color:var(--fg)}button.red{background:#5a1c1c;color:#ffb3b3}
+.row{display:flex;gap:8px;align-items:center}.row input{flex:1}
+.res{margin-top:8px}.res div{padding:10px 4px;border-bottom:1px solid var(--line)}.res div:active{background:#1b2530}
+.res b{display:block}.res span{font-size:12px;color:var(--dim)}
+.sw{display:flex;justify-content:space-between;align-items:center}
+.tg{width:50px;height:30px;border-radius:99px;background:#2a3542;position:relative;flex:none}.tg::after{content:"";position:absolute;top:3px;left:3px;width:24px;height:24px;border-radius:50%;background:#fff;transition:.2s}.tg.on{background:var(--ok)}.tg.on::after{left:23px}
+.muted{color:var(--dim);font-size:13px}.err{color:var(--bad);font-size:13px;margin-top:6px}
+details summary{color:var(--dim);font-size:13px;cursor:pointer}
+</style></head><body><div class="wrap">
+<h1><span class="dot" id="dot"></span><span id="title">尋找車機…</span><span class="sub" id="ver"></span></h1>
+
+<div class="card" id="carCard"><h2>車況</h2>
+  <div class="big"><div class="spd" id="spd">--<small>km/h</small></div><div class="gear" id="gear">-</div></div>
+  <div class="grid" id="grid"></div>
+  <div class="tags" id="tags"></div>
+  <div class="muted" id="canSt" style="margin-top:8px"></div>
+</div>
+
+<div class="card nav" id="navCard"><h2>導航</h2>
+  <div id="navNow" class="muted">沒有在導航</div>
+  <div class="lanes" id="lanes"></div>
+  <div style="margin-top:10px" id="stopRow" hidden><button class="red" id="stop">結束導航</button></div>
+</div>
+
+<div class="card"><h2>設定目的地</h2>
+  <div class="row"><input id="q" placeholder="搜尋地點（例：台北車站、全聯）" enterkeyhint="search"><button id="go">搜尋</button></div>
+  <div class="err" id="sErr"></div>
+  <div class="res" id="res"></div>
+</div>
+
+<div class="card"><h2>手機定位</h2>
+  <div class="sw"><div>分享手機 GPS 給車機<div class="muted">手機的 GPS 比車上的準，車機導航會優先用</div></div><div class="tg" id="share"></div></div>
+  <div class="muted" id="shareSt" style="margin-top:6px"></div>
+</div>
+
+<div class="card"><h2>連線</h2>
+  <div class="muted" id="howto">車機連上這支手機的熱點後會自動找到（中控台 1.8 以上）。</div>
+  <details style="margin-top:8px"><summary>手動輸入車機 IP</summary>
+    <div class="row" style="margin-top:8px"><input id="ip" placeholder="例：192.168.43.120" inputmode="decimal"><button class="ghost" id="setIp">設定</button></div>
+  </details>
+</div>
+</div>
+<script>
+const $=id=>document.getElementById(id);
+const esc=s=>String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const ACT={turn:'轉',left:'左轉',right:'右轉','slight left':'靠左','slight right':'靠右','sharp left':'急左轉','sharp right':'急右轉',straight:'直行',uturn:'迴轉',depart:'出發',arrive:'抵達',merge:'匯入','on ramp':'上匝道','off ramp':'下匝道',fork:'岔路',roundabout:'圓環',rotary:'圓環','end of road':'路底',continue:'繼續','new name':'繼續'};
+function actText(n){ if(n.arrive) return '已抵達目的地'; if(/[^\x00-\x7f]/.test(n.act||'')) return n.act; const m=n.mod&&ACT[n.mod]; if(n.act==='turn'||n.act==='end of road'||n.act==='fork') return m||ACT[n.act]||n.act; return (ACT[n.act]||n.act||'')+(m&&n.act!=='depart'?'（'+m+'）':''); }
+function dist(m){ if(m==null) return ''; return m>=1000?(m/1000).toFixed(1)+' 公里':Math.round(m/10)*10+' 公尺'; }
+const ARROW={left:'↰',right:'↱',straight:'↑','slight left':'↖','slight right':'↗','sharp left':'↰',through:'↑',uturn:'↶','直行':'↑','左轉':'↰','右轉':'↱'};
+let online=false;
+
+function kv(label,val){ return val==null||val===''?'':`<div class="kv"><b>${esc(val)}</b><span>${label}</span></div>`; }
+function render(s){
+  $('spd').innerHTML=(s.speed!=null?Math.round(s.speed):'--')+'<small>km/h</small>';
+  $('gear').textContent=s.gear||'-';
+  $('grid').innerHTML=[
+    kv('轉速',s.rpm!=null?s.rpm:null), kv('油量',s.fuel!=null?s.fuel+' L':null), kv('續航',s.range!=null?s.range+' km':null),
+    kv('水溫',s.water!=null?s.water+'°':null), kv('機油',s.oil!=null?s.oil+'°':null), kv('車外',s.out!=null?s.out+'°':null),
+    kv('電壓',s.volt!=null?s.volt+' V':null), kv('平均油耗',s.avgFuel!=null?s.avgFuel:null), kv('里程',s.odo!=null?s.odo+' km':null),
+    kv('道路',s.road&&s.road.name), kv('速限',s.road&&s.road.maxspeed)
+  ].join('');
+  const t=[];
+  if(s.turnL) t.push(['左方向燈',1]); if(s.turnR) t.push(['右方向燈',1]); if(s.hazard) t.push(['警示燈',1]);
+  if(s.handbrake) t.push(['手煞車',1]); if(s.belt===false) t.push(['未繫安全帶',1]);
+  if(s.lowBeam) t.push(['近光燈']); if(s.highBeam) t.push(['遠光燈']); if(s.fogF) t.push(['前霧燈']);
+  if(s.doors){ const d=s.doors,n={fl:'左前門',fr:'右前門',rl:'左後門',rr:'右後門',trunk:'後車廂',hood:'引擎蓋'}; for(const k in n) if(d[k]) t.push([n[k]+'開',1]); }
+  if(s.phoneGps) t.push(['使用手機 GPS']);
+  $('tags').innerHTML=t.map(x=>`<span class="tag${x[1]?' w':''}">${esc(x[0])}</span>`).join('');
+  $('canSt').textContent=s.can?'':(s.canStatus||'');
+  // 導航
+  const n=s.nav, d=s.dest;
+  if(n||d){
+    $('stopRow').hidden=false;
+    let h='';
+    if(n) h+=`<div class="act">${esc(n.arrive?'':dist(n.dist))} ${esc(actText(n))}</div><div class="road">${esc(n.name||'')}</div>`;
+    if(n&&n.tip) h+=`<div class="muted">${esc(n.tip)}</div>`;
+    if(d) h+=`<div class="muted" style="margin-top:4px">目的地：${esc(d.name||'')}</div>`;
+    $('navNow').className=''; $('navNow').innerHTML=h||'導航中';
+    const L=(n&&n.lanes)||[];
+    $('lanes').innerHTML=L.map((l,i)=>{ const ind=(l.ind||[]); const a=Array.isArray(ind)?ind.map(x=>ARROW[x]||'↑').join(''):(ARROW[ind]||'↑');
+      return `<div class="lane${l.valid?' go':''}${n.cur===i?' cur':''}">${a}</div>`; }).join('');
+  } else { $('stopRow').hidden=true; $('navNow').className='muted'; $('navNow').textContent='沒有在導航'; $('lanes').innerHTML=''; }
+}
+
+function tick(){
+  let info={}; try{ info=JSON.parse(App.carInfo()); }catch(e){}
+  let raw=''; try{ raw=App.status(); }catch(e){}
+  online=!!raw;
+  $('dot').classList.toggle('on',online);
+  if(online){ let s={}; try{ s=JSON.parse(raw); }catch(e){}
+    $('title').textContent=(info.name||'E60')+' 已連線'; $('ver').textContent=(s.ver?'中控台 '+s.ver:'')+(info.ip?' · '+info.ip:''); render(s);
+  } else { $('title').textContent=info.ip?'連不上車機':'尋找車機…'; $('ver').textContent=info.ip||''; }
+  try{ const g=JSON.parse(App.sharing()); $('share').classList.toggle('on',g.on);
+    $('shareSt').textContent=g.on?(g.age<0?'等 GPS 定位…':g.age<5?'正在送給車機':'最後送出 '+g.age+' 秒前（車機沒連上？）'):''; }catch(e){}
+}
+setInterval(tick,1000); setTimeout(tick,200);
+
+async function search(){
+  const q=$('q').value.trim(); if(!q) return;
+  $('sErr').textContent=''; $('res').innerHTML='<div class="muted">搜尋中…</div>';
+  await new Promise(r=>setTimeout(r,30));
+  let r; try{ r=JSON.parse(App.search(q)); }catch(e){ r={err:String(e)}; }
+  if(r.err){ $('res').innerHTML=''; $('sErr').textContent='搜尋失敗：'+r.err; return; }
+  if(!r.length){ $('res').innerHTML='<div class="muted">找不到，換個關鍵字試試</div>'; return; }
+  r.sort((a,b)=>(a.dist??1e9)-(b.dist??1e9));
+  $('res').innerHTML=r.map((x,i)=>`<div data-i="${i}"><b>${esc(x.name)}${x.dist!=null?' <span>· '+dist(x.dist)+'</span>':''}</b><span>${esc(x.addr)}</span></div>`).join('');
+  $('res').querySelectorAll('[data-i]').forEach(el=>el.onclick=()=>{ const x=r[+el.dataset.i];
+    if(App.navTo(x.name,x.lat,x.lon)){ $('res').innerHTML='<div>已送到車機：'+esc(x.name)+'</div>'; setTimeout(tick,1500); }
+    else $('sErr').textContent='送不到車機（確認車機連上手機熱點、中控台有開）'; });
+}
+$('go').onclick=search; $('q').addEventListener('keydown',e=>{ if(e.key==='Enter') search(); });
+$('stop').onclick=()=>{ if(!App.navStop()) alert('送不到車機'); setTimeout(tick,800); };
+$('share').onclick=()=>{ const on=!$('share').classList.contains('on'); App.shareGps(on); setTimeout(tick,500); };
+$('setIp').onclick=()=>{ App.setIp($('ip').value); tick(); };
+window.onPerm=()=>{ if(App.wantShare()) App.shareGps(true); };
+if(App.wantShare()) App.shareGps(true);
+</script></body></html>

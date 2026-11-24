@@ -40,6 +40,10 @@ class MapSource(
 ) {
     companion object {
         private const val TAG = "MapSource"
+        /** 目前在跑的那一個（中控台轉來的手機 GPS 要送給它）。 */
+        @Volatile var active: MapSource? = null
+            private set
+        private const val PHONE_FRESH_MS = 3000L
         private val SERVERS = listOf(
             "https://overpass-api.de/api/interpreter",
             "https://overpass.kumi.systems/api/interpreter"
@@ -101,9 +105,8 @@ class MapSource(
         if (thread != null) return true
         if (!hasPermission()) { status("沒有定位權限，地圖輔助關閉"); return false }
         val mgr = app.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
-        if (mgr == null || !mgr.allProviders.contains(LocationManager.GPS_PROVIDER)) {
-            status("找不到 GPS，地圖輔助關閉"); return false
-        }
+        // 車機沒有 GPS 也照開：手機 App 分享的 GPS 會經中控台送進來
+        val hasGps = mgr != null && mgr.allProviders.contains(LocationManager.GPS_PROVIDER)
         dir.mkdirs()
         val t = HandlerThread("map").apply { start() }
         val h = Handler(t.looper)
@@ -114,20 +117,21 @@ class MapSource(
             override fun onProviderEnabled(provider: String) { status("GPS 已開啟") }
             override fun onProviderDisabled(provider: String) { status("GPS 已關閉") }
         }
-        try {
-            mgr.requestLocationUpdates(LocationManager.GPS_PROVIDER, 1000L, 0f, l, t.looper)
+        if (hasGps) try {
+            mgr!!.requestLocationUpdates(LocationManager.GPS_PROVIDER, 1000L, 0f, l, t.looper)
         } catch (e: SecurityException) {
             t.quitSafely(); status("沒有定位權限，地圖輔助關閉"); return false
         } catch (e: IllegalArgumentException) {
             t.quitSafely(); status("找不到 GPS，地圖輔助關閉"); return false
         }
-        thread = t; handler = h; lm = mgr; listener = l
+        thread = t; handler = h; lm = mgr; listener = if (hasGps) l else null
+        active = this
         net = Executors.newSingleThreadExecutor { r -> Thread(r, "map-net").apply { isDaemon = true } }
         io = Executors.newSingleThreadExecutor { r -> Thread(r, "map-io").apply { isDaemon = true } }
-        status("等待 GPS 定位…")
+        status(if (hasGps) "等待 GPS 定位…" else "車機沒有 GPS，等手機分享定位…")
         // 用上次位置先把圖磚準備好（開機後第一個定位常要等很久）
-        try {
-            mgr.getLastKnownLocation(LocationManager.GPS_PROVIDER)?.let { loc ->
+        if (hasGps) try {
+            mgr!!.getLastKnownLocation(LocationManager.GPS_PROVIDER)?.let { loc ->
                 h.post { ensureTiles(loc.latitude, loc.longitude, Double.NaN, 0.0) }
             }
         } catch (_: SecurityException) {}
@@ -135,6 +139,7 @@ class MapSource(
     }
 
     fun stop() {
+        if (active === this) active = null
         val l = listener
         if (l != null) try { lm?.removeUpdates(l) } catch (_: Exception) {}
         listener = null; lm = null
@@ -160,7 +165,27 @@ class MapSource(
 
     // ---------------- GPS ----------------
 
+    @Volatile private var phoneAt = 0L
+
+    /**
+     * 手機 App 分享的 GPS（手機 → 中控台 → 這裡）。手機的通常比車機的準；
+     * 有手機的定位時（3 秒內）車機自己的 GPS 先不用，免得兩個來源來回跳。只用在地圖（路名、速限、導航），不當車速。
+     */
+    fun phoneFix(lat: Double, lon: Double, hdg: Double, acc: Double, spd: Double) {
+        if (!lat.isFinite() || !lon.isFinite() || lat !in -90.0..90.0 || lon !in -180.0..180.0) return
+        val h = handler ?: return
+        val loc = Location("phone").apply {
+            latitude = lat; longitude = lon; time = System.currentTimeMillis()
+            elapsedRealtimeNanos = android.os.SystemClock.elapsedRealtimeNanos()
+            if (hdg.isFinite()) bearing = hdg.toFloat()
+            if (acc.isFinite()) accuracy = acc.toFloat()
+            if (spd.isFinite()) speed = spd.toFloat()
+        }
+        h.post { phoneAt = android.os.SystemClock.elapsedRealtime(); onFix(loc) }
+    }
+
     private fun onFix(loc: Location) {
+        if (loc.provider != "phone" && android.os.SystemClock.elapsedRealtime() - phoneAt < PHONE_FRESH_MS) return
         val now = loc.elapsedRealtimeNanos / 1_000_000L
         var spd = if (loc.hasSpeed()) loc.speed.toDouble() else Double.NaN
         // 有些車機 GPS 一直回報 0 速度：位移明顯時改用位移估

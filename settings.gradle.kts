@@ -17,3 +17,4 @@ rootProject.name = "AVM ADAS Probe"
 include(":app")
 include(":engine360")
 include(":launcher")
+include(":phone")

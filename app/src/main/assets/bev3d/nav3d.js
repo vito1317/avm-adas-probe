@@ -61,7 +61,13 @@
   }
 
   function onLanes(l, now) { if (l) { lp = l; lpAt = now; } }
-  function onMap(m, now) { if (m && typeof m.lat === 'number' && typeof m.lon === 'number') { map = m; mapAt = now; } }
+  var prioAt = -1e9;
+  /** 定位：[prio] = 手機 GPS（比較準）→ 之後 3 秒內 360 的定位不蓋掉它。 */
+  function onMap(m, now) {
+    if (!m || typeof m.lat !== 'number' || typeof m.lon !== 'number') return;
+    if (m.prio) prioAt = now; else if (now - prioAt < 3000) return;
+    map = m; mapAt = now;
+  }
 
   var ARROW = { 'left': '↰', 'sharp left': '↰', 'slight left': '↖', 'straight': '↑', 'none': '↑', 'right': '↱', 'sharp right': '↱', 'slight right': '↗', 'uturn': '↶' };
   function glyph(ind) { return (ind && ind.length ? ind : ['none']).map(function (k) { return ARROW[k] || '↑'; }).join(''); }

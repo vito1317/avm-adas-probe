@@ -84,6 +84,11 @@ object LauncherLink {
             "groundimg" -> groundAt = SystemClock.elapsedRealtime()
             // 中控台的導航導引（360 畫面上也畫導航）；空字串 = 導航結束
             "nav" -> { navJson = arg.takeIf { it.isNotEmpty() && it.length < 64_000 }; navAt = SystemClock.elapsedRealtime() }
+            // 手機 App 分享的 GPS（中控台轉來）："lat,lon,hdg,acc,spd"（沒有的欄位空著）。只給地圖用
+            "loc" -> arg.split(',').map { it.toDoubleOrNull() ?: Double.NaN }.takeIf { it.size >= 2 }?.let { v ->
+                fun at(i: Int) = if (i < v.size) v[i] else Double.NaN
+                MapSource.active?.phoneFix(v[0], v[1], at(2), at(3), at(4))
+            }
             // 桌面的「道路畫面」卡片：打開 360 並切到道路畫面
             "roadview" -> Engine360.showRoad(true)
             // 中控台 3D 道路畫面點了停車格（只是選格子、畫路徑，不碰車）

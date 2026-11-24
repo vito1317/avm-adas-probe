@@ -27,7 +27,7 @@ import android.webkit.WebViewClient
  * 鏡頭畫面只在原廠 360 程式裡（它獨佔相機）；桌面只拿 ADAS 引擎廣播的偵測結果來畫道路畫面。
  * 打 R、打方向燈時原廠 360 會自己跳到前面，桌面從不主動把自己叫回前面。
  */
-class MainActivity : Activity() {
+class MainActivity : Activity(), PhoneLink.Host {
     private lateinit var web: WebView
     private lateinit var car: CarData
     private val main = Handler(Looper.getMainLooper())
@@ -59,6 +59,40 @@ class MainActivity : Activity() {
         setContentView(web)
         hideBars()
         startLocation()
+        phone.start("E60", try { packageManager.getPackageInfo(packageName, 0).versionName ?: "" } catch (_: Throwable) { "" })
+    }
+
+    // ── 手機 App 互聯（[PhoneLink]）──
+    private val phone = PhoneLink(this)
+    @Volatile private var phoneLoc: Location? = null
+    @Volatile private var phoneAt = 0L
+    @Volatile private var navGuide: String = ""
+
+    override fun statusJson(): String {
+        val o = try { org.json.JSONObject(car.json()) } catch (_: Throwable) { org.json.JSONObject() }
+        val adas = o.optJSONObject("adas"); o.remove("adas")
+        adas?.optJSONObject("veh")?.let { o.put("veh", it) }
+        adas?.optJSONObject("map")?.let { m -> o.put("road", org.json.JSONObject().put("name", m.opt("name")).put("maxspeed", m.opt("maxspeed"))) }
+        o.put("nav", try { if (navGuide.isNotEmpty()) org.json.JSONObject(navGuide) else org.json.JSONObject.NULL } catch (_: Throwable) { org.json.JSONObject.NULL })
+        val r = getSharedPreferences("launcher", Context.MODE_PRIVATE).getString("navRoute", "") ?: ""
+        o.put("dest", try { if (r.isNotEmpty()) org.json.JSONObject(r).optJSONObject("dest") ?: org.json.JSONObject.NULL else org.json.JSONObject.NULL } catch (_: Throwable) { org.json.JSONObject.NULL })
+        o.put("phoneGps", System.currentTimeMillis() - phoneAt < 5000)
+        o.put("ver", try { packageManager.getPackageInfo(packageName, 0).versionName } catch (_: Throwable) { "" })
+        return o.toString()
+    }
+    override fun navTo(name: String, lat: Double, lon: Double) {
+        main.post { web.evaluateJavascript("window.navTo && window.navTo(" + org.json.JSONObject.quote(name) + ", $lat, $lon)", null) }
+    }
+    override fun navStop() { main.post { web.evaluateJavascript("window.navStopExt && window.navStopExt()", null) } }
+    override fun phoneFix(lat: Double, lon: Double, hdg: Double?, acc: Double?, spd: Double?) {
+        phoneLoc = Location("phone").apply {
+            latitude = lat; longitude = lon; time = System.currentTimeMillis()
+            hdg?.let { bearing = it.toFloat() }; acc?.let { accuracy = it.toFloat() }; spd?.let { speed = it.toFloat() }
+        }
+        phoneAt = System.currentTimeMillis()
+        // 也轉給 360 引擎（地圖輔助：路名、速限、360 上的導航）
+        fun f(d: Double?) = d?.let { "%.7f".format(java.util.Locale.US, it) } ?: ""
+        car.engineCmd("loc", listOf(f(lat), f(lon), f(hdg), f(acc), f(spd)).joinToString(","))
     }
 
     // ── 定位（導航用；360 有送定位就優先用 360 的）──
@@ -112,11 +146,16 @@ class MainActivity : Activity() {
 
         @JavascriptInterface fun state(): String = car.json()
         /** 中控台自己的定位（360 沒給的時候用）：{"lat","lon","hdg","acc","age"}；沒有回 ""。 */
+        /** 道路畫面的導航導引（給手機 App 看）。 */
+        @JavascriptInterface fun navState(j: String) { navGuide = j }
         @JavascriptInterface fun location(): String {
-            val l = fix ?: return ""
+            // 手機 GPS（5 秒內）優先：比車上的準
+            val ph = phoneLoc?.takeIf { System.currentTimeMillis() - phoneAt < 5000 }
+            val l = ph ?: fix ?: return ""
             return org.json.JSONObject().put("lat", l.latitude).put("lon", l.longitude)
                 .put("hdg", if (l.hasBearing()) l.bearing.toDouble() else org.json.JSONObject.NULL)
-                .put("acc", l.accuracy.toDouble()).put("age", (System.currentTimeMillis() - l.time) / 1000).toString()
+                .put("acc", l.accuracy.toDouble()).put("age", (System.currentTimeMillis() - l.time) / 1000)
+                .put("src", if (ph != null) "phone" else "unit").toString()
         }
         @JavascriptInterface fun apps(): String = AppList.json(this@MainActivity)
         @JavascriptInterface fun icon(pkg: String): String = AppList.icon(this@MainActivity, pkg)

@@ -260,9 +260,13 @@
     $('roadWait').hidden = !(roadOn && !st.adas);
     if (st.adas && st.adas.map && typeof st.adas.map.lat === 'number') { lastMap = st.adas.map; lastMapAt = Date.now(); }
     // 導航中、360 沒給定位 → 把中控台自己的定位送進道路畫面（每秒一次），導引才會跟著走
-    if (roadOn && road.contentWindow && navRoute() && Date.now() - lastMapAt > 5000 && Date.now() - (window.__locSent || 0) > 1000) {
-      window.__locSent = Date.now(); var cp = curPos();
-      if (cp) try { road.contentWindow.postMessage({ __loc: { lat: cp.lat, lon: cp.lon, hdg: cp.hdg || 0 } }, '*'); } catch (e) {}
+    // 導航中：手機 GPS 有就用手機的（prio：道路畫面會先用它、不被 360 的定位蓋掉）；360 沒給定位時用中控台自己的
+    if (roadOn && road.contentWindow && navRoute() && Date.now() - (window.__locSent || 0) > 1000) {
+      var ph = phonePos();
+      if (ph || Date.now() - lastMapAt > 5000) {
+        window.__locSent = Date.now(); var cp = ph || curPos();
+        if (cp) try { road.contentWindow.postMessage({ __loc: { lat: cp.lat, lon: cp.lon, hdg: cp.hdg || 0, prio: !!ph } }, '*'); } catch (e) {}
+      }
     }
     if (roadOn && road.contentWindow) {
       try {
@@ -302,7 +306,12 @@
   // 位置用 360 送來的定位（st.adas.map.lat / lon / hdg）。路線存在中控台設定，重開還在。只用來顯示，不控制車子。
   var lastMap = null, lastMapAt = 0;
   // 目前位置：360 送來的（5 秒內）優先；沒有就用中控台自己讀的 GPS（1 分鐘內）
+  function phonePos() {
+    try { var l = JSON.parse(Car.location() || 'null'); if (l && l.src === 'phone' && l.age < 5) return { lat: l.lat, lon: l.lon, hdg: l.hdg == null ? (lastMap ? lastMap.hdg : 0) : l.hdg }; } catch (e) {}
+    return null;
+  }
   function curPos() {
+    var ph = phonePos(); if (ph) return ph;                 // 手機 GPS（App 互聯）最準
     if (lastMap && Date.now() - lastMapAt < 5000) return lastMap;
     try { var l = JSON.parse(Car.location() || 'null'); if (l && l.age < 60) return { lat: l.lat, lon: l.lon, hdg: l.hdg == null ? (lastMap ? lastMap.hdg : 0) : l.hdg }; } catch (e) {}
     return lastMap;
@@ -357,6 +366,9 @@
       $('nav').hidden = true;
     }).catch(function (e) { navMsg('路線規劃失敗：' + (e && e.message ? e.message : e)); });
   }
+  // 手機 App（PhoneLink）設定目的地／結束導航
+  window.navTo = function (name, lat, lon) { navPlan({ name: name, lat: lat, lon: lon }); };
+  window.navStopExt = function () { setPref('navRoute', ''); sendRoute(); try { Car.navState(''); } catch (e) {} };
   function navReroute() { var r = navRoute(); if (r && r.dest && curPos()) navPlan(r.dest); }
   // 3D 道路畫面裡點停車格 → 交給 360 引擎選格（選了才畫停車路徑；再點一次取消）
   window.addEventListener('message', function (e) {
@@ -367,7 +379,11 @@
     if (e.data && e.data.__reroute) navReroute();
     if (e.data && e.data.__groundImg) { try { Car.engine('groundimg', '1'); } catch (er) {} }
     // 導引轉給 360 引擎（360 畫面上也畫導航）
-    if (e.data && e.data.__navGuide !== undefined) { try { Car.engine('nav', e.data.__navGuide ? JSON.stringify(e.data.__navGuide) : ''); } catch (er) {} }
+    if (e.data && e.data.__navGuide !== undefined) {
+      var gj = e.data.__navGuide ? JSON.stringify(e.data.__navGuide) : '';
+      try { Car.engine('nav', gj); } catch (er) {}
+      try { Car.navState(gj); } catch (er) {}          // 給手機 App 看
+    }
   });
 
   // ───────── 按鈕 ─────────
