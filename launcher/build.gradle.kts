@@ -19,8 +19,8 @@ android {
         applicationId = "com.vito.navilauncher"   // 套件名稱含 navi：車機主程式行駛中放行導航類 App（否則跳「行車中請勿觀看影片」）
         minSdk = 26
         targetSdk = 29          // 車機是 Android 10；照 Q 的行為（不用處理 Android 11+ 的套件可見性）
-        versionCode = 3
-        versionName = "1.2"
+        versionCode = 4
+        versionName = "1.3"
     }
 
     signingConfigs {
@@ -77,7 +77,7 @@ val copyBev3d by tasks.registering(Copy::class) {
                 .replace("ego.add(car);", "ego.add(car); window.__egoCar = car;")      // 給 carfx.js 加開門／車燈／方向燈／煞車特效
                 .replace("</body>",
                 "<style>.panel,.dock,.topbtn,.cal,#stat,.tl{display:none!important}</style>" +
-                "<script>window.addEventListener('message',function(e){try{var d=e.data;if(!d)return;if(d.__view){if(window.__setView)window.__setView(d.__view);return;}if(window.setFrame)window.setFrame(d)}catch(x){}});" +
+                "<script>window.addEventListener('message',function(e){try{var d=e.data;if(!d)return;if(d.__view){if(window.__setView)window.__setView(d.__view);return;}if(d.__style){if(window.__setStyle)window.__setStyle(d.__style);return;}if(d.__ground){if(window.__setGround)window.__setGround(d.__ground);return;}if(window.setFrame)window.setFrame(d)}catch(x){}});" +
                 // 預設是「實景」地面（要鏡頭畫面），中控台沒有 → 換成 Tesla 式的虛擬道路、追車視角
                 "window.addEventListener('load',function(){var b=document.querySelector('#dock button[data-ground=virtual]');" +
                 "if(b&&b.getAttribute('aria-pressed')!=='true')b.click();});</script><script src=\"../carfx.js\"></script></body>")

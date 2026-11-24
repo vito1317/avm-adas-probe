@@ -255,7 +255,7 @@
     road.classList.toggle('on', roadOn);
     $('roadFx').classList.toggle('on', roadOn);
     $('views').classList.toggle('on', roadOn);
-    if (roadOn && !road._viewSent && road.contentWindow) { road._viewSent = true; sendView(pref('roadView', 'front')); }
+    if (roadOn && !road._viewSent && road.contentWindow) { road._viewSent = true; sendView(pref('roadView', 'front')); sendStyle(); }
     $('viewBtn').setAttribute('aria-pressed', String(roadOn));
     $('roadWait').hidden = !(roadOn && !st.adas);
     if (roadOn && road.contentWindow) {
@@ -278,10 +278,18 @@
     try { road.contentWindow.postMessage({ __view: v }, '*'); } catch (e) {}
     document.querySelectorAll('#views button').forEach(function (b) { b.setAttribute('aria-pressed', String(b.dataset.view === v)); });
   }
-  document.querySelectorAll('#views button').forEach(function (b) {
+  document.querySelectorAll('#views button[data-view]').forEach(function (b) {
     b.onclick = function () { setPref('roadView', b.dataset.view); sendView(b.dataset.view); };
   });
-  road.addEventListener('load', function () { road._viewSent = false; });
+  // 畫面風格（FSD 簡潔）與地面（實景／虛擬道路）：兩個獨立的開關，記住上次的選擇
+  function sendStyle() {
+    var fsd = pref('roadStyle', 'std') === 'fsd', real = pref('roadGround', 'virtual') === 'real';
+    try { road.contentWindow.postMessage({ __style: fsd ? 'fsd' : 'std' }, '*'); road.contentWindow.postMessage({ __ground: real ? 'real' : 'virtual' }, '*'); } catch (e) {}
+    $('styleFsd').setAttribute('aria-pressed', String(fsd)); $('groundReal').setAttribute('aria-pressed', String(real));
+  }
+  $('styleFsd').onclick = function () { setPref('roadStyle', pref('roadStyle', 'std') === 'fsd' ? 'std' : 'fsd'); sendStyle(); };
+  $('groundReal').onclick = function () { setPref('roadGround', pref('roadGround', 'virtual') === 'real' ? 'virtual' : 'real'); sendStyle(); };
+  road.addEventListener('load', function () { road._viewSent = false; setTimeout(sendStyle, 300); });
   // 3D 道路畫面裡點停車格 → 交給 360 引擎選格（選了才畫停車路徑；再點一次取消）
   window.addEventListener('message', function (e) {
     var t = e.data && e.data.__slotTap;

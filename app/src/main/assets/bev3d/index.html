@@ -697,6 +697,7 @@
       obsGrp.visible = name !== 'fsd';          // 高度障礙物的黃框：FSD 風格不畫（太花）
     };
     styleBtn.addEventListener('click', function () { setStyle(AVM_FSD.style() === 'fsd' ? 'std' : 'fsd'); });
+    window.__setStyle = setStyle;            // 中控台（嵌入時自己的按鈕被藏起來）用 postMessage 切換
     setTimeout(function () { setStyle(AVM_FSD.savedStyle()); }, 0);
   }
 
@@ -1394,6 +1395,7 @@
     base.visible = !road.visible;
     scene.fog.color.copy(road.visible ? vFogCol : fogCol);
   }
+  window.__setGround = function (mode) { applyGround(mode); };   // 中控台切「實景／虛擬道路」
   function saveGround(mode) {
     try { if (hasFn('setRealGround')) Bridge.setRealGround(mode === 'real'); } catch (e) {}   // 舊版 Android 只有這個
     try { if (hasFn('setGroundMode')) Bridge.setGroundMode(mode); } catch (e) {}
