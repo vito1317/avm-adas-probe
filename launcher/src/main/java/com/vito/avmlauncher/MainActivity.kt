@@ -59,6 +59,7 @@ class MainActivity : Activity(), PhoneLink.Host {
         setContentView(web)
         hideBars()
         startLocation()
+        LinkService.start(this)   // 常駐前景服務：中控台退到背景也不回收，8765 伺服器才不會死
         phone.start("E60", try { packageManager.getPackageInfo(packageName, 0).versionName ?: "" } catch (_: Throwable) { "" })
     }
 
