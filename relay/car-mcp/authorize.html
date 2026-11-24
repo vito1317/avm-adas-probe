@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>授權存取</title>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--fg:#1b1f24;--muted:#667085;--line:#e3e6ea;--acc:#2563eb;--acc-fg:#fff;--bad:#dc2626}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0f1115;--card:#171a21;--fg:#e6e8eb;--muted:#9aa3af;--line:#2a2f3a;--acc:#3b82f6;--bad:#f87171}}
+:root[data-theme="dark"]{--bg:#0f1115;--card:#171a21;--fg:#e6e8eb;--muted:#9aa3af;--line:#2a2f3a;--acc:#3b82f6;--bad:#f87171}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,-apple-system,"PingFang TC","Noto Sans TC",sans-serif}
+main{max-width:420px;margin:10vh auto;padding:24px;background:var(--card);border:1px solid var(--line);border-radius:14px}
+@media (max-width:480px){main{margin:16px;}}
+h1{font-size:20px;margin:0 0 12px}
+.muted{color:var(--muted)}
+.app{font-weight:700}
+ul{padding-left:20px;margin:12px 0}
+button{font:inherit;width:100%;padding:10px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:inherit;cursor:pointer;margin-top:8px}
+button.primary{background:var(--acc);border-color:var(--acc);color:var(--acc-fg)}
+button:disabled{opacity:.6;cursor:default}
+#err{color:var(--bad);min-height:1.2em;margin-top:8px}
+a{color:var(--acc)}
+</style>
+</head>
+<body>
+<main>
+  <h1>授權存取</h1>
+  <p><span class="app" id="app"></span> 想要存取你在 <b>E60 車機</b> 的帳號。</p>
+  <p class="muted">授權後它可以：</p>
+  <ul class="muted">
+    <li>查看車況（車速、檔位、油量、水溫、車門、車燈）與 360 偵測到的周圍狀況</li>
+    <li>查看 360 環景畫面、手機定位</li>
+    <li>搜尋目的地、設定或結束車機導航</li>
+    <li class="muted">不能控制車子（車窗、車鎖、引擎都不經過這裡）</li>
+  </ul>
+  <p class="muted" style="font-size:13px">完成後會返回：<span id="host"></span></p>
+
+  <div id="loginBox" hidden>
+    <button class="primary" id="btnLogin">🔑 用 Passkey 登入後繼續</button>
+    <p class="muted" style="font-size:13px;text-align:center">還沒有帳號？<a href="/" target="_blank" rel="noopener">到控制台註冊</a>後回來這頁按登入。</p>
+  </div>
+  <div id="consentBox" hidden>
+    <p>目前登入：<b id="who"></b> <a href="#" id="switch" style="font-size:13px">切換帳號</a></p>
+    <button class="primary" id="btnAllow">允許</button>
+    <button id="btnDeny">拒絕</button>
+  </div>
+  <div id="err"></div>
+</main>
+<script src="/webauthn.js"></script>
+<script>
+const DATA = /*__DATA__*/null;
+const $ = (s) => document.querySelector(s);
+$('#app').textContent = DATA.client;
+$('#host').textContent = DATA.host;
+
+async function me() {
+  const r = await fetch('/api/me', { credentials: 'same-origin' });
+  return r.ok ? r.json() : null;
+}
+async function show() {
+  const m = await me();
+  $('#loginBox').hidden = !!m; $('#consentBox').hidden = !m;
+  if (m) $('#who').textContent = m.user;
+}
+$('#btnLogin').onclick = async () => {
+  $('#err').textContent = '';
+  try { await Passkey.login(); await show(); } catch (e) { $('#err').textContent = Passkey.errText(e); }
+};
+$('#switch').onclick = async (e) => {
+  e.preventDefault();
+  await fetch('/api/logout', { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: '{}' });
+  show();
+};
+async function decide(approve) {
+  $('#err').textContent = '';
+  document.querySelectorAll('button').forEach((b) => b.disabled = true);
+  try {
+    const r = await fetch('/oauth/decision', { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ req: DATA.req, approve }) });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || r.statusText);
+    location.replace(j.redirect);
+  } catch (e) {
+    $('#err').textContent = e.message;
+    document.querySelectorAll('button').forEach((b) => b.disabled = false);
+  }
+}
+$('#btnAllow').onclick = () => decide(true);
+$('#btnDeny').onclick = () => decide(false);
+show();
+</script>
+</body>
+</html>

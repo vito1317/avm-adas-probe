@@ -1,0 +1,13 @@
+{
+  "name": "car-mcp-relay",
+  "version": "1.0.0",
+  "description": "Relay on Spark: the E60 phone app connects via WebSocket, AI clients connect via MCP (Streamable HTTP, OAuth 2.1 + passkey)",
+  "type": "module",
+  "main": "server.js",
+  "private": true,
+  "scripts": { "start": "node server.js" },
+  "dependencies": {
+    "@simplewebauthn/server": "^13.3.3",
+    "ws": "^8.18.0"
+  }
+}

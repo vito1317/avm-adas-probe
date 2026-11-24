@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>E60 Car MCP</title>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--fg:#1b1f24;--muted:#667085;--line:#e3e6ea;--acc:#2563eb;--acc-fg:#fff;--ok:#16a34a;--bad:#dc2626;--code:#f1f3f5}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0b0e13;--card:#141821;--fg:#e6e8eb;--muted:#8d97a5;--line:#252b36;--acc:#3b82f6;--ok:#22c55e;--bad:#f87171;--code:#0f1319}}
+:root[data-theme="dark"]{--bg:#0b0e13;--card:#141821;--fg:#e6e8eb;--muted:#8d97a5;--line:#252b36;--acc:#3b82f6;--ok:#22c55e;--bad:#f87171;--code:#0f1319}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.55 system-ui,-apple-system,"PingFang TC","Noto Sans TC",sans-serif}
+main{max-width:760px;margin:0 auto;padding:20px 16px 60px}
+h1{font-size:22px;margin:0}h2{font-size:15px;margin:0 0 10px}
+.muted{color:var(--muted)}.small{font-size:13px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-top:14px}
+button{font:inherit;padding:8px 14px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:inherit;cursor:pointer}
+button.primary{background:var(--acc);border-color:var(--acc);color:var(--acc-fg)}
+button.link{border:0;background:none;color:var(--acc);padding:0}
+button:disabled{opacity:.6;cursor:default}
+input{font:inherit;width:100%;padding:9px 11px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:inherit}
+code,pre{font:13px ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--code);border-radius:8px}
+pre{padding:10px;white-space:pre-wrap;word-break:break-all;margin:6px 0}
+code{padding:1px 5px}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.top{display:flex;align-items:center;gap:10px;justify-content:space-between}
+.err{color:var(--bad);min-height:1.2em;margin-top:6px}
+.car{border:1px solid var(--line);border-radius:12px;padding:12px;margin-top:10px}
+.car b{font-size:16px}.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--ok);margin-right:6px}
+.car pre{background:none;padding:0;margin:8px 0 0;font:14px/1.6 system-ui,"Noto Sans TC",sans-serif}
+table{width:100%;border-collapse:collapse;font-size:14px}td{padding:6px 4px;border-top:1px solid var(--line)}td:last-child{text-align:right}
+.code{font:700 28px ui-monospace,Menlo,monospace;letter-spacing:.12em;text-align:center;padding:14px;background:var(--code);border-radius:12px;margin:10px 0}
+#login{max-width:420px;margin:12vh auto 0}
+</style>
+</head>
+<body>
+<main>
+<section id="login" hidden>
+  <div class="card">
+    <h1>E60 Car MCP</h1>
+    <p class="muted">讓 AI（Claude 等）透過手機 App 看你的車況、360 畫面，幫你設定導航。只能看、不能控制車子。</p>
+    <p class="muted small" id="formHint">使用 Passkey（指紋、Face ID、裝置密碼或安全金鑰）登入，不需要密碼。</p>
+    <button class="primary" id="btnLogin" style="width:100%">🔑 用 Passkey 登入</button>
+    <div id="regBox" hidden style="margin-top:14px">
+      <p class="muted small">還沒有帳號？</p>
+      <div class="row"><input id="regUser" placeholder="帳號（英數字）" autocomplete="username"><input id="regInvite" placeholder="邀請碼" hidden></div>
+      <button id="btnReg" style="width:100%;margin-top:8px">建立帳號並設定 Passkey</button>
+    </div>
+    <button class="primary" id="btnSetup" style="width:100%" hidden>在這台裝置建立 Passkey</button>
+    <div class="err" id="loginErr"></div>
+  </div>
+</section>
+
+<section id="app" hidden>
+  <div class="top"><h1>E60 Car MCP</h1><div class="row"><span class="muted" id="who"></span><button class="link" id="btnLogout">登出</button></div></div>
+
+  <div class="card">
+    <div class="top"><h2>車輛</h2><button class="primary" id="btnPair">＋ 新增裝置</button></div>
+    <div id="cars"><p class="muted">載入中…</p></div>
+  </div>
+
+  <div class="card" id="pairBox" hidden>
+    <h2>新增裝置</h2>
+    <ol class="muted small">
+      <li>手機安裝「E60 車機」App：<a href="/app.apk">下載 APK</a>（或用 GitHub release 的 avm-phone.apk）</li>
+      <li>App →「車機」頁 →「遠端 AI（MCP）」：伺服器填 <code id="srv"></code>，輸入下面的配對碼，按「配對」</li>
+      <li>手機留在車上（連著車機的熱點）、開著遠端開關，AI 就能透過它看車況</li>
+    </ol>
+    <div class="code" id="pairCode">----</div>
+    <p class="muted small">配對碼 10 分鐘內有效。</p>
+  </div>
+
+  <div class="card">
+    <h2>讓 AI 連上你的車</h2>
+    <p class="small"><b>Claude（網頁版／App）</b>：設定 → Connectors → 新增自訂 Connector，網址填：</p>
+    <pre id="mcpUrl"></pre>
+    <p class="muted small">會跳到這個網站用 Passkey 登入、按「允許」（OAuth，不用複製金鑰）。</p>
+    <p class="small"><b>Claude Code</b>：</p>
+    <pre id="mcpOauthCmd"></pre>
+    <details class="small"><summary class="muted">不能用 OAuth 的客戶端：用固定金鑰</summary>
+      <pre id="mcpCmd"></pre><p class="muted">這把金鑰等於你的帳號，別貼到公開的地方。</p></details>
+    <p class="small">給 AI 的說明：<a href="/agent-prompt.md" target="_blank">agent-prompt.md</a></p>
+  </div>
+
+  <div class="card">
+    <h2>已授權的 AI 應用程式</h2><div id="grants" class="small"></div>
+  </div>
+  <div class="card">
+    <h2>已配對的手機</h2><div id="paired" class="small"></div>
+  </div>
+  <div class="card">
+    <h2>Passkey</h2><div id="pks" class="small"></div>
+    <button id="btnPkAdd" style="margin-top:8px">＋ 新增 Passkey（其他裝置／瀏覽器）</button>
+    <div class="err" id="pkErr"></div>
+  </div>
+</section>
+</main>
+<script src="/webauthn.js"></script>
+<script>
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
+async function api(path, body) {
+  const r = await fetch(path, body === undefined ? { credentials: 'same-origin' } : { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw Object.assign(new Error(j.error || r.statusText), { status: r.status });
+  return j;
+}
+const setupCode = (/#setup=([\w-]+)/.exec(location.hash) || [])[1];
+let me = null, carTimer = null;
+
+async function start() {
+  try { me = await api('/api/me'); } catch { me = null; }
+  $('#login').hidden = !!me; $('#app').hidden = !me;
+  if (!me) {
+    const cfg = await api('/api/config').catch(() => ({ registration: 'off' }));
+    if (setupCode) { $('#formHint').textContent = '管理員給了你一次性設定連結。按下按鈕，在這台裝置建立 Passkey 後即可登入。'; $('#btnSetup').hidden = false; $('#btnLogin').hidden = true; }
+    else { $('#regBox').hidden = cfg.registration === 'off'; $('#regInvite').hidden = cfg.registration !== 'invite'; }
+    return;
+  }
+  $('#who').textContent = me.user + (me.admin ? '（管理員）' : '');
+  $('#srv').textContent = me.server; $('#mcpUrl').textContent = me.mcp_url;
+  $('#mcpOauthCmd').textContent = `claude mcp add --scope user --transport http e60-car ${me.mcp_url}`;
+  $('#mcpCmd').textContent = `claude mcp add --scope user --transport http e60-car ${me.mcp_url} --header "Authorization: Bearer ${me.mcp_key}"`;
+  loadCars(); loadSettings();
+  clearInterval(carTimer); carTimer = setInterval(loadCars, 5000);
+}
+const loginFail = (e) => { $('#loginErr').textContent = Passkey.errText(e); };
+$('#btnLogin').onclick = async () => { $('#loginErr').textContent = ''; try { await Passkey.login(); start(); } catch (e) { loginFail(e); } };
+$('#btnSetup').onclick = async () => { $('#loginErr').textContent = ''; try { await Passkey.register({ setup: setupCode }); history.replaceState(null, '', '/'); await Passkey.login().catch(() => {}); start(); } catch (e) { loginFail(e); } };
+$('#btnReg').onclick = async () => { $('#loginErr').textContent = ''; try { await Passkey.register({ username: $('#regUser').value.trim(), invite: $('#regInvite').value.trim() }); start(); } catch (e) { loginFail(e); } };
+$('#btnLogout').onclick = async () => { await api('/api/logout', {}); location.reload(); };
+
+function summary(s) {
+  if (!s) return '車機沒有回應（手機有連上車機熱點嗎？）';
+  const p = [];
+  p.push(`${s.speed != null ? Math.round(s.speed) + ' km/h' : '— km/h'}　${s.gear || '-'}檔`);
+  const m = [s.fuel != null && `油 ${s.fuel} L`, s.range != null && `續航 ${s.range} km`, s.water != null && `水溫 ${s.water}°`, s.volt != null && `${s.volt} V`].filter(Boolean);
+  if (m.length) p.push(m.join('　'));
+  const d = s.doors || {}; const open = ['fl', 'fr', 'rl', 'rr', 'trunk', 'hood'].filter((k) => d[k]);
+  if (open.length) p.push('⚠ 有門沒關');
+  if (s.road?.name) p.push(`📍 ${s.road.name}${s.road.maxspeed ? '（速限 ' + s.road.maxspeed + '）' : ''}`);
+  if (s.dest) p.push(`🧭 導航到 ${s.dest.name || ''}${s.nav && !s.nav.arrive ? `：${Math.round(s.nav.dist)} m 後${s.nav.act || ''}` : ''}`);
+  return p.join('\n');
+}
+async function loadCars() {
+  let devices = [];
+  try { ({ devices } = await api('/api/devices')); } catch (e) { if (e.status === 401) return location.reload(); }
+  if (!devices.length) { $('#cars').innerHTML = '<p class="muted small">沒有在線的車。按「新增裝置」配對手機，手機 App 開著遠端開關就會出現在這裡。</p>'; return; }
+  const results = await api('/api/call', { device: devices.map((d) => d.id), tool: 'status', args: {} }).then((r) => r.results).catch(() => []);
+  $('#cars').innerHTML = devices.map((d) => {
+    const r = results.find((x) => x.id === d.id), i = d.info || {};
+    return `<div class="car"><b><span class="dot"></span>${esc(d.id)}</b> <span class="muted small">${esc([i.model, i.app && 'App ' + i.app, i.carIp ? '車機 ' + i.carIp : '沒連上車機'].filter(Boolean).join(' · '))}</span>
+      <pre>${esc(r ? (r.ok ? summary(r.result) : '錯誤：' + r.error) : '')}</pre></div>`;
+  }).join('');
+}
+$('#btnPair').onclick = async () => {
+  const { code } = await api('/api/pair/new', {});
+  $('#pairCode').textContent = code; $('#pairBox').hidden = false; $('#pairBox').scrollIntoView({ behavior: 'smooth' });
+};
+async function loadSettings() {
+  const [{ grants }, { paired }, { passkeys }] = await Promise.all([api('/api/oauth/grants'), api('/api/devices'), api('/api/passkeys')]);
+  const tbl = (rows, empty) => rows.length ? `<table>${rows.join('')}</table>` : `<p class="muted">${empty}</p>`;
+  $('#grants').innerHTML = tbl(grants.map((g) => `<tr><td>${esc(g.client_name)}<br><span class="muted">${esc(g.created || '')}</span></td><td><button data-rv="${esc(g.client_id)}">撤銷</button></td></tr>`), '還沒有授權任何應用程式');
+  $('#paired').innerHTML = tbl(paired.map((p) => `<tr><td>${esc(p.name)}<br><span class="muted">${esc(p.created)}</span></td><td><button data-rd="${esc(p.name)}">撤銷</button></td></tr>`), '還沒有配對手機');
+  $('#pks').innerHTML = tbl(passkeys.map((k) => `<tr><td>${esc(k.label || 'Passkey')}${k.backedUp ? ' <span class="muted">（已同步）</span>' : ''}<br><span class="muted">建立 ${esc((k.created || '').slice(0, 10))}${k.lastUsed ? '，最近使用 ' + esc(k.lastUsed.slice(0, 10)) : ''}</span></td><td><button data-pk="${esc(k.id)}">刪除</button></td></tr>`), '沒有 Passkey');
+  document.querySelectorAll('[data-rv]').forEach((b) => b.onclick = async () => { if (confirm('撤銷後這個應用程式要重新授權。')) { await api('/api/oauth/revoke', { client_id: b.dataset.rv }); loadSettings(); } });
+  document.querySelectorAll('[data-rd]').forEach((b) => b.onclick = async () => { if (confirm(`撤銷 ${b.dataset.rd}？手機要重新配對。`)) { await api('/api/revoke-device', { name: b.dataset.rd }); loadSettings(); loadCars(); } });
+  document.querySelectorAll('[data-pk]').forEach((b) => b.onclick = async () => { if (confirm('刪除這把 Passkey？')) { try { await api('/api/passkeys/delete', { id: b.dataset.pk }); loadSettings(); } catch (e) { $('#pkErr').textContent = e.message; } } });
+}
+$('#btnPkAdd').onclick = async () => { $('#pkErr').textContent = ''; try { await Passkey.register({ add: true }); loadSettings(); } catch (e) { $('#pkErr').textContent = Passkey.errText(e); } };
+start();
+</script>
+</body>
+</html>

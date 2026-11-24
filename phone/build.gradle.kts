@@ -19,8 +19,8 @@ android {
         applicationId = "com.vito.avmphone"
         minSdk = 26
         targetSdk = 34
-        versionCode = 3
-        versionName = "1.2"
+        versionCode = 4
+        versionName = "1.3"
     }
 
     signingConfigs {
@@ -52,6 +52,7 @@ android {
 
 dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")   // 遠端 AI：跟 relay 的 WebSocket
 }
 
 // 360 環景頁用中控台同一套 3D 道路畫面（bev3d：three.js、E60 與周圍車輛／行人模型），

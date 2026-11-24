@@ -41,6 +41,8 @@ class MainActivity : Activity() {
         if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) need += Manifest.permission.ACCESS_FINE_LOCATION
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) need += Manifest.permission.POST_NOTIFICATIONS
         if (need.isNotEmpty()) requestPermissions(need.toTypedArray(), 1)
+        // 遠端 AI 開著就接著連（重開 App、手機重開後打開 App）
+        if (RelayService.paired(this) && RelayService.prefs(this).getBoolean("on", false)) RelayService.start(this)
     }
 
     private val busy = java.util.Collections.synchronizedSet(HashSet<String>())
@@ -62,7 +64,10 @@ class MainActivity : Activity() {
         @JavascriptInterface fun req(id: Int, kind: String, arg: String) {
             if (!busy.add(kind)) { reply(id, null); return }
             kotlin.concurrent.thread {
-                val r = try { when (kind) { "status" -> CarLink.get("/status"); "scene" -> CarLink.get("/scene" + (if (arg.isNotEmpty()) "?$arg" else "")); "route" -> CarLink.get("/route"); "search" -> search(arg); else -> null } }
+                val r = try { when (kind) { "status" -> CarLink.get("/status"); "scene" -> CarLink.get("/scene" + (if (arg.isNotEmpty()) "?$arg" else "")); "route" -> CarLink.get("/route"); "search" -> search(arg)
+                    "pair" -> JSONObject(arg).let { a -> RelayService.pair(this@MainActivity, a.optString("server"), a.optString("code"), a.optString("name"))
+                        ?.let { e -> JSONObject().put("err", e).toString() } ?: JSONObject().put("ok", true).toString().also { RelayService.start(this@MainActivity) } }
+                    else -> null } }
                     catch (_: Throwable) { null } finally { busy.remove(kind) }
                 reply(id, r)
             }
@@ -101,6 +106,19 @@ class MainActivity : Activity() {
                 out.toString()
             } catch (t: Throwable) { JSONObject().put("err", t.javaClass.simpleName + ": " + (t.message ?: "")).toString() }
         }
+        /** 遠端 AI（MCP）狀態：{paired, on, running, state, server, name, user, lastCall, lastCallAgo} */
+        @JavascriptInterface fun relayInfo(): String {
+            val p = RelayService.prefs(this@MainActivity)
+            return JSONObject().put("paired", RelayService.paired(this@MainActivity)).put("on", p.getBoolean("on", false))
+                .put("running", RelayService.running).put("state", RelayService.state)
+                .put("server", p.getString("server", RelayService.DEFAULT_SERVER)).put("name", p.getString("name", "E60")).put("user", p.getString("user", ""))
+                .put("lastCall", RelayService.lastCall).put("lastCallAgo", if (RelayService.lastCallAt == 0L) -1 else (System.currentTimeMillis() - RelayService.lastCallAt) / 1000).toString()
+        }
+        @JavascriptInterface fun relaySet(on: Boolean) {
+            RelayService.prefs(this@MainActivity).edit().putBoolean("on", on).apply()
+            if (on && RelayService.paired(this@MainActivity)) RelayService.start(this@MainActivity) else RelayService.stop(this@MainActivity)
+        }
+        @JavascriptInterface fun relayUnpair() { RelayService.unpair(this@MainActivity) }
         @JavascriptInterface fun wantShare(): Boolean = getSharedPreferences("car", MODE_PRIVATE).getBoolean("share", true)
     }
 

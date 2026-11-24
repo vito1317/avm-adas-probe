@@ -146,6 +146,20 @@ details summary{color:var(--dim);font-size:13px}
     <div class="sw"><div>分享手機 GPS 給車機<div class="muted">中控台導航、360 地圖（路名、速限）都會優先用手機的</div></div><div class="tg" id="share"></div></div>
     <div class="muted" id="shareSt" style="margin-top:6px"></div>
   </div>
+  <div class="card"><h2>遠端 AI（MCP）</h2>
+    <div id="rlPaired" hidden>
+      <div class="sw"><div>讓 AI 透過這支手機看車況<div class="muted" id="rlState"></div></div><div class="tg" id="rlOn"></div></div>
+      <div class="muted" id="rlInfo" style="margin-top:8px;font-size:12px"></div>
+      <div style="margin-top:10px"><button class="btn ghost" id="rlUnpair">解除配對</button></div>
+    </div>
+    <div id="rlNew" hidden>
+      <div class="muted" style="font-size:13px;margin-bottom:8px">到 <b>car-mcp.vito1317.com</b> 用 Passkey 登入 →「新增裝置」拿配對碼。AI 只能看車況、360、設定導航，不能控制車子。</div>
+      <input id="rlServer" placeholder="伺服器" style="margin-bottom:8px">
+      <div class="row"><input id="rlCode" placeholder="配對碼（XXXX-XXXX）" autocapitalize="characters"><input id="rlName" placeholder="裝置名稱" style="max-width:120px"></div>
+      <div style="margin-top:8px"><button class="btn" id="rlPair">配對</button></div>
+      <div class="err" id="rlErr"></div>
+    </div>
+  </div>
   <div class="card"><h2>車機</h2><div id="sys"></div></div>
   <div class="card"><h2>配件</h2><div id="accs" class="muted">沒有資料</div></div>
   <div class="card"><h2>示範</h2>
@@ -348,6 +362,17 @@ function renderCar(info){
   if(a){const st=(on,t)=>on===false?'關閉':(t||'—');
     $('accs').innerHTML=k('氛圍燈',st(a.ambientOn,a.ambient))+k('後擋看板',st(a.rearOn,a.rear))+k('遠端模組',a.remoteReady?(a.remote||'—'):'未設定');$('accs').className='';}
 }
+// 遠端 AI（MCP）
+function renderRelay(){let r={};try{r=JSON.parse(App.relayInfo());}catch(e){return;}
+  $('rlPaired').hidden=!r.paired;$('rlNew').hidden=!!r.paired;
+  if(r.paired){$('rlOn').classList.toggle('on',r.on);$('rlState').textContent=r.on?r.state:'關閉';
+    $('rlInfo').textContent=`${r.server}　帳號 ${r.user||'—'}　裝置 ${r.name}`+(r.lastCallAgo>=0?`　最近一次 AI 查詢：${r.lastCall}（${r.lastCallAgo} 秒前）`:'');}
+  else{if(!$('rlServer').value)$('rlServer').value=r.server;if(!$('rlName').value)$('rlName').value=r.name||'E60';}}
+$('rlOn').onclick=()=>{App.relaySet(!$('rlOn').classList.contains('on'));setTimeout(renderRelay,300);};
+$('rlUnpair').onclick=()=>{if(confirm('解除配對？之後要重新拿配對碼。')){App.relayUnpair();renderRelay();}};
+$('rlPair').onclick=async()=>{$('rlErr').textContent='';$('rlPair').disabled=true;
+  let r={};try{r=JSON.parse(await req('pair',JSON.stringify({server:$('rlServer').value,code:$('rlCode').value,name:$('rlName').value})));}catch(e){r={err:'沒有回應'};}
+  $('rlPair').disabled=false;if(r.err){$('rlErr').textContent=r.err;return;}$('rlCode').value='';renderRelay();};
 $('share').onclick=()=>{const on=!$('share').classList.contains('on');App.shareGps(on);};
 $('setIp').onclick=()=>{App.setIp($('ip').value);};
 window.onPerm=()=>{if(App.wantShare())App.shareGps(true);};
@@ -411,7 +436,7 @@ async function loop(){
   const now=Date.now();
   const sGap=tab==='sDrive'?400:1000;
   if(now-lastStatus>=sGap){lastStatus=now;await pollStatus();header();tripTick();
-    if(tab==='sDrive')renderDrive();if(tab==='sNav')renderNav();if(tab==='sCar')renderCar(info);}
+    if(tab==='sDrive')renderDrive();if(tab==='sNav')renderNav();if(tab==='sCar'){renderCar(info);renderRelay();}}
   if(tab==='s360'&&now-lastScene>=170){lastScene=now;await pollScene();}
   if(tab==='s360'&&roadReady&&now-lastRoute>=4000){lastRoute=now;await pollRoute();}
   setTimeout(loop,60);
