@@ -4,6 +4,10 @@ import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.location.Location
+import android.location.LocationListener
+import android.location.LocationManager
 import android.media.AudioManager
 import android.net.Uri
 import android.os.Bundle
@@ -54,6 +58,34 @@ class MainActivity : Activity() {
         }
         setContentView(web)
         hideBars()
+        startLocation()
+    }
+
+    // ── 定位（導航用；360 有送定位就優先用 360 的）──
+    @Volatile private var fix: Location? = null
+    private val locL = object : LocationListener {
+        override fun onLocationChanged(l: Location) { val f = fix; if (f == null || l.provider == LocationManager.GPS_PROVIDER || f.provider != LocationManager.GPS_PROVIDER || l.time - f.time > 5000) fix = l }
+        @Deprecated("") override fun onStatusChanged(p: String?, s: Int, b: Bundle?) {}
+        override fun onProviderEnabled(p: String) {}
+        override fun onProviderDisabled(p: String) {}
+    }
+    private fun hasLoc() = android.os.Build.VERSION.SDK_INT < 23 ||
+        checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+    @SuppressLint("MissingPermission")
+    private fun startLocation() {
+        if (!hasLoc()) {
+            if (android.os.Build.VERSION.SDK_INT >= 23) requestPermissions(arrayOf(android.Manifest.permission.ACCESS_FINE_LOCATION, android.Manifest.permission.ACCESS_COARSE_LOCATION), 7)
+            return
+        }
+        val lm = getSystemService(Context.LOCATION_SERVICE) as? LocationManager ?: return
+        for (p in listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)) try {
+            lm.getLastKnownLocation(p)?.let { if (fix == null) fix = it }
+            lm.requestLocationUpdates(p, 1000L, 0f, locL, Looper.getMainLooper())
+        } catch (_: Throwable) {}
+    }
+    override fun onRequestPermissionsResult(rc: Int, perms: Array<out String>, res: IntArray) {
+        super.onRequestPermissionsResult(rc, perms, res)
+        if (rc == 7) startLocation()
     }
 
     override fun onResume() { super.onResume(); resumed = true; hideBars(); main.removeCallbacks(alive); main.post(alive); web.onResume() }
@@ -79,6 +111,13 @@ class MainActivity : Activity() {
         private val prefs = getSharedPreferences("launcher", Context.MODE_PRIVATE)
 
         @JavascriptInterface fun state(): String = car.json()
+        /** 中控台自己的定位（360 沒給的時候用）：{"lat","lon","hdg","acc","age"}；沒有回 ""。 */
+        @JavascriptInterface fun location(): String {
+            val l = fix ?: return ""
+            return org.json.JSONObject().put("lat", l.latitude).put("lon", l.longitude)
+                .put("hdg", if (l.hasBearing()) l.bearing.toDouble() else org.json.JSONObject.NULL)
+                .put("acc", l.accuracy.toDouble()).put("age", (System.currentTimeMillis() - l.time) / 1000).toString()
+        }
         @JavascriptInterface fun apps(): String = AppList.json(this@MainActivity)
         @JavascriptInterface fun icon(pkg: String): String = AppList.icon(this@MainActivity, pkg)
         @JavascriptInterface fun launch(pkg: String): Boolean = start(packageManager.getLaunchIntentForPackage(pkg))
@@ -109,7 +148,7 @@ class MainActivity : Activity() {
         }
 
         /** 送給 ADAS 引擎（氛圍燈、後擋看板）。 */
-        @JavascriptInterface fun engine(cmd: String, arg: String) { if (cmd == "ambient" || cmd == "rear" || cmd == "realview") car.engineCmd(cmd, arg) }
+        @JavascriptInterface fun engine(cmd: String, arg: String) { if (cmd == "ambient" || cmd == "rear" || cmd == "realview" || cmd == "groundimg") car.engineCmd(cmd, arg) }
 
         /**
          * 道路畫面卡片：打開原廠 360，叫引擎切到 Tesla 式道路畫面。

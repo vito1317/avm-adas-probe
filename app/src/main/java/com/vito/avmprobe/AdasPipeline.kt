@@ -1114,7 +1114,9 @@ class AdasPipeline(
                     val yel = if (paint != null) segYel else null
                     road = roadTrack.update(steepFilter(roadEx.extract(buf, bw, bh, mpp, cx, cy, excl, g.roadValidMask(), paint, yel), VehicleBus.signals.snapshot().speedKmh), now); roadAt = now
                 }
-                if (mode == AppPrefs.GROUND_REAL) {
+                // 實景地面：360 設定成實景、或中控台 FSD 畫面要路面（停車場等沒有車道線的地方也看得到地上的標線）；後者每秒最多 4 張
+                val forLauncher = mode != AppPrefs.GROUND_REAL && LauncherLink.groundWanted() && now - groundAt >= 250
+                if (mode == AppPrefs.GROUND_REAL || forLauncher) {
                     var bmp = bevBmp
                     if (bmp == null || bmp.width != bw || bmp.height != bh) {
                         bmp = Bitmap.createBitmap(bw, bh, Bitmap.Config.ARGB_8888); bevBmp = bmp
@@ -1189,7 +1191,7 @@ class AdasPipeline(
             .put("stat", JSONObject().put("fps", r2(emaFps)).put("inf", emaInfer.toInt())
                 .put("e2e", emaProc.toInt()).put("eng", det.engineName).put("res", det.inputSize))
         val mode = prefs.groundMode
-        if (mode == AppPrefs.GROUND_REAL && now - groundAt < BEV_TTL_MS) groundUrl?.let { p.put("ground", it) }
+        if ((mode == AppPrefs.GROUND_REAL || LauncherLink.groundWanted()) && now - groundAt < BEV_TTL_MS) groundUrl?.let { p.put("ground", it) }
         // 實景模式的碗面貼圖＋碗的參數（中控台照同一組參數建網格）
         if (LauncherLink.realViewWanted() && now - bowlAt < 1000) bowlUrl?.let {
             p.put("bowl", it).put("bowlG", JSONObject().put("w", BowlTexture.W).put("h", BowlTexture.H).put("rf", BowlTexture.RF)

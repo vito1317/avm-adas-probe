@@ -29,6 +29,10 @@ object LauncherLink {
     /** 中控台 3D 道路畫面在實景模式（10 秒內有要求，中控台每 3 秒送一次）。 */
     fun realViewWanted(): Boolean = watching() && SystemClock.elapsedRealtime() - realViewAt < 10_000
 
+    @Volatile private var groundAt = 0L
+    /** 中控台 FSD 畫面要俯視地面影像（畫路面標線：停車格、箭頭、斑馬線），10 秒內有要求。 */
+    fun groundWanted(): Boolean = watching() && SystemClock.elapsedRealtime() - groundAt < 10_000
+
     /** 桌面最近 6 秒內有送心跳。 */
     fun watching(): Boolean = SystemClock.elapsedRealtime() - aliveAt < ALIVE_MS
 
@@ -68,6 +72,8 @@ object LauncherLink {
             "rear" -> arg.toIntOrNull()?.let { RearDisplay.test(it) }
             // 中控台 3D 道路畫面在實景模式：要碗面貼圖（只是顯示用的影像）
             "realview" -> realViewAt = SystemClock.elapsedRealtime()
+            // 中控台 FSD 畫面：要俯視地面影像（只是顯示用）
+            "groundimg" -> groundAt = SystemClock.elapsedRealtime()
             // 桌面的「道路畫面」卡片：打開 360 並切到道路畫面
             "roadview" -> Engine360.showRoad(true)
             // 中控台 3D 道路畫面點了停車格（只是選格子、畫路徑，不碰車）

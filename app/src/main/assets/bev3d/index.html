@@ -238,6 +238,22 @@
   real.position.y = 0.02;
   real.visible = false;
   scene.add(real);
+  // FSD 風格的路面：同一張俯視圖，柏油壓成半透明深灰、地上的白／黃漆亮起來（停車格、箭頭、斑馬線…），沒拍到的地方透明、邊緣淡出
+  var fsdGround = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.ShaderMaterial({
+    uniforms: { map: { value: groundTex } }, transparent: true, depthWrite: false,
+    vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+    fragmentShader: 'uniform sampler2D map; varying vec2 vUv; void main(){' +
+      ' vec3 c = texture2D(map, vUv).rgb; float l = dot(c, vec3(.299,.587,.114));' +
+      ' if (l < 0.02) discard;' +
+      ' float paint = smoothstep(0.55, 0.75, l); float yel = smoothstep(0.08, 0.2, (c.r + c.g) * 0.5 - c.b);' +
+      ' vec3 pc = mix(vec3(0.92), vec3(1.0, 0.78, 0.25), yel);' +
+      ' vec2 d = abs(vUv - 0.5) * 2.0; float edge = 1.0 - smoothstep(0.75, 1.0, max(d.x, d.y));' +
+      ' vec3 col = mix(vec3(0.17, 0.19, 0.22), pc, paint);' +
+      ' gl_FragColor = vec4(col, mix(0.55, 0.95, paint) * edge); }'
+  }));
+  fsdGround.rotation.x = -Math.PI / 2; fsdGround.position.y = 0.022; fsdGround.renderOrder = 1; fsdGround.visible = false;
+  scene.add(fsdGround);
+  var groundAt = -1e9, groundAskAt = -1e9;
   var groundLoaded = false, groundLoading = false, groundPending = null, groundMode = 'real';
   groundImg.onload = function () {
     groundTex.image = groundImg;
@@ -1297,6 +1313,7 @@
     var now = performance.now();
     // 中控台送來的導航路線（車道級導航，nav3d.js）：不是偵測資料
     if (p && p.__route !== undefined) { if (window.AVM_NAV) AVM_NAV.setRoute(p.__route); return; }
+    if (p && p.__loc) { if (window.AVM_NAV) AVM_NAV.onMap(p.__loc, now); return; }      // 中控台自己的定位（360 沒給時）
     if (p.map && window.AVM_NAV) AVM_NAV.onMap(p.map, now);
     if (p.lp && window.AVM_NAV) AVM_NAV.onLanes(p.lp, now);
     if (window.AVM_FSD) AVM_FSD.update(p.veh || null, p.road ? (p.road.lines || []) : null, now, true, p);
@@ -1306,7 +1323,9 @@
     if (p.wm) { wm = p.wm; hm = p.hm || wm; }
     real.scale.set(wm, hm, 1);
     real.rotation.set(-Math.PI / 2, 0, p.flip ? Math.PI : 0);
-    if (p.ground && groundMode === 'real') loadGround(p.ground);
+    var fsdOn = window.AVM_FSD && AVM_FSD.style() === 'fsd';
+    if (p.ground && (groundMode === 'real' || fsdOn)) { loadGround(p.ground); groundAt = now; }
+    fsdGround.scale.copy(real.scale); fsdGround.rotation.copy(real.rotation);
     if (p.stat) showStat(p.stat, p.overlap);
     lastObjs = p.objs || [];
     associate(lastObjs, now);
@@ -1533,6 +1552,10 @@
     // 實景模式（碗面貼圖）：碗在用時藏掉虛擬路面、平面實景、地面格線；別台車的 3D 模型也藏（畫面裡本來就有真的車）
     var bowlOn = window.AVM_REAL ? AVM_REAL.update(groundMode === 'real', now) : false;
     if (window.AVM_NAV) AVM_NAV.update(now);
+    // FSD 風格：路面標線（俯視圖），每 3 秒跟中控台要一次
+    var fsdStyle = window.AVM_FSD && AVM_FSD.style() === 'fsd';
+    if (fsdStyle && now - groundAskAt > 3000) { groundAskAt = now; try { if (window.parent !== window) window.parent.postMessage({ __groundImg: 1 }, '*'); } catch (e) {} }
+    fsdGround.visible = fsdStyle && groundLoaded && now - groundAt < 2000 && !bowlOn && groundMode !== 'real';
     if (bowlOn) { real.visible = false; road.visible = false; grid.visible = false; base.visible = false; obsGrp.visible = false; }
     else if (bowlWas) { applyGround(groundMode); obsGrp.visible = !(window.AVM_FSD && AVM_FSD.style() === 'fsd'); }
     if (bowlOn !== bowlWas) labels.domElement.style.display = (bowlOn || (window.AVM_FSD && AVM_FSD.style() === 'fsd')) ? 'none' : '';

@@ -258,7 +258,12 @@
     if (roadOn && !road._viewSent && road.contentWindow) { road._viewSent = true; sendView(pref('roadView', 'front')); sendStyle(); }
     $('viewBtn').setAttribute('aria-pressed', String(roadOn));
     $('roadWait').hidden = !(roadOn && !st.adas);
-    if (st.adas && st.adas.map && typeof st.adas.map.lat === 'number') lastMap = st.adas.map;
+    if (st.adas && st.adas.map && typeof st.adas.map.lat === 'number') { lastMap = st.adas.map; lastMapAt = Date.now(); }
+    // 導航中、360 沒給定位 → 把中控台自己的定位送進道路畫面（每秒一次），導引才會跟著走
+    if (roadOn && road.contentWindow && navRoute() && Date.now() - lastMapAt > 5000 && Date.now() - (window.__locSent || 0) > 1000) {
+      window.__locSent = Date.now(); var cp = curPos();
+      if (cp) try { road.contentWindow.postMessage({ __loc: { lat: cp.lat, lon: cp.lon, hdg: cp.hdg || 0 } }, '*'); } catch (e) {}
+    }
     if (roadOn && road.contentWindow) {
       try {
         road.contentWindow.postMessage(st.adas || idleRoad(), '*');
@@ -295,7 +300,13 @@
   // ───────── 車道級導航 ─────────
   // 目的地：OpenStreetMap Nominatim 搜尋（按「搜尋」才查，不做邊打邊查，遵守使用規範）；路線：OSRM（含每個路口的車道 lanes）。
   // 位置用 360 送來的定位（st.adas.map.lat / lon / hdg）。路線存在中控台設定，重開還在。只用來顯示，不控制車子。
-  var lastMap = null;
+  var lastMap = null, lastMapAt = 0;
+  // 目前位置：360 送來的（5 秒內）優先；沒有就用中控台自己讀的 GPS（1 分鐘內）
+  function curPos() {
+    if (lastMap && Date.now() - lastMapAt < 5000) return lastMap;
+    try { var l = JSON.parse(Car.location() || 'null'); if (l && l.age < 60) return { lat: l.lat, lon: l.lon, hdg: l.hdg == null ? (lastMap ? lastMap.hdg : 0) : l.hdg }; } catch (e) {}
+    return lastMap;
+  }
   function navRoute() { try { var r = pref('navRoute', ''); return r ? JSON.parse(r) : null; } catch (e) { return null; } }
   function sendRoute() {
     var r = navRoute();
@@ -303,33 +314,35 @@
     $('navBtn').setAttribute('aria-pressed', String(!!r)); $('navStop').hidden = !r;
   }
   function navMsg(t) { $('navMsg').textContent = t || ''; $('navMsg').hidden = !t; }
-  $('navBtn').onclick = function () { $('nav').hidden = false; navMsg(lastMap ? '' : '還沒有定位（要 360 地圖輔助開著、GPS 有訊號）'); setTimeout(function () { $('navQ').focus(); }, 50); };
+  $('navBtn').onclick = function () { $('nav').hidden = false; navMsg(curPos() ? '' : '還沒有定位（等 GPS 有訊號；第一次開要允許「位置」權限）'); setTimeout(function () { $('navQ').focus(); }, 50); };
   $('navStop').onclick = function () { setPref('navRoute', ''); sendRoute(); $('nav').hidden = true; };
   function navSearch() {
     var q = $('navQ').value.trim(); if (!q) return;
     var url = 'https://nominatim.openstreetmap.org/search?format=jsonv2&limit=8&countrycodes=tw&accept-language=zh-TW&q=' + encodeURIComponent(q);
-    if (lastMap) url += '&viewbox=' + (lastMap.lon - 0.3) + ',' + (lastMap.lat + 0.3) + ',' + (lastMap.lon + 0.3) + ',' + (lastMap.lat - 0.3);
+    var cp = curPos();
+    if (cp) url += '&viewbox=' + (cp.lon - 0.3) + ',' + (cp.lat + 0.3) + ',' + (cp.lon + 0.3) + ',' + (cp.lat - 0.3);
     navMsg('搜尋中…'); $('navList').innerHTML = '';
-    fetch(url).then(function (r) { return r.json(); }).then(function (a) {
+    fetch(url).then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); }).then(function (a) {
       if (!a.length) { navMsg('找不到「' + q + '」'); return; }
       navMsg('');
       a.forEach(function (p) {
         var b = document.createElement('button'), lat = +p.lat, lon = +p.lon;
-        var dkm = lastMap ? (Math.hypot((lon - lastMap.lon) * 111.32 * Math.cos(lat * Math.PI / 180), (lat - lastMap.lat) * 110.54)).toFixed(1) + ' km' : '';
+        var dkm = cp ? (Math.hypot((lon - cp.lon) * 111.32 * Math.cos(lat * Math.PI / 180), (lat - cp.lat) * 110.54)).toFixed(1) + ' km' : '';
         b.innerHTML = (p.name || p.display_name.split(',')[0]) + '<small>' + dkm + '　' + p.display_name + '</small>';
         b.onclick = function () { navPlan({ name: p.name || p.display_name.split(',')[0], lat: lat, lon: lon }); };
         $('navList').appendChild(b);
       });
-    }).catch(function () { navMsg('搜尋失敗（網路？）'); });
+    }).catch(function (e) { navMsg('搜尋失敗：' + (e && e.message ? e.message : e) + '（車機有沒有上網？）'); });
   }
   $('navGo').onclick = navSearch;
   $('navQ').addEventListener('keydown', function (e) { if (e.key === 'Enter') navSearch(); });
   function navPlan(dest) {
-    if (!lastMap) { navMsg('還沒有定位，等 GPS 有訊號再試'); return; }
+    var cp = curPos();
+    if (!cp) { navMsg('還沒有定位，等 GPS 有訊號再試'); return; }
     navMsg('規劃路線中…');
-    var url = 'https://router.project-osrm.org/route/v1/driving/' + lastMap.lon + ',' + lastMap.lat + ';' + dest.lon + ',' + dest.lat +
+    var url = 'https://router.project-osrm.org/route/v1/driving/' + cp.lon + ',' + cp.lat + ';' + dest.lon + ',' + dest.lat +
       '?overview=full&geometries=geojson&steps=true';
-    fetch(url).then(function (r) { return r.json(); }).then(function (j) {
+    fetch(url).then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); }).then(function (j) {
       if (!j.routes || !j.routes.length) { navMsg('規劃不出路線'); return; }
       var rt = j.routes[0], steps = [];
       rt.legs.forEach(function (lg) {
@@ -342,9 +355,9 @@
       var route = { coords: rt.geometry.coordinates, steps: steps, dest: dest, dist: rt.distance, dur: rt.duration };
       setPref('navRoute', JSON.stringify(route)); sendRoute();
       $('nav').hidden = true;
-    }).catch(function () { navMsg('路線規劃失敗（網路？）'); });
+    }).catch(function (e) { navMsg('路線規劃失敗：' + (e && e.message ? e.message : e)); });
   }
-  function navReroute() { var r = navRoute(); if (r && r.dest && lastMap) navPlan(r.dest); }
+  function navReroute() { var r = navRoute(); if (r && r.dest && curPos()) navPlan(r.dest); }
   // 3D 道路畫面裡點停車格 → 交給 360 引擎選格（選了才畫停車路徑；再點一次取消）
   window.addEventListener('message', function (e) {
     var t = e.data && e.data.__slotTap;
@@ -352,6 +365,7 @@
     // 3D 道路畫面在實景模式：請 360 引擎送碗面貼圖（3D 畫面每 3 秒送一次，停了引擎 10 秒後就不再做）
     if (e.data && e.data.__realView) { try { Car.engine('realview', '1'); } catch (er) {} }
     if (e.data && e.data.__reroute) navReroute();
+    if (e.data && e.data.__groundImg) { try { Car.engine('groundimg', '1'); } catch (er) {} }
   });
 
   // ───────── 按鈕 ─────────
