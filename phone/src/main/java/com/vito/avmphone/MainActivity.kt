@@ -62,7 +62,7 @@ class MainActivity : Activity() {
         @JavascriptInterface fun req(id: Int, kind: String, arg: String) {
             if (!busy.add(kind)) { reply(id, null); return }
             kotlin.concurrent.thread {
-                val r = try { when (kind) { "status" -> CarLink.get("/status"); "scene" -> CarLink.get("/scene"); "route" -> CarLink.get("/route"); "search" -> search(arg); else -> null } }
+                val r = try { when (kind) { "status" -> CarLink.get("/status"); "scene" -> CarLink.get("/scene" + (if (arg.isNotEmpty()) "?$arg" else "")); "route" -> CarLink.get("/route"); "search" -> search(arg); else -> null } }
                     catch (_: Throwable) { null } finally { busy.remove(kind) }
                 reply(id, r)
             }

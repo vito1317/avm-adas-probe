@@ -124,7 +124,7 @@ details summary{color:var(--dim);font-size:13px}
   </div>
   <div class="vbar" id="vbar">
     <button data-view="front">前方斜視</button><button data-view="chase">追車</button><button data-view="top">俯視</button><button data-view="orbit">環繞</button>
-    <button id="fsdBtn">FSD 風格</button>
+    <button id="realBtn">實景</button><button id="fsdBtn">FSD 風格</button>
   </div>
 </section>
 
@@ -273,10 +273,15 @@ $('tripReset').onclick=()=>{trip={d:0,t:0,max:0};LS.set('trip',trip);};
 
 // ════ 360：中控台同一套 3D 畫面（E60 與周圍車輛模型）════
 let roadReady=false,fsd=LS.get('fsd',false),view=LS.get('view','front');
-$('road').addEventListener('load',()=>{if($('road').src.indexOf('bev3d')<0)return;roadReady=true;routeSent=false;lastRoute=0;setTimeout(()=>{post({__view:view});post({__style:fsd?'fsd':'std'});},600);});
+$('road').addEventListener('load',()=>{if($('road').src.indexOf('bev3d')<0)return;roadReady=true;routeSent=false;lastRoute=0;setTimeout(()=>{post({__view:view});post({__style:fsd?'fsd':'std'});post({__ground:real?'real':'virtual'});},600);});
 function post(m){try{if(roadReady)$('road').contentWindow.postMessage(m,'*');}catch(e){}}
 document.querySelectorAll('#vbar [data-view]').forEach(b=>{b.setAttribute('aria-pressed',String(b.dataset.view===view));b.onclick=()=>{view=b.dataset.view;LS.set('view',view);post({__view:view});document.querySelectorAll('#vbar [data-view]').forEach(x=>x.setAttribute('aria-pressed',String(x===b)));};});
 $('fsdBtn').setAttribute('aria-pressed',String(fsd));
+// 實景：3D 畫面貼上 360 鏡頭拼出來的環景（俯視就是傳統的 360 鳥瞰）；3D 畫面要影像時會跟這裡說，轉給車機
+let real=LS.get('real',false),wantRealAt=0,wantGroundAt=0;
+$('realBtn').setAttribute('aria-pressed',String(real));
+$('realBtn').onclick=()=>{real=!real;LS.set('real',real);$('realBtn').setAttribute('aria-pressed',String(real));post({__ground:real?'real':'virtual'});};
+window.addEventListener('message',e=>{const d=e.data||{};if(d.__realView)wantRealAt=Date.now();if(d.__groundImg)wantGroundAt=Date.now();});
 $('fsdBtn').onclick=()=>{fsd=!fsd;LS.set('fsd',fsd);$('fsdBtn').setAttribute('aria-pressed',String(fsd));post({__style:fsd?'fsd':'std'});};
 function idleRoad(){const L=(k,d,x)=>({k,d,x1:x,z1:-8,x2:x,z2:30,c:.9,kv:0});
   return{objs:[],road:{lines:[L('w',1,-1.8),L('w',1,1.8),L('y',0,-5.4),L('w',0,5.4)],el:-5.6,er:5.6},veh:{turn:S.turnL?'L':S.turnR?'R':null,gear:S.gear||'P',speed:S.speed||0}};}
@@ -391,7 +396,8 @@ async function pollStatus(){
 }
 async function pollScene(){
   if(demo){const t=Date.now()/1000,sc=demoScene(t);sc.map=demoMap(t);render360(sc);return;}
-  const t=online?await req('scene'):'';let sc=null;try{sc=t?JSON.parse(t):null;}catch(e){}
+  const n=Date.now(),q=[];if(n-wantRealAt<8000)q.push('real=1');if(n-wantGroundAt<8000||real)q.push('ground=1');
+  const t=online?await req('scene',q.join('&')):'';let sc=null;try{sc=t?JSON.parse(t):null;}catch(e){}
   render360(sc);
 }
 function header(){

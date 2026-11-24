@@ -19,7 +19,7 @@ import kotlin.concurrent.thread
  * - 小 HTTP 伺服器（埠 [HTTP_PORT]）：
  *     GET  /status    車況、導航進度、配件狀態、版本
  *     GET  /route     目前的導航路線（OSRM 規劃結果；沒在導航 = null）
- *     GET  /scene     360 環景狀態（周圍物件、車道線、警示；不含影像）
+ *     GET  /scene     360 環景狀態（周圍物件、車道線、警示）；?real=1 加碗面實景貼圖、?ground=1 加俯視地面影像
  *     POST /nav       {"name","lat","lon"}：設定目的地（中控台規劃路線、開始導航）
  *     POST /nav/stop  結束導航
  *     POST /loc       {"lat","lon","hdg","acc","spd"}：手機的 GPS（比車上的準，新的優先用）
@@ -28,7 +28,8 @@ import kotlin.concurrent.thread
 class PhoneLink(private val host: Host) {
     interface Host {
         fun statusJson(): String
-        fun sceneJson(): String
+        /** [query]：手機要不要實景影像（real=1 碗面貼圖、ground=1 俯視地面影像）。 */
+        fun sceneJson(query: String): String
         fun routeJson(): String
         fun navTo(name: String, lat: Double, lon: Double)
         fun navStop()
@@ -94,13 +95,13 @@ class PhoneLink(private val host: Host) {
         val lines = head.split("\r\n")
         val req = lines[0].split(" ")
         if (req.size < 2) return
-        val method = req[0]; val path = req[1].substringBefore('?')
+        val method = req[0]; val path = req[1].substringBefore('?'); val query = req[1].substringAfter('?', "")
         val len = lines.firstOrNull { it.lowercase().startsWith("content-length:") }?.substringAfter(':')?.trim()?.toIntOrNull() ?: 0
         val body = if (len in 1..65536) ByteArray(len).also { b -> var r = 0; while (r < len) { val n = inp.read(b, r, len - r); if (n < 0) break; r += n } }.toString(Charsets.UTF_8) else ""
         when {
             method == "OPTIONS" -> reply(s, 204, "")
             method == "GET" && path == "/status" -> reply(s, 200, host.statusJson())
-            method == "GET" && path == "/scene" -> reply(s, 200, host.sceneJson())
+            method == "GET" && path == "/scene" -> reply(s, 200, host.sceneJson(query))
             method == "GET" && path == "/route" -> reply(s, 200, host.routeJson())
             method == "POST" && path == "/nav" -> {
                 val j = JSONObject(body)

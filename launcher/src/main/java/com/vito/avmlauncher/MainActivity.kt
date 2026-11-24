@@ -81,10 +81,18 @@ class MainActivity : Activity(), PhoneLink.Host {
         return o.toString()
     }
     @Volatile private var sceneAliveAt = 0L
-    override fun sceneJson(): String {
+    @Volatile private var sceneImgAt = 0L
+    override fun sceneJson(query: String): String {
         // 手機在看 360 狀態：中控台就算不在前景也要叫引擎繼續送偵測結果（引擎只在有人看時才送）
         val now = System.currentTimeMillis()
         if (now - sceneAliveAt > 1500) { sceneAliveAt = now; car.engineCmd("alive", "") }
+        // 手機開實景：叫引擎送鏡頭拼成的碗面貼圖／俯視地面影像（只在手機與車機之間，不存檔）
+        val q = query.split('&').toSet()
+        if (now - sceneImgAt > 3000 && ("real=1" in q || "ground=1" in q)) {
+            sceneImgAt = now
+            if ("real=1" in q) car.engineCmd("realview", "1")
+            if ("ground=1" in q) car.engineCmd("groundimg", "1")
+        }
         return car.sceneJson()
     }
     override fun routeJson(): String =
