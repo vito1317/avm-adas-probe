@@ -72,18 +72,42 @@ class AnnotationView(context: Context) : View(context) {
     @Volatile var drawPath = true
         set(v) { field = v; postInvalidate() }
 
-    private fun pathFor(p: JSONObject?): List<FloatArray>? {
+    private fun pathFor(p: JSONObject?): DrivePath.Result? {
         val veh = p?.optJSONObject("veh") ?: return null
         val sp = if (veh.isNull("speed")) null else veh.optDouble("speed").toFloat()
         val st = if (veh.isNull("steer")) null else veh.optDouble("steer").toFloat()
         val gear = veh.optString("gear"); val turn = veh.optString("turn").firstOrNull()
         if (gear == "P" || (sp != null && sp < 1f && gear != "R")) return null      // 停著不畫
-        return DrivePath.predict(ribbon.current(), st, sp, turn, gear == "R")
+        val lane = ribbon.current()
+        val base = DrivePath.predict(lane, st, sp, turn, gear == "R")
+        if (gear == "R") return DrivePath.Result(base, false, false)
+        // 障礙物：偵測到的車、人、三角錐（速度是相對自車的，加回自車車速才是對地）、高度障礙物
+        val ego = (sp ?: 0f) / 3.6
+        val obs = ArrayList<DrivePath.Obs>()
+        p.optJSONArray("objs")?.let { a ->
+            for (i in 0 until a.length()) {
+                val o = a.optJSONObject(i) ?: continue
+                val t = o.optString("t")
+                val r = when (t) { "truck", "bus" -> 1.2; "car", "van" -> 0.9; "moto", "bigbike", "bike" -> 0.4; "ped" -> 0.3; "cone" -> 0.2; else -> 0.6 }
+                val vx = o.optDouble("vx", 0.0); val vz = o.optDouble("vz", 0.0)
+                val moving = o.has("vz") && kotlin.math.hypot(vx, vz + ego) > 1.5
+                obs.add(DrivePath.Obs(o.optDouble("x"), o.optDouble("z"), r, moving, t == "ped"))
+            }
+        }
+        p.optJSONArray("obs")?.let { a ->
+            for (i in 0 until a.length()) {
+                val o = a.optJSONObject(i) ?: continue
+                obs.add(DrivePath.Obs(o.optDouble("x"), o.optDouble("z"), maxOf(o.optDouble("w", 0.6), o.optDouble("l", 0.6)) / 2, false))
+            }
+        }
+        return DrivePath.avoid(base, obs, lane)
     }
 
     /** 路徑帶：寬約 1 m 的藍色，近亮遠淡，中間一條亮線。[toXY] 把地面點轉成畫面座標（看不到回 null）。 */
-    private fun drawPathBand(c: Canvas, pts: List<FloatArray>, toXY: (Float, Float) -> FloatArray?) {
+    private fun drawPathBand(c: Canvas, res: DrivePath.Result, toXY: (Float, Float) -> FloatArray?) {
+        val pts = res.pts
         if (pts.size < 2) return
+        val base = if (res.blocked) Color.rgb(255, 110, 40) else Color.rgb(40, 140, 255)     // 過不去：橘紅
         val hw = 0.5f
         for (i in 0 until pts.size - 1) {
             val a = pts[i]; val b = pts[i + 1]
@@ -93,12 +117,12 @@ class AnnotationView(context: Context) : View(context) {
             if (q.any { it == null }) continue
             val f = i.toFloat() / (pts.size - 1)
             path.reset(); path.moveTo(q[0]!![0], q[0]!![1]); for (k in 1..3) path.lineTo(q[k]!![0], q[k]!![1]); path.close()
-            fill.color = Color.rgb(40, 140, 255); fill.alpha = (150 * (1 - f) + 15).toInt(); c.drawPath(path, fill)
+            fill.color = base; fill.alpha = (150 * (1 - f) + 15).toInt(); c.drawPath(path, fill)
         }
         val cl = pts.mapNotNull { toXY(it[0], it[1]) }
         if (cl.size >= 2) {
             path.reset(); cl.forEachIndexed { i, q -> if (i == 0) path.moveTo(q[0], q[1]) else path.lineTo(q[0], q[1]) }
-            stroke.color = Color.rgb(150, 210, 255); stroke.alpha = 200; stroke.pathEffect = null; c.drawPath(path, stroke); stroke.alpha = 255
+            stroke.color = if (res.blocked) Color.rgb(255, 190, 140) else Color.rgb(150, 210, 255); stroke.alpha = 200; stroke.pathEffect = null; c.drawPath(path, stroke); stroke.alpha = 255
         }
     }
 
@@ -210,7 +234,7 @@ class AnnotationView(context: Context) : View(context) {
         if (calibrating) drawCalibration(c, m)
         if (p != null) {
             if (drawRibbon) ribbon.update(p)?.let { r -> drawRibbonTop(c, m, r) } else ribbon.update(p)
-            if (drawPath) pathFor(p)?.let { pts -> drawPathBand(c, pts) { x, z -> floatArrayOf(m.sx(x, z), m.sy(x, z)) } }
+            if (drawPath) pathFor(p)?.let { r -> drawPathBand(c, r) { x, z -> floatArrayOf(m.sx(x, z), m.sy(x, z)) } }
             if (drawRoad) p.optJSONObject("road")?.optJSONArray("lines")?.let { drawRoad(c, m, it) }
             if (drawRoad) p.optJSONArray("cw")?.let { drawCrosswalks(c, m, it) }
             p.optJSONArray("bj")?.let { drawBoxJunctions(c, m, it) }
@@ -240,7 +264,7 @@ class AnnotationView(context: Context) : View(context) {
         if (calibrating) drawCalibration3d(c, m)
         if (p != null) {
             if (drawRibbon) ribbon.current()?.let { r -> drawRibbon3d(c, m, r) }
-            if (drawPath) pathFor(p)?.let { pts -> drawPathBand(c, pts) { x, z -> m.project(x, 0f, z) } }
+            if (drawPath) pathFor(p)?.let { r -> drawPathBand(c, r) { x, z -> m.project(x, 0f, z) } }
             p.optJSONArray("slots")?.let { drawSlots3d(c, m, it) }
             p.optJSONObject("turn")?.let { t ->
                 val col = if (t.optInt("hit") > 0) Color.rgb(255, 70, 60) else if (t.optInt("est") == 1) Color.rgb(90, 200, 230) else Color.rgb(255, 200, 60)

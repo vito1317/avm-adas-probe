@@ -64,4 +64,96 @@ object DrivePath {
     }
 
     private fun smooth(t: Double) = t * t * (3 - 2 * t)
+
+    // ───────────── 避開障礙物 ─────────────
+
+    /** 障礙物：位置 (x, z)、半寬 [r]、在動（同車道前方在動的 = 前車，跟著不繞）。 */
+    class Obs(val x: Double, val z: Double, val r: Double, val moving: Boolean, val ped: Boolean = false)
+    /** 結果：路徑點、是不是被擋住過不去（路徑停在障礙物前、畫成橘紅）。 */
+    class Result(val pts: List<FloatArray>, val blocked: Boolean, val following: Boolean)
+
+    const val EGO_HW = 0.95          // 自車半寬（含後照鏡一點點）
+    const val MARGIN = 0.3           // 側向安全距離
+    const val OVER_LINE = 0.4        // 繞的時候最多壓過車道線多少
+    const val FREE_HW = 1.6          // 看不到車道線時，左右最多偏多少
+    const val RAMP_IN = 6.0          // 偏過去用多長（m）
+    const val RAMP_OUT = 4.0         // 繞過後回來用多長
+
+    /**
+     * 把 [path]（[predict] 的結果）照障礙物修改：停著的東西擋到（側向距離不到 自車半寬＋對方半寬＋[MARGIN]）→
+     * 往空間小一點就能過的那側平順偏過去（不超出車道 [OVER_LINE]），過了再回來；同車道前方在動的車 → 跟著，路徑畫到它後面 2 m；
+     * 空間不夠過不去 → 路徑停在障礙物前、[Result.blocked]。只用來顯示，不拿去控制車子。
+     */
+    fun avoid(path: List<FloatArray>, obs: List<Obs>, lane: LaneRibbon.Lane?): Result {
+        val n = path.size
+        if (n < 3 || obs.isEmpty()) return Result(path, false, false)
+        // 弧長、法向（往右）
+        val sArr = DoubleArray(n); val nx = DoubleArray(n); val nz = DoubleArray(n)
+        for (i in 0 until n) {
+            if (i > 0) sArr[i] = sArr[i - 1] + kotlin.math.hypot((path[i][0] - path[i - 1][0]).toDouble(), (path[i][1] - path[i - 1][1]).toDouble())
+            val a = path[maxOf(0, i - 1)]; val b = path[minOf(n - 1, i + 1)]
+            val tx = (b[0] - a[0]).toDouble(); val tz = (b[1] - a[1]).toDouble(); val l = kotlin.math.hypot(tx, tz).coerceAtLeast(1e-6)
+            nx[i] = tz / l; nz[i] = -tx / l
+        }
+        val off = DoubleArray(n)
+        var stopAt = Double.MAX_VALUE; var blocked = false; var following = false
+        for (o in obs) {
+            var bi = -1; var bd = Double.MAX_VALUE
+            for (i in 0 until n) { val d = kotlin.math.hypot(o.x - path[i][0], o.z - path[i][1]); if (d < bd) { bd = d; bi = i } }
+            if (bi <= 0 || bi >= n - 1 && bd > 3) continue                  // 在車頭後面、或遠在路徑盡頭外
+            val d = (o.x - path[bi][0]) * nx[bi] + (o.z - path[bi][1]) * nz[bi]    // 在路徑右邊為正
+            val need = EGO_HW + o.r + MARGIN
+            if (kotlin.math.abs(d) >= need) continue
+            val sStar = sArr[bi]
+            if (o.moving && !o.ped) {                                         // 前車：跟著
+                val st = sStar - o.r - 2.0
+                if (st < stopAt) { stopAt = st; following = true; blocked = false }
+                continue
+            }
+            // 兩個方向都試：偏到障礙物左邊（off = d − need，負）或右邊（off = d + need，正），挑幅度小又不出車道的
+            val lim = limits(lane, path[bi])
+            val cands = listOf(d - need, d + need).filter { it >= lim[0] && it <= lim[1] }.sortedBy { kotlin.math.abs(it) }
+            if (cands.isEmpty()) {                                            // 過不去：停在它前面
+                val st = sStar - o.r - 1.0
+                if (st < stopAt) { stopAt = st; blocked = true; following = false }
+                continue
+            }
+            val want = cands[0]
+            for (i in 0 until n) {
+                val ds = sArr[i] - sStar
+                val rin = minOf(RAMP_IN, sStar - 0.5).coerceAtLeast(0.5)
+                val w = when {
+                    ds < -o.r - rin -> 0.0
+                    ds < -o.r -> smooth((ds + o.r + rin) / rin)
+                    ds <= o.r -> 1.0
+                    ds < o.r + RAMP_OUT -> smooth(1 - (ds - o.r) / RAMP_OUT)
+                    else -> 0.0
+                }
+                val v = want * w
+                if (off[i] != 0.0 && kotlin.math.sign(off[i]) != kotlin.math.sign(v) && kotlin.math.abs(off[i]) > 0.2 && kotlin.math.abs(v) > 0.2) {
+                    // 兩邊各有東西要往相反方向閃 → 中間過不去
+                    val st = sStar - o.r - 1.0
+                    if (st < stopAt) { stopAt = st; blocked = true; following = false }
+                }
+                if (kotlin.math.abs(v) > kotlin.math.abs(off[i])) off[i] = v
+            }
+        }
+        val out = ArrayList<FloatArray>(n)
+        for (i in 0 until n) {
+            if (sArr[i] > stopAt) break
+            out.add(floatArrayOf((path[i][0] + off[i] * nx[i]).toFloat(), (path[i][1] + off[i] * nz[i]).toFloat()))
+        }
+        if (out.size < 2) out.clear()
+        return Result(out, blocked, following)
+    }
+
+    /** 在這一點，路徑最多往左（負）／右（正）偏多少：不讓車身超出車道線 [OVER_LINE]；看不到車道線 ±[FREE_HW]。 */
+    private fun limits(lane: LaneRibbon.Lane?, p: FloatArray): DoubleArray {
+        if (lane == null) return doubleArrayOf(-FREE_HW, FREE_HW)
+        var best = 0; var bd = Float.MAX_VALUE
+        for (i in lane.left.indices) { val d = kotlin.math.abs(lane.left[i][1] - p[1]); if (d < bd) { bd = d; best = i } }
+        val xl = lane.left[best][0].toDouble(); val xr = lane.right[best][0].toDouble()
+        val lo = (xl + EGO_HW - OVER_LINE) - p[0]; val hi = (xr - EGO_HW + OVER_LINE) - p[0]
+        return doubleArrayOf(minOf(lo, 0.0), maxOf(hi, 0.0))
+    }
 }
