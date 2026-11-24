@@ -30,6 +30,14 @@ object LauncherLink {
     fun realViewWanted(): Boolean = watching() && SystemClock.elapsedRealtime() - realViewAt < 10_000
 
     @Volatile private var groundAt = 0L
+    @Volatile private var navJson: String? = null
+    @Volatile private var navAt = 0L
+    /** 中控台的導航導引（3 秒內有更新才算）：下一個動作、距離、路名、車道、前方路線（車身座標）。只用來顯示。 */
+    fun navGuide(): JSONObject? {
+        val j = navJson ?: return null
+        if (SystemClock.elapsedRealtime() - navAt > 3000) return null
+        return try { JSONObject(j) } catch (_: Throwable) { null }
+    }
     /** 中控台 FSD 畫面要俯視地面影像（畫路面標線：停車格、箭頭、斑馬線），10 秒內有要求。 */
     fun groundWanted(): Boolean = watching() && SystemClock.elapsedRealtime() - groundAt < 10_000
 
@@ -74,6 +82,8 @@ object LauncherLink {
             "realview" -> realViewAt = SystemClock.elapsedRealtime()
             // 中控台 FSD 畫面：要俯視地面影像（只是顯示用）
             "groundimg" -> groundAt = SystemClock.elapsedRealtime()
+            // 中控台的導航導引（360 畫面上也畫導航）；空字串 = 導航結束
+            "nav" -> { navJson = arg.takeIf { it.isNotEmpty() && it.length < 64_000 }; navAt = SystemClock.elapsedRealtime() }
             // 桌面的「道路畫面」卡片：打開 360 並切到道路畫面
             "roadview" -> Engine360.showRoad(true)
             // 中控台 3D 道路畫面點了停車格（只是選格子、畫路徑，不碰車）

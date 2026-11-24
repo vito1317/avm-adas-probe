@@ -116,6 +116,75 @@ class AnnotationView(context: Context) : View(context) {
     }
     private val planner = DrivePath.Planner()
 
+    // ───────────── 導航（中控台送來的導引） ─────────────
+    /** 導航路線（前方 200 m，車身座標）畫在地上：綠色寬帶（跟藍色的開車路徑分開）。 */
+    private fun drawNavRoute(c: Canvas, nav: JSONObject, toXY: (Float, Float) -> FloatArray?) {
+        val a = nav.optJSONArray("pts") ?: return
+        if (a.length() < 2) return
+        path.reset(); var n = 0
+        for (i in 0 until a.length()) {
+            val q = a.optJSONArray(i) ?: continue
+            val xy = toXY(q.optDouble(0).toFloat(), q.optDouble(1).toFloat()) ?: continue
+            if (n++ == 0) path.moveTo(xy[0], xy[1]) else path.lineTo(xy[0], xy[1])
+        }
+        if (n < 2) return
+        stroke.color = Color.rgb(40, 210, 140); stroke.alpha = 150; stroke.pathEffect = null
+        val w = stroke.strokeWidth; stroke.strokeWidth = 9 * dp; stroke.strokeCap = Paint.Cap.ROUND
+        c.drawPath(path, stroke)
+        stroke.strokeWidth = w; stroke.alpha = 255
+    }
+
+    private val ARROWS = mapOf("left" to "↰", "sharp left" to "↰", "slight left" to "↖", "straight" to "↑", "none" to "↑",
+        "right" to "↱", "sharp right" to "↱", "slight right" to "↗", "uturn" to "↶")
+    private fun glyph(a: org.json.JSONArray?): String {
+        if (a == null || a.length() == 0) return "↑"
+        return (0 until a.length()).joinToString("") { ARROWS[a.optString(it)] ?: "↑" }
+    }
+
+    /** 上方導航卡：箭頭、距離、動作、路名，下面車道列（該走的藍色、目前車道白框）或「請靠左／右」。 */
+    private fun drawNavHud(c: Canvas, nav: JSONObject) {
+        val cx = width / 2f; var y = 14 * dp
+        if (nav.optInt("arrive") == 1) {
+            val t = "已抵達目的地"; text.textSize = 20 * dp
+            fill.color = Color.argb(220, 10, 16, 24); val tw = text.measureText(t)
+            c.drawRoundRect(RectF(cx - tw / 2 - 16 * dp, y, cx + tw / 2 + 16 * dp, y + 40 * dp), 12 * dp, 12 * dp, fill)
+            c.drawText(t, cx - tw / 2, y + 27 * dp, text); text.textSize = 14 * dp; return
+        }
+        val d = nav.optInt("dist"); val ds = if (d >= 1000) "%.1f km".format(d / 1000f) else "${if (d >= 100) (d / 10) * 10 else d} m"
+        val arrow = ARROWS[nav.optString("mod")] ?: "↑"
+        val act = nav.optString("act"); val name = nav.optString("name")
+        val lanes = nav.optJSONArray("lanes"); val tip = nav.optString("tip")
+        val boxW = 30 * dp; val gap = 4 * dp
+        val lanesW = if (lanes != null && lanes.length() > 0) lanes.length() * (boxW + gap) - gap else 0f
+        val bw = maxOf(240 * dp, lanesW + 32 * dp); val bh = if (lanesW > 0 || tip.isNotEmpty()) 92 * dp else 56 * dp
+        fill.color = Color.argb(225, 10, 16, 24)
+        c.drawRoundRect(RectF(cx - bw / 2, y, cx + bw / 2, y + bh), 14 * dp, 14 * dp, fill)
+        stroke.color = Color.argb(110, 90, 170, 255); stroke.pathEffect = null; c.drawRoundRect(RectF(cx - bw / 2, y, cx + bw / 2, y + bh), 14 * dp, 14 * dp, stroke)
+        text.textSize = 30 * dp; text.color = Color.rgb(95, 180, 255); c.drawText(arrow, cx - bw / 2 + 14 * dp, y + 40 * dp, text)
+        text.textSize = 22 * dp; text.color = Color.WHITE; c.drawText(ds, cx - bw / 2 + 52 * dp, y + 36 * dp, text)
+        val x2 = cx - bw / 2 + 52 * dp + text.measureText(ds) + 12 * dp
+        text.textSize = 15 * dp; c.drawText(act, x2, y + 26 * dp, text)
+        if (name.isNotEmpty()) { text.textSize = 12 * dp; text.color = Color.rgb(139, 161, 180); c.drawText(name, x2, y + 44 * dp, text) }
+        y += 54 * dp
+        if (lanesW > 0) {
+            var x = cx - lanesW / 2; val cur = nav.optInt("cur", -1)
+            for (i in 0 until lanes!!.length()) {
+                val l = lanes.optJSONObject(i) ?: continue
+                val ok = l.optBoolean("valid")
+                fill.color = if (ok) Color.argb(220, 47, 140, 255) else Color.argb(40, 255, 255, 255)
+                val r = RectF(x, y, x + boxW, y + 30 * dp)
+                c.drawRoundRect(r, 6 * dp, 6 * dp, fill)
+                if (i == cur) { stroke.color = Color.WHITE; c.drawRoundRect(r, 6 * dp, 6 * dp, stroke) }
+                text.textSize = 16 * dp; text.color = if (ok) Color.WHITE else Color.rgb(109, 124, 138)
+                val g = glyph(l.optJSONArray("ind")); c.drawText(g, x + boxW / 2 - text.measureText(g) / 2, y + 21 * dp, text)
+                x += boxW + gap
+            }
+        } else if (tip.isNotEmpty()) {
+            text.textSize = 14 * dp; text.color = Color.rgb(159, 208, 255); c.drawText(tip, cx - text.measureText(tip) / 2, y + 20 * dp, text)
+        }
+        text.textSize = 14 * dp; text.color = Color.WHITE
+    }
+
     /** 路徑帶：寬約 1 m 的藍色，近亮遠淡，中間一條亮線。[toXY] 把地面點轉成畫面座標（看不到回 null）。 */
     private fun drawPathBand(c: Canvas, res: DrivePath.Result, toXY: (Float, Float) -> FloatArray?) {
         val pts = res.pts
@@ -238,6 +307,7 @@ class AnnotationView(context: Context) : View(context) {
         }
         if (!suspend3d) prof.p3b?.let { draw3d(c, PerspectiveMapper(it, width, height), p) }
         drawHud(c, p)
+        p?.optJSONObject("nav")?.let { drawNavHud(c, it) }
         status?.let { drawStatus(c, it, top?.let { t -> AnnotationMapper(t, width, height) }) }
     }
 
@@ -247,6 +317,7 @@ class AnnotationView(context: Context) : View(context) {
         if (calibrating) drawCalibration(c, m)
         if (p != null) {
             if (drawRibbon) ribbon.update(p)?.let { r -> drawRibbonTop(c, m, r) } else ribbon.update(p)
+            p.optJSONObject("nav")?.let { nv -> drawNavRoute(c, nv) { x, z -> floatArrayOf(m.sx(x, z), m.sy(x, z)) } }
             if (drawPath) pathFor(p)?.let { r -> drawPathBand(c, r) { x, z -> floatArrayOf(m.sx(x, z), m.sy(x, z)) } }
             if (drawRoad) p.optJSONObject("road")?.optJSONArray("lines")?.let { drawRoad(c, m, it) }
             if (drawRoad) p.optJSONArray("cw")?.let { drawCrosswalks(c, m, it) }
@@ -277,6 +348,7 @@ class AnnotationView(context: Context) : View(context) {
         if (calibrating) drawCalibration3d(c, m)
         if (p != null) {
             if (drawRibbon) ribbon.current()?.let { r -> drawRibbon3d(c, m, r) }
+            p.optJSONObject("nav")?.let { nv -> drawNavRoute(c, nv) { x, z -> m.project(x, 0f, z) } }
             if (drawPath) pathFor(p)?.let { r -> drawPathBand(c, r) { x, z -> m.project(x, 0f, z) } }
             p.optJSONArray("slots")?.let { drawSlots3d(c, m, it) }
             p.optJSONObject("turn")?.let { t ->

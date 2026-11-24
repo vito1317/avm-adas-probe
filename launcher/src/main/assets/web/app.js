@@ -366,6 +366,8 @@
     if (e.data && e.data.__realView) { try { Car.engine('realview', '1'); } catch (er) {} }
     if (e.data && e.data.__reroute) navReroute();
     if (e.data && e.data.__groundImg) { try { Car.engine('groundimg', '1'); } catch (er) {} }
+    // 導引轉給 360 引擎（360 畫面上也畫導航）
+    if (e.data && e.data.__navGuide !== undefined) { try { Car.engine('nav', e.data.__navGuide ? JSON.stringify(e.data.__navGuide) : ''); } catch (er) {} }
   });
 
   // ───────── 按鈕 ─────────

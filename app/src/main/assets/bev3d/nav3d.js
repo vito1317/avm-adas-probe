@@ -13,6 +13,7 @@
   // 鏡頭認到的各車道用途（路面箭頭，payload.lp：{"0": "直行", "-1": "左轉"}，0 = 目前車道、−1 = 左邊那條）
   var lp = null, lpAt = -1e9;
   var mini = null;      // 小地圖用：路線點（車身座標），前方 600 m 內
+  var guide = null, guideAt = -1e9;   // 給 360 畫面用的導引（中控台轉給 360 引擎）
   var LP_IND = { '直行': ['straight'], '左轉': ['left'], '右轉': ['right'], '直行／左轉': ['left', 'straight'],
     '直行／右轉': ['straight', 'right'], '迴轉': ['uturn'], '左轉／右轉': ['left', 'right'] };
   function dirOf(mod) { return /left/.test(mod) ? 'left' : /right/.test(mod) ? 'right' : mod === 'uturn' ? 'uturn' : 'straight'; }
@@ -78,7 +79,7 @@
   function fmtDist(d) { return d >= 1000 ? (d / 1000).toFixed(1) + ' km' : (d >= 100 ? Math.round(d / 10) * 10 : Math.round(d)) + ' m'; }
 
   function update(now) {
-    if (!route || !map || now - mapAt > 5000) { if (card) card.style.display = 'none'; if (band) band.visible = false; mini = null; return; }
+    if (!route || !map || now - mapAt > 5000) { if (card) card.style.display = 'none'; if (band) band.visible = false; mini = null; guide = null; return; }
     var lat0 = map.lat, lon0 = map.lon, hdg = map.hdg || 0, C = route.coords;
     // 目前在路線的哪裡：從上次的位置往前找（也容許往回一點）
     var best = idx, bd = 1e18;
@@ -97,7 +98,7 @@
     var dist = 0, prev = enu(C[idx][1], C[idx][0], lat0, lon0);
     for (i = idx + 1; i <= Math.min(st.ri, C.length - 1); i++) { var q = enu(C[i][1], C[i][0], lat0, lon0); dist += Math.hypot(q[0] - prev[0], q[1] - prev[1]); prev = q; }
     dist += Math.sqrt(bd);
-    if (st.type === 'arrive' && dist < 30) { card.innerHTML = '<div style="font-size:20px;font-weight:700">已抵達目的地</div>'; card.style.display = ''; band.visible = false; return; }
+    if (st.type === 'arrive' && dist < 30) { card.innerHTML = '<div style="font-size:20px;font-weight:700">已抵達目的地</div>'; card.style.display = ''; band.visible = false; guide = { arrive: 1 }; guideAt = now; return; }
     card.innerHTML = '<div style="display:flex;align-items:center;gap:12px;justify-content:center">' +
       '<span style="font-size:34px;line-height:1;color:#5fb4ff">' + glyph([st.modifier || 'straight']) + '</span>' +
       '<span style="font-size:24px;font-weight:700">' + fmtDist(dist) + '</span>' +
@@ -127,6 +128,18 @@
       var t = document.createElement('div'); t.style.cssText = 'font-size:14px;color:#9fd0ff'; t.textContent = tip; laneBar.appendChild(t);
     }
     card.style.display = '';
+    // 給 360 畫面的導引：下一個動作、距離、路名、車道（同上面的車道列）、前方 200 m 的路線（車身座標，每 3 m 一點）
+    var gp = [];
+    for (i = idx; i < C.length && gp.length < 70; i++) {
+      var gc = toCar(enu(C[i][1], C[i][0], lat0, lon0), hdg);
+      if (Math.hypot(gc[0], gc[1]) > 200) { if (i > idx + 2) break; else continue; }
+      if (!gp.length || Math.hypot(gc[0] - gp[gp.length - 1][0], gc[1] - gp[gp.length - 1][1]) > 3) gp.push([Math.round(gc[0] * 10) / 10, Math.round(gc[1] * 10) / 10]);
+    }
+    guide = { act: actText(st), mod: st.modifier || 'straight', dist: Math.round(dist), name: st.name || '',
+      lanes: lanes && dist < 2000 ? lanes.map(function (l) { return { ind: l.ind, valid: !!l.valid }; }) : null, cur: cur,
+      tip: (!lanes && dist < 500 && st.type !== 'arrive') ? (want === 'left' || want === 'uturn' ? '請靠左側車道' : want === 'right' ? '請靠右側車道' : '保持直行') : '',
+      pts: gp };
+    guideAt = now;
     // 小地圖的路線（600 m 內，每 5 m 一點）
     mini = [];
     for (i = Math.max(0, idx - 5); i < C.length; i++) {
@@ -152,5 +165,6 @@
     } else band.visible = false;
   }
 
-  window.AVM_NAV = { init: init, setRoute: setRoute, onMap: onMap, onLanes: onLanes, update: update, miniPath: function () { return mini; } };
+  window.AVM_NAV = { init: init, setRoute: setRoute, onMap: onMap, onLanes: onLanes, update: update, miniPath: function () { return mini; },
+    guidance: function (now) { return guide && now - guideAt < 3000 ? guide : null; } };
 })();

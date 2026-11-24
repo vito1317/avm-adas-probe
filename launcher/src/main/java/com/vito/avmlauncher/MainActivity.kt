@@ -148,7 +148,7 @@ class MainActivity : Activity() {
         }
 
         /** 送給 ADAS 引擎（氛圍燈、後擋看板）。 */
-        @JavascriptInterface fun engine(cmd: String, arg: String) { if (cmd == "ambient" || cmd == "rear" || cmd == "realview" || cmd == "groundimg") car.engineCmd(cmd, arg) }
+        @JavascriptInterface fun engine(cmd: String, arg: String) { if (cmd == "ambient" || cmd == "rear" || cmd == "realview" || cmd == "groundimg" || cmd == "nav") car.engineCmd(cmd, arg) }
 
         /**
          * 道路畫面卡片：打開原廠 360，叫引擎切到 Tesla 式道路畫面。

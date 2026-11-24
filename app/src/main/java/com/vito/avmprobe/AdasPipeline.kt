@@ -1441,6 +1441,7 @@ class AdasPipeline(
         if (lp.isNotEmpty() && !inLot) p.put("lp", JSONObject().apply { for ((k, v) in lp) put(k.toString(), LaneArrowMemory.label(v)) })
             .put("lpc", r2(laneCenter)).put("lpw", r2(laneWidth))
         mapSrc?.takeJsonIfNew()?.let { p.put("map", it) }
+        LauncherLink.navGuide()?.let { p.put("nav", it) }          // 中控台導航的導引（360 畫面上也畫）
         val t = tl
         if (t != null && now - t.at < TL_TTL_MS) p.put("tl", JSONObject().put("s", t.s).put("c", r2(t.c)).put("ax", r2(t.ax)).put("ar", t.arrow ?: JSONObject.NULL))
         lastPayload = p

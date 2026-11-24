@@ -1551,7 +1551,16 @@
     var k = 1 - Math.pow(0.002, dt);   // 位置平滑
     // 實景模式（碗面貼圖）：碗在用時藏掉虛擬路面、平面實景、地面格線；別台車的 3D 模型也藏（畫面裡本來就有真的車）
     var bowlOn = window.AVM_REAL ? AVM_REAL.update(groundMode === 'real', now) : false;
-    if (window.AVM_NAV) AVM_NAV.update(now);
+    if (window.AVM_NAV) {
+      AVM_NAV.update(now);
+      // 導引送給中控台（中控台轉給 360 引擎畫在 360 畫面上），每秒一次；導航結束送一次 null
+      if (now - (window.__guideSent || 0) > 1000 && window.parent !== window) {
+        window.__guideSent = now;
+        var gd = AVM_NAV.guidance(now);
+        if (gd || window.__guideWas) try { window.parent.postMessage({ __navGuide: gd || null }, '*'); } catch (e) {}
+        window.__guideWas = !!gd;
+      }
+    }
     // FSD 風格：路面標線（俯視圖），每 3 秒跟中控台要一次
     var fsdStyle = window.AVM_FSD && AVM_FSD.style() === 'fsd';
     if (fsdStyle && now - groundAskAt > 3000) { groundAskAt = now; try { if (window.parent !== window) window.parent.postMessage({ __groundImg: 1 }, '*'); } catch (e) {} }
