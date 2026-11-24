@@ -105,8 +105,21 @@ object CarLink {
         return true
     }
 
-    /** 回傳 (HTTP 狀態碼, 內容)；連不上 null。用原生 socket＋綁本機網卡，手動 HTTP（繞開多網路路由問題）。 */
+    /** 車機可能綁在不同埠（原廠占用 8765）：先試記住的，再試其他。 */
+    private val PORTS = intArrayOf(8765, 8795, 8805, 8815, 8905)
+
+    /** 回傳 (HTTP 狀態碼, 內容)；連不上 null。會自動試幾個埠。 */
     private fun raw(method: String, path: String, body: String?, token: String?): Pair<Int, String>? {
+        if (ip == null) return null
+        val tried = LinkedHashSet<Int>().apply { add(port); PORTS.forEach { add(it) } }
+        for (p in tried) {
+            val r = rawOn(p, method, path, body, token)
+            if (r != null) { if (p != port) port = p; return r }
+        }
+        return null
+    }
+
+    private fun rawOn(port: Int, method: String, path: String, body: String?, token: String?): Pair<Int, String>? {
         val h = ip ?: return null
         val b = body?.toByteArray(Charsets.UTF_8)
         val sb = StringBuilder()
@@ -117,7 +130,7 @@ object CarLink {
         return try {
             java.net.Socket().use { s ->
                 localBindFor(h)?.let { try { s.bind(java.net.InetSocketAddress(it, 0)) } catch (_: Throwable) {} }
-                s.connect(java.net.InetSocketAddress(h, port), 2000); s.soTimeout = 5000
+                s.connect(java.net.InetSocketAddress(h, port), 1200); s.soTimeout = 5000
                 val out = s.getOutputStream()
                 out.write(sb.toString().toByteArray(Charsets.US_ASCII)); if (b != null) out.write(b); out.flush()
                 val ins = java.io.BufferedInputStream(s.getInputStream())

@@ -61,6 +61,7 @@ class MainActivity : Activity(), PhoneLink.Host {
         startLocation()
         LinkService.start(this)   // 常駐前景服務：中控台退到背景也不回收，8765 伺服器才不會死
         phone.start("E60", try { packageManager.getPackageInfo(packageName, 0).versionName ?: "" } catch (_: Throwable) { "" })
+        main.postDelayed({ android.widget.Toast.makeText(this, "手機互聯：" + phone.status, android.widget.Toast.LENGTH_LONG).show() }, 2500)
     }
 
     // ── 手機 App 互聯（[PhoneLink]）──
@@ -318,6 +319,7 @@ class MainActivity : Activity(), PhoneLink.Host {
         @JavascriptInterface fun phonePaired(): String = phoneTokens().toString().let { t ->
             org.json.JSONArray().also { out -> val a = org.json.JSONArray(t); for (i in 0 until a.length()) out.put(a.getJSONObject(i).optString("name")) }.toString() }
         @JavascriptInterface fun phoneUnpairAll() { prefs.edit().putString("phoneTokens", "[]").apply() }
+        @JavascriptInterface fun linkStatus(): String = phone.status
         @JavascriptInterface fun pref(k: String): String = prefs.getString(k, "") ?: ""
         @JavascriptInterface fun setPref(k: String, v: String) { prefs.edit().putString(k, v).apply() }
     }

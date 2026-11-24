@@ -46,31 +46,44 @@ class PhoneLink(private val host: Host) {
     companion object {
         const val HTTP_PORT = 8765
         const val BEACON_PORT = 8766
+        /** 綁不上第一個就往下試（原廠程式可能占用 8765）。手機端也試這幾個。 */
+        val HTTP_PORTS = intArrayOf(8765, 8795, 8805, 8815, 8905)
         private const val TAG = "PhoneLink"
     }
 
     @Volatile private var running = false
     private var server: ServerSocket? = null
+    /** 給中控台顯示用：目前綁在哪個埠、或錯誤。 */
+    @Volatile var status = "未啟動"; private set
+    @Volatile var boundPort = 0; private set
 
     fun start(name: String, ver: String) {
         if (running) return
         running = true
         thread(name = "phone-http", isDaemon = true) {
+            var ss: ServerSocket? = null; var lastErr = ""
+            for (p in HTTP_PORTS) {
+                try { ss = ServerSocket(p); boundPort = p; break } catch (t: Throwable) { lastErr = "$p: ${t.message ?: t.javaClass.simpleName}" }
+            }
+            if (ss == null) { status = "綁不上任何埠（$lastErr）"; Log.w(TAG, "bind all failed: $lastErr"); return@thread }
+            server = ss; status = "已在 $boundPort 等待手機連線"
+            Log.i(TAG, status)
             try {
-                val ss = ServerSocket(HTTP_PORT).also { server = it }
                 while (running) {
                     val s = try { ss.accept() } catch (_: Throwable) { break }
                     thread(name = "phone-req", isDaemon = true) { try { serve(s) } catch (t: Throwable) { Log.w(TAG, "req", t) } finally { try { s.close() } catch (_: Throwable) {} } }
                 }
-            } catch (t: Throwable) { Log.w(TAG, "server", t) }
+            } catch (t: Throwable) { status = "伺服器中斷：${t.message}"; Log.w(TAG, "server", t) }
         }
         thread(name = "phone-beacon", isDaemon = true) {
             try {
                 DatagramSocket().use { ds ->
                     ds.broadcast = true
-                    val msg = JSONObject().put("svc", "avm").put("name", name).put("port", HTTP_PORT).put("ver", ver).toString().toByteArray()
                     while (running) {
-                        for (a in broadcastAddrs()) try { ds.send(DatagramPacket(msg, msg.size, a, BEACON_PORT)) } catch (_: Throwable) {}
+                        if (boundPort > 0) {
+                            val msg = JSONObject().put("svc", "avm").put("name", name).put("port", boundPort).put("ver", ver).toString().toByteArray()
+                            for (a in broadcastAddrs()) try { ds.send(DatagramPacket(msg, msg.size, a, BEACON_PORT)) } catch (_: Throwable) {}
+                        }
                         Thread.sleep(2000)
                     }
                 }
