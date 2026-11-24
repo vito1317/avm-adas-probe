@@ -156,4 +156,122 @@ object DrivePath {
         val lo = (xl + EGO_HW - OVER_LINE) - p[0]; val hi = (xr - EGO_HW + OVER_LINE) - p[0]
         return doubleArrayOf(minOf(lo, 0.0), maxOf(hi, 0.0))
     }
+
+    // ───────────── 智慧規劃（網格＋動態規劃） ─────────────
+
+    /** 規劃用的障礙物：位置、對地速度（m/s，x 右 z 前）、半寬、半長、是不是人。 */
+    class Agent(val x: Double, val z: Double, val vx: Double, val vz: Double, val hw: Double, val hl: Double, val ped: Boolean)
+    /** 車道線：兩端點、白／黃、虛線。 */
+    class Line(val x1: Double, val z1: Double, val x2: Double, val z2: Double, val kind: Char, val dashed: Boolean)
+
+    const val DS = 1.5               // 站距（m）
+    val OFFS = DoubleArray(17) { -2.0 + it * 0.25 }   // 候選橫向偏移 −2.0～+2.0 m
+
+    /**
+     * 網格規劃：沿 [base] 每 [DS] 公尺一站、每站 17 個橫向位置，動態規劃找總成本最低的一條。
+     * 成本：碰撞（照每台車／人的速度推算「我到那裡時它在哪」，撞到 = 不行、太近加成本）、
+     * 壓線（白虛線小、白實線大、黃實線很大、路緣不行）、偏離（越偏越貴）、急轉（橫向變化平方）、
+     * 跟上一刻的選擇差多少（不會左右亂跳）。同車道前方在動的車 → 跟車，路徑畫到它後面；
+     * 每條都過不去 → 停在擋住的地方前、[Result.blocked]。只用來顯示，不拿去控制車子。
+     */
+    class Planner {
+        private var prev: DoubleArray? = null       // 上一刻每站的偏移
+
+        fun plan(base: List<FloatArray>, agents: List<Agent>, lines: List<Line>, edgeL: Double?, edgeR: Double?, egoMps: Double): Result {
+            if (base.size < 3) return Result(base, false, false)
+            // 沿 base 等距取站（弧長）
+            val cum = DoubleArray(base.size)
+            for (i in 1 until base.size) cum[i] = cum[i - 1] + kotlin.math.hypot((base[i][0] - base[i - 1][0]).toDouble(), (base[i][1] - base[i - 1][1]).toDouble())
+            val total = cum.last()
+            val n = (total / DS).toInt() + 1
+            if (n < 3) return Result(base, false, false)
+            val px = DoubleArray(n); val pz = DoubleArray(n); val nx = DoubleArray(n); val nz = DoubleArray(n)
+            var k = 0
+            for (i in 0 until n) {
+                val s = i * DS
+                while (k < base.size - 2 && cum[k + 1] < s) k++
+                val f = ((s - cum[k]) / (cum[k + 1] - cum[k]).coerceAtLeast(1e-6)).coerceIn(0.0, 1.0)
+                px[i] = base[k][0] + (base[k + 1][0] - base[k][0]) * f; pz[i] = base[k][1] + (base[k + 1][1] - base[k][1]) * f
+                val tx = (base[k + 1][0] - base[k][0]).toDouble(); val tz = (base[k + 1][1] - base[k][1]).toDouble(); val l = kotlin.math.hypot(tx, tz).coerceAtLeast(1e-6)
+                nx[i] = tz / l; nz[i] = -tx / l
+            }
+            val L = OFFS.size; val INF = 1e18
+            // 跟車：同車道前方在動的車（對地 > 1.5 m/s、跟 base 橫向 < 1.2 m、在前方）→ 規劃只到它後面 2 m
+            var horizon = n
+            var following = false
+            for (a in agents) {
+                if (a.ped || kotlin.math.hypot(a.vx, a.vz) < 1.5 || a.z <= 0) continue
+                var bi = 0; var bd = Double.MAX_VALUE
+                for (i in 0 until n) { val d = kotlin.math.hypot(a.x - px[i], a.z - pz[i]); if (d < bd) { bd = d; bi = i } }
+                val lat = (a.x - px[bi]) * nx[bi] + (a.z - pz[bi]) * nz[bi]
+                if (kotlin.math.abs(lat) < 1.2 && a.vz > 0) {
+                    val h = ((bi * DS - a.hl - 2.0) / DS).toInt().coerceAtLeast(1)
+                    if (h < horizon) { horizon = h; following = true }
+                }
+            }
+            val v = maxOf(egoMps, 2.0)
+            // 每站每個偏移的「節點成本」
+            val node = Array(horizon) { DoubleArray(L) }
+            for (i in 0 until horizon) {
+                val t = i * DS / v
+                for (j in 0 until L) {
+                    val x = px[i] + OFFS[j] * nx[i]; val z = pz[i] + OFFS[j] * nz[i]
+                    var c = 0.4 * kotlin.math.abs(OFFS[j])                                      // 偏離
+                    // 碰撞（前方才算；自車附近的東西交給警示）
+                    for (a in agents) {
+                        val ax = a.x + a.vx * t; val az = a.z + a.vz * t
+                        if (az < 0.5 && a.z < 0.5) continue
+                        val dLong = kotlin.math.abs(az - z) - (a.hl + 2.4)
+                        val dLat = kotlin.math.abs(ax - x) - (a.hw + EGO_HW)
+                        if (dLong < 0 && dLat < 0) { c = INF; break }
+                        if (dLong < 1.0 && dLat < 2 * MARGIN) c += (2 * MARGIN - dLat) * 30
+                    }
+                    if (c >= INF) { node[i][j] = INF; continue }
+                    // 路緣
+                    if (edgeL != null && x - EGO_HW < edgeL + 0.2) { node[i][j] = INF; continue }
+                    if (edgeR != null && x + EGO_HW > edgeR - 0.2) { node[i][j] = INF; continue }
+                    // 壓線：車身左右緣之間有線
+                    for (ln in lines) {
+                        val dz = ln.z2 - ln.z1; if (kotlin.math.abs(dz) < 0.5) continue
+                        val lx = ln.x1 + (ln.x2 - ln.x1) * (z - ln.z1) / dz
+                        if (z < minOf(ln.z1, ln.z2) - 20 || z > maxOf(ln.z1, ln.z2) + 20) continue
+                        if (lx > x - EGO_HW && lx < x + EGO_HW) c += when {
+                            ln.kind == 'y' && !ln.dashed -> 60.0
+                            ln.kind == 'y' -> 20.0
+                            !ln.dashed -> 10.0
+                            else -> 2.0
+                        }
+                    }
+                    prev?.let { pv -> if (i < pv.size) c += 0.6 * kotlin.math.abs(OFFS[j] - pv[i]) }
+                    node[i][j] = c
+                }
+            }
+            // 動態規劃：第 0 站固定在 0 偏移（車子現在的位置）
+            val cost = Array(horizon) { DoubleArray(L) { INF } }; val from = Array(horizon) { IntArray(L) { -1 } }
+            val j0 = L / 2
+            cost[0][j0] = 0.0
+            for (i in 1 until horizon) for (j in 0 until L) {
+                if (node[i][j] >= INF) continue
+                for (q in maxOf(0, j - 3)..minOf(L - 1, j + 3)) {           // 每站最多橫移 0.75 m
+                    if (cost[i - 1][q] >= INF) continue
+                    val dd = OFFS[j] - OFFS[q]
+                    val c = cost[i - 1][q] + node[i][j] + 8.0 * dd * dd
+                    if (c < cost[i][j]) { cost[i][j] = c; from[i][j] = q }
+                }
+            }
+            // 能走到最遠的那站
+            var last = horizon - 1
+            while (last > 0 && cost[last].all { it >= INF }) last--
+            val blocked = last < horizon - 1
+            var bj = (0 until L).minByOrNull { cost[last][it] } ?: j0
+            val offs = DoubleArray(last + 1)
+            for (i in last downTo 0) { offs[i] = OFFS[bj]; if (i > 0) bj = from[i][bj].coerceAtLeast(0) }
+            prev = offs
+            // 被擋：停在擋住的地方前 1 站
+            val keep = if (blocked) maxOf(1, last - 1) else last
+            val out = ArrayList<FloatArray>(keep + 1)
+            for (i in 0..keep) out.add(floatArrayOf((px[i] + offs[i] * nx[i]).toFloat(), (pz[i] + offs[i] * nz[i]).toFloat()))
+            return Result(out, blocked && !following, following)
+        }
+    }
 }

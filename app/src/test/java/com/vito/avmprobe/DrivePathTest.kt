@@ -67,4 +67,35 @@ class DrivePathTest {
         assertEquals(base.size, r.pts.size)
         assertEquals(0f, xAt(r, 12f), 1e-4f)
     }
+
+    // ── 智慧規劃 ──
+    private fun xNear(r: DrivePath.Result, z: Float) = r.pts.minByOrNull { kotlin.math.abs(it[1] - z) }!![0]
+    private fun parked(x: Double, z: Double) = DrivePath.Agent(x, z, 0.0, 0.0, 0.9, 2.3, false)
+
+    @Test fun plannerGoesAroundParkedCar() {
+        val r = DrivePath.Planner().plan(straight(), listOf(parked(0.8, 14.0)), emptyList(), null, null, 14.0)
+        assertTrue(!r.blocked)
+        assertTrue("在停著的車旁邊要偏左：${xNear(r, 14f)}", xNear(r, 14f) <= 0.8f - 1.85f + 0.01f)
+        assertTrue("過了要回來：${r.pts.last()[0]}", kotlin.math.abs(r.pts.last()[0]) < 0.6f)
+    }
+
+    @Test fun plannerThreadsGap() {
+        val r = DrivePath.Planner().plan(straight(), listOf(parked(1.0, 14.0), parked(-3.3, 15.0)), emptyList(), null, null, 14.0)
+        assertTrue(!r.blocked)
+        val x = xNear(r, 14f)
+        assertTrue("從兩台中間過：$x", x <= 1.0f - 1.85f + 0.01f && x >= -3.3f + 1.85f - 0.01f)
+    }
+
+    @Test fun plannerFollowsLeadCar() {
+        val r = DrivePath.Planner().plan(straight(), listOf(DrivePath.Agent(0.0, 16.0, 0.0, 10.0, 0.9, 2.3, false)), emptyList(), null, null, 14.0)
+        assertTrue(r.following && !r.blocked)
+        assertTrue(r.pts.last()[1] < 16f - 2.3f)
+        assertTrue(r.pts.all { kotlin.math.abs(it[0]) < 0.3f })
+    }
+
+    @Test fun plannerAvoidsCrossingSolidWhenPossible() {
+        // 左邊白實線在 −1.5：沒有障礙物時不會去壓它
+        val r = DrivePath.Planner().plan(straight(), emptyList(), listOf(DrivePath.Line(-1.5, -5.0, -1.5, 40.0, 'w', false)), null, null, 14.0)
+        assertTrue(r.pts.all { kotlin.math.abs(it[0]) < 0.3f })
+    }
 }

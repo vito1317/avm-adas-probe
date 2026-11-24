@@ -81,27 +81,40 @@ class AnnotationView(context: Context) : View(context) {
         val lane = ribbon.current()
         val base = DrivePath.predict(lane, st, sp, turn, gear == "R")
         if (gear == "R") return DrivePath.Result(base, false, false)
-        // 障礙物：偵測到的車、人、三角錐（速度是相對自車的，加回自車車速才是對地）、高度障礙物
+        // 智慧規劃（[DrivePath.Planner]）：車、人、三角錐（速度是相對自車的，加回自車車速才是對地）、高度障礙物、車道線、路緣
         val ego = (sp ?: 0f) / 3.6
-        val obs = ArrayList<DrivePath.Obs>()
+        val agents = ArrayList<DrivePath.Agent>()
         p.optJSONArray("objs")?.let { a ->
             for (i in 0 until a.length()) {
                 val o = a.optJSONObject(i) ?: continue
                 val t = o.optString("t")
-                val r = when (t) { "truck", "bus" -> 1.2; "car", "van" -> 0.9; "moto", "bigbike", "bike" -> 0.4; "ped" -> 0.3; "cone" -> 0.2; else -> 0.6 }
-                val vx = o.optDouble("vx", 0.0); val vz = o.optDouble("vz", 0.0)
-                val moving = o.has("vz") && kotlin.math.hypot(vx, vz + ego) > 1.5
-                obs.add(DrivePath.Obs(o.optDouble("x"), o.optDouble("z"), r, moving, t == "ped"))
+                val hw = when (t) { "truck", "bus" -> 1.25; "car", "van" -> 0.9; "moto", "bigbike", "bike" -> 0.4; "ped" -> 0.3; "cone" -> 0.2; else -> 0.6 }
+                val hl = when (t) { "truck", "bus" -> 5.0; "car", "van" -> 2.3; "moto", "bigbike", "bike" -> 1.0; "ped" -> 0.3; "cone" -> 0.2; else -> 0.6 }
+                val vx = if (o.has("vx")) o.optDouble("vx") else 0.0
+                val vz = if (o.has("vz")) o.optDouble("vz") + ego else 0.0
+                agents.add(DrivePath.Agent(o.optDouble("x"), o.optDouble("z"), vx, vz, hw, hl, t == "ped"))
             }
         }
         p.optJSONArray("obs")?.let { a ->
             for (i in 0 until a.length()) {
                 val o = a.optJSONObject(i) ?: continue
-                obs.add(DrivePath.Obs(o.optDouble("x"), o.optDouble("z"), maxOf(o.optDouble("w", 0.6), o.optDouble("l", 0.6)) / 2, false))
+                agents.add(DrivePath.Agent(o.optDouble("x"), o.optDouble("z"), 0.0, 0.0, o.optDouble("w", 0.6) / 2, o.optDouble("l", 0.6) / 2, false))
             }
         }
-        return DrivePath.avoid(base, obs, lane)
+        val road = p.optJSONObject("road")
+        val lines = ArrayList<DrivePath.Line>()
+        road?.optJSONArray("lines")?.let { a ->
+            for (i in 0 until a.length()) {
+                val l = a.optJSONObject(i) ?: continue
+                val k = l.optString("k").firstOrNull() ?: continue
+                if (k == 'r') continue
+                lines.add(DrivePath.Line(l.optDouble("x1"), l.optDouble("z1"), l.optDouble("x2"), l.optDouble("z2"), k, l.optInt("d") == 1))
+            }
+        }
+        val el = road?.takeIf { !it.isNull("el") }?.optDouble("el"); val er = road?.takeIf { !it.isNull("er") }?.optDouble("er")
+        return planner.plan(base, agents, lines, el, er, ego)
     }
+    private val planner = DrivePath.Planner()
 
     /** 路徑帶：寬約 1 m 的藍色，近亮遠淡，中間一條亮線。[toXY] 把地面點轉成畫面座標（看不到回 null）。 */
     private fun drawPathBand(c: Canvas, res: DrivePath.Result, toXY: (Float, Float) -> FloatArray?) {
