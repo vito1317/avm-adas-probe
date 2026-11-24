@@ -53,7 +53,112 @@
     return pts;
   }
 
-  var mesh = null, line = null, lastLane = null, laneAt = -1e9, sm = null;
+  // ── 智慧規劃（跟 360 端 DrivePath.Planner 同一套）：每 1.5 m 一站、17 個橫向位置的網格＋動態規劃 ──
+  // 成本：照速度推算的碰撞（撞到不行、太近加成本）、壓線（白虛小、白實大、黃實很大、路緣不行）、偏離、急轉、跟上一刻差多少。
+  // 同車道前方在動的車 → 跟車；每條都過不去 → 停在擋住的地方前、變橘紅。只用來顯示，不拿去控制車子。
+  var EGO_HW = 0.95, MARGIN = 0.3, DS = 1.5, OFFS = [];
+  for (var oi = 0; oi < 17; oi++) OFFS.push(-2 + oi * 0.25);
+  var prevOffs = null;
+  var HALF = { truck: [1.25, 5], bus: [1.25, 5], car: [0.9, 2.3], van: [0.9, 2.3], moto: [0.4, 1], bigbike: [0.4, 1], bike: [0.4, 1], ped: [0.3, 0.3], cone: [0.2, 0.2] };
+
+  function agentsOf(p, ego) {
+    var a = [];
+    (p.objs || []).forEach(function (o) {
+      var h = HALF[o.t] || [0.6, 0.6];
+      var vx = typeof o.vx === 'number' ? o.vx : 0, vz = typeof o.vz === 'number' ? o.vz + ego : 0;   // 相對速度 → 對地
+      a.push({ x: o.x, z: o.z, vx: vx, vz: vz, hw: h[0], hl: h[1], ped: o.t === 'ped' });
+    });
+    (p.obs || []).forEach(function (o) { a.push({ x: o.x, z: o.z, vx: 0, vz: 0, hw: (o.w || 0.6) / 2, hl: (o.l || 0.6) / 2, ped: false }); });
+    return a;
+  }
+
+  function plan(base, p, ego) {
+    var cum = [0], i, k, j;
+    for (i = 1; i < base.length; i++) cum.push(cum[i - 1] + Math.hypot(base[i][0] - base[i - 1][0], base[i][1] - base[i - 1][1]));
+    var n = Math.floor(cum[cum.length - 1] / DS) + 1;
+    if (n < 3) return { pts: base, blocked: false };
+    var px = [], pz = [], nx = [], nz = [];
+    k = 0;
+    for (i = 0; i < n; i++) {
+      var s = i * DS;
+      while (k < base.length - 2 && cum[k + 1] < s) k++;
+      var f = Math.max(0, Math.min(1, (s - cum[k]) / Math.max(1e-6, cum[k + 1] - cum[k])));
+      px.push(base[k][0] + (base[k + 1][0] - base[k][0]) * f); pz.push(base[k][1] + (base[k + 1][1] - base[k][1]) * f);
+      var tx = base[k + 1][0] - base[k][0], tz = base[k + 1][1] - base[k][1], l = Math.hypot(tx, tz) || 1e-6;
+      nx.push(tz / l); nz.push(-tx / l);
+    }
+    var agents = agentsOf(p, ego), L = OFFS.length, INF = 1e18, horizon = n, following = false;
+    agents.forEach(function (a) {          // 跟車
+      if (a.ped || Math.hypot(a.vx, a.vz) < 1.5 || a.z <= 0 || a.vz <= 0) return;
+      var bi = 0, bd = 1e18;
+      for (var q = 0; q < n; q++) { var d = Math.hypot(a.x - px[q], a.z - pz[q]); if (d < bd) { bd = d; bi = q; } }
+      var lat = (a.x - px[bi]) * nx[bi] + (a.z - pz[bi]) * nz[bi];
+      if (Math.abs(lat) < 1.2) { var h = Math.max(1, Math.floor((bi * DS - a.hl - 2) / DS)); if (h < horizon) { horizon = h; following = true; } }
+    });
+    var road = p.road || {}, lines = (road.lines || []).filter(function (l) { return l.k !== 'r'; });
+    var el = typeof road.el === 'number' ? road.el : null, er = typeof road.er === 'number' ? road.er : null;
+    var v = Math.max(ego, 2), node = [];
+    for (i = 0; i < horizon; i++) {
+      var t = i * DS / v, row = [];
+      for (j = 0; j < L; j++) {
+        var x = px[i] + OFFS[j] * nx[i], z = pz[i] + OFFS[j] * nz[i], c = 0.4 * Math.abs(OFFS[j]);
+        for (var ai = 0; ai < agents.length && c < INF; ai++) {
+          var A = agents[ai], ax = A.x + A.vx * t, az = A.z + A.vz * t;
+          if (az < 0.5 && A.z < 0.5) continue;
+          var dLong = Math.abs(az - z) - (A.hl + 2.4), dLat = Math.abs(ax - x) - (A.hw + EGO_HW);
+          if (dLong < 0 && dLat < 0) c = INF;
+          else if (dLong < 1 && dLat < 2 * MARGIN) c += (2 * MARGIN - dLat) * 30;
+        }
+        if (c < INF && ((el !== null && x - EGO_HW < el + 0.2) || (er !== null && x + EGO_HW > er - 0.2))) c = INF;
+        if (c < INF) lines.forEach(function (ln) {
+          var dz = ln.z2 - ln.z1; if (Math.abs(dz) < 0.5) return;
+          if (z < Math.min(ln.z1, ln.z2) - 20 || z > Math.max(ln.z1, ln.z2) + 20) return;
+          var lx = ln.x1 + (ln.x2 - ln.x1) * (z - ln.z1) / dz;
+          if (lx > x - EGO_HW && lx < x + EGO_HW) c += ln.k === 'y' ? (ln.d ? 20 : 60) : (ln.d ? 2 : 10);
+        });
+        if (c < INF && prevOffs && i < prevOffs.length) c += 0.6 * Math.abs(OFFS[j] - prevOffs[i]);
+        row.push(c);
+      }
+      node.push(row);
+    }
+    var cost = [], from = [], j0 = (L - 1) / 2;
+    for (i = 0; i < horizon; i++) { cost.push(new Array(L).fill(INF)); from.push(new Array(L).fill(-1)); }
+    cost[0][j0] = 0;
+    for (i = 1; i < horizon; i++) for (j = 0; j < L; j++) {
+      if (node[i][j] >= INF) continue;
+      for (var q2 = Math.max(0, j - 3); q2 <= Math.min(L - 1, j + 3); q2++) {
+        if (cost[i - 1][q2] >= INF) continue;
+        var dd = OFFS[j] - OFFS[q2], cc = cost[i - 1][q2] + node[i][j] + 8 * dd * dd;
+        if (cc < cost[i][j]) { cost[i][j] = cc; from[i][j] = q2; }
+      }
+    }
+    var last = horizon - 1;
+    while (last > 0 && cost[last].every(function (c) { return c >= INF; })) last--;
+    var blocked = last < horizon - 1, bj = j0, bc = INF;
+    for (j = 0; j < L; j++) if (cost[last][j] < bc) { bc = cost[last][j]; bj = j; }
+    var offs = new Array(last + 1);
+    for (i = last; i >= 0; i--) { offs[i] = OFFS[bj]; if (i > 0) bj = Math.max(0, from[i][bj]); }
+    prevOffs = offs;
+    var keep = blocked ? Math.max(1, last - 1) : last, out = [];
+    for (i = 0; i <= keep; i++) out.push([px[i] + offs[i] * nx[i], pz[i] + offs[i] * nz[i]]);
+    return { pts: out, blocked: blocked && !following };
+  }
+
+  /** 等弧長重取樣成 n+1 點（網格點數固定）。 */
+  function resample(pts, n) {
+    var cum = [0], i, out = [];
+    for (i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
+    var tot = cum[cum.length - 1], k = 0;
+    for (i = 0; i <= n; i++) {
+      var s = tot * i / n;
+      while (k < pts.length - 2 && cum[k + 1] < s) k++;
+      var f = Math.max(0, Math.min(1, (s - cum[k]) / Math.max(1e-6, cum[k + 1] - cum[k])));
+      out.push([pts[k][0] + (pts[k + 1][0] - pts[k][0]) * f, pts[k][1] + (pts[k + 1][1] - pts[k][1]) * f]);
+    }
+    return out;
+  }
+
+  var mesh = null, line = null, lastLane = null, laneAt = -1e9, sm = null, blockedNow = false;
 
   function init(THREE, scene) {
     var geo = new THREE.BufferGeometry();
@@ -73,12 +178,19 @@
   }
 
   /** 每幀：[veh] payload 的車況、[lines] 最近一次的道路線（payload road.lines）、[now] ms。 */
-  function update(veh, lines, now, enabled) {
+  function update(veh, lines, now, enabled, payload) {
     if (!mesh) return;
     if (lines) { var ln = laneOf(lines); if (ln) { lastLane = ln; laneAt = now; } }
     var lane = now - laneAt < 1500 ? lastLane : null;
     var pts = enabled ? predict(veh, lane) : null;
-    if (!pts) { mesh.visible = line.visible = false; sm = null; return; }
+    if (!pts) { mesh.visible = line.visible = false; sm = null; prevOffs = null; return; }
+    // 避開障礙物（倒車不做）
+    blockedNow = false;
+    if (payload && veh && veh.gear !== 'R') {
+      var r = plan(pts, payload, (veh.speed || 0) / 3.6);
+      if (r.pts.length >= 2) pts = resample(r.pts, N);
+      blockedNow = r.blocked;
+    }
     // 平滑（每點指數平均），路徑才不會一幀一跳
     if (!sm || sm.length !== pts.length) sm = pts.map(function (p) { return p.slice(); });
     else for (var i = 0; i < pts.length; i++) { sm[i][0] += 0.3 * (pts[i][0] - sm[i][0]); sm[i][1] += 0.3 * (pts[i][1] - sm[i][1]); }
@@ -88,7 +200,8 @@
       var dx = b[0] - a[0], dz = b[1] - a[1], L = Math.hypot(dx, dz) || 1, nx = dz / L * HW, nz = -dx / L * HW;
       var p = sm[j], Y = 0.035, f = j / N, al = 0.62 * (1 - f) + 0.06;
       pos.set([p[0] - nx, Y, -(p[1] - nz), p[0] + nx, Y, -(p[1] + nz)], j * 6);
-      col.set([0.16, 0.55, 1.0, al, 0.16, 0.55, 1.0, al], j * 8);
+      if (blockedNow) col.set([1.0, 0.43, 0.16, al, 1.0, 0.43, 0.16, al], j * 8);      // 過不去：橘紅
+      else col.set([0.16, 0.55, 1.0, al, 0.16, 0.55, 1.0, al], j * 8);
       lp.set([p[0], Y + 0.005, -p[1]], j * 3);
     }
     mesh.geometry.attributes.position.needsUpdate = true; mesh.geometry.attributes.color.needsUpdate = true;
@@ -137,6 +250,6 @@
     try { return localStorage.getItem('bev3dStyle') || 'std'; } catch (e) { return 'std'; }
   }
 
-  window.AVM_FSD = { init: init, update: update, predict: predict, applyStyle: applyStyle, dressObject: dressObject,
+  window.AVM_FSD = { init: init, update: update, predict: predict, plan: plan, applyStyle: applyStyle, dressObject: dressObject,
     undressObject: undressObject, style: function () { return style; }, savedStyle: savedStyle };
 })();

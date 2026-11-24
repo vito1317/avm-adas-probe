@@ -1299,7 +1299,7 @@
     if (p && p.__route !== undefined) { if (window.AVM_NAV) AVM_NAV.setRoute(p.__route); return; }
     if (p.map && window.AVM_NAV) AVM_NAV.onMap(p.map, now);
     if (p.lp && window.AVM_NAV) AVM_NAV.onLanes(p.lp, now);
-    if (window.AVM_FSD) AVM_FSD.update(p.veh || null, p.road ? (p.road.lines || []) : null, now, true);
+    if (window.AVM_FSD) AVM_FSD.update(p.veh || null, p.road ? (p.road.lines || []) : null, now, true, p);
     if (window.AVM_REAL && p.bowl) AVM_REAL.onFrame(THREE, scene, p.bowl, p.bowlG);
     lastData = now;
     if (p.src) setSrc(p.src);
