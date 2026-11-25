@@ -191,13 +191,30 @@ class AnnotationView(context: Context) : View(context) {
         if (pts.size < 2) return
         val base = if (res.blocked) Color.rgb(255, 110, 40) else Color.rgb(40, 140, 255)     // 過不去：橘紅
         val hw = 0.5f
-        for (i in 0 until pts.size - 1) {
+        // 每個頂點的法線＝相鄰兩段法線的平均（頂點法線），相鄰四邊形共用同兩個邊點 → 轉彎接縫密合、不留間隙
+        val n = pts.size
+        fun segN(i: Int): Pair<Float, Float> {
             val a = pts[i]; val b = pts[i + 1]
             val dx = b[0] - a[0]; val dz = b[1] - a[1]; val L = kotlin.math.hypot(dx, dz).coerceAtLeast(1e-3f)
-            val nx = dz / L * hw; val nz = -dx / L * hw
-            val q = listOf(toXY(a[0] - nx, a[1] - nz), toXY(b[0] - nx, b[1] - nz), toXY(b[0] + nx, b[1] + nz), toXY(a[0] + nx, a[1] + nz))
+            return (dz / L) to (-dx / L)
+        }
+        val vn = Array(n) { i ->
+            val (nx, nz) = when {
+                i == 0 -> segN(0)
+                i == n - 1 -> segN(n - 2)
+                else -> { val (ax, az) = segN(i - 1); val (bx, bz) = segN(i); (ax + bx) to (az + bz) }
+            }
+            val m = kotlin.math.hypot(nx, nz).coerceAtLeast(1e-3f)
+            // 尖轉彎 miter 會過長，限制放大倍率
+            val scale = (hw / m).coerceAtMost(hw * 2.2f)
+            floatArrayOf(nx * scale, nz * scale)
+        }
+        for (i in 0 until n - 1) {
+            val a = pts[i]; val b = pts[i + 1]; val na = vn[i]; val nb = vn[i + 1]
+            val q = listOf(toXY(a[0] - na[0], a[1] - na[1]), toXY(b[0] - nb[0], b[1] - nb[1]),
+                toXY(b[0] + nb[0], b[1] + nb[1]), toXY(a[0] + na[0], a[1] + na[1]))
             if (q.any { it == null }) continue
-            val f = i.toFloat() / (pts.size - 1)
+            val f = i.toFloat() / (n - 1)
             path.reset(); path.moveTo(q[0]!![0], q[0]!![1]); for (k in 1..3) path.lineTo(q[k]!![0], q[k]!![1]); path.close()
             fill.color = base; fill.alpha = (150 * (1 - f) + 15).toInt(); c.drawPath(path, fill)
         }

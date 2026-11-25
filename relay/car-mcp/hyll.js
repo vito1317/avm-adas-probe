@@ -9,6 +9,8 @@
 // 這裡只做「使用者在手機 App 開啟遠端控制、而且每個動作都明確確認」後才會被呼叫的白名單指令。
 import net from 'node:net';
 import crypto from 'node:crypto';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 const CFG = {
   ssk: process.env.CYHY_SSK || '',
@@ -22,6 +24,21 @@ const CFG = {
 };
 
 export const configured = () => !!(CFG.ssk && CFG.uid && CFG.tid);
+
+/** 手機登入後推來的新憑證：更新執行中的設定並寫回 .env（手機 app 自己登入亮波換 key 後呼叫）。 */
+export function setCreds({ ssk, uid, tid, txnkey }) {
+  if (ssk) CFG.ssk = String(ssk);
+  if (uid) CFG.uid = String(uid);
+  if (tid) CFG.tid = String(tid);
+  if (txnkey !== undefined) CFG.txnkey = String(txnkey || '');
+  try {
+    const fs = require('node:fs'); const path = process.env.CYHY_ENV_FILE || '.env';
+    let t = ''; try { t = fs.readFileSync(path, 'utf8'); } catch {}
+    const set = (k, v) => { const re = new RegExp('^' + k + '=.*$', 'm'); t = re.test(t) ? t.replace(re, k + '=' + v) : (t + (t.endsWith('\n') || !t ? '' : '\n') + k + '=' + v + '\n'); };
+    set('CYHY_SSK', CFG.ssk); set('CYHY_UID', CFG.uid); set('CYHY_TID', CFG.tid); set('CYHY_TXNKEY', CFG.txnkey);
+    fs.writeFileSync(path, t, { mode: 0o600 });
+  } catch {}
+}
 
 // 指令碼（反組譯 BleCY02.getCmd / ctrl.xml 確認）。只收這些；發動／熄火另有上層閘。
 export const CODES = {

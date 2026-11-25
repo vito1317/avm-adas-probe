@@ -149,24 +149,26 @@ details summary{color:var(--dim);font-size:13px}
     <div class="sw"><div>分享手機 GPS 給車機<div class="muted">中控台導航、360 地圖（路名、速限）都會優先用手機的</div></div><div class="tg" id="share"></div></div>
     <div class="muted" id="shareSt" style="margin-top:6px"></div>
   </div>
-  <div class="card"><h2>車控</h2>
-    <div id="ctlNew" hidden>
-      <div class="muted" style="font-size:13px;margin-bottom:8px">先在中控台按「車控 → 手機遠端控制 → 配對手機」，把畫面上的 PIN 輸入這裡。只有配對過的手機能控制。</div>
-      <div class="row"><input id="ctlPin" placeholder="6 位數 PIN" inputmode="numeric" maxlength="6"><button class="btn" id="ctlPair">配對</button></div>
+  <div class="card"><h2>遠端控制（亮波雲端）</h2>
+    <div id="hyNew" hidden>
+      <div class="muted" style="font-size:13px;margin-bottom:8px">用你的亮波帳號登入一次，之後手機就能直接遠端控車、看車況——車熄火、不在車上也能用。憑證只存在這支手機。</div>
+      <input id="hyAcc" placeholder="亮波帳號" autocomplete="username" style="margin-bottom:8px">
+      <div class="row"><input id="hyPw" type="password" placeholder="密碼" autocomplete="current-password"><button class="btn" id="hyLogin">登入</button></div>
     </div>
-    <div id="ctlOk" hidden>
+    <div id="hyOk" hidden>
+      <div class="muted" style="font-size:12px;margin-bottom:8px">已登入 <b id="hyAccName"></b>　<a id="hyOut" style="color:var(--acc)">登出</a></div>
       <div class="cgrid">
-        <button class="cb" data-r="LOCK" data-q="鎖車？">🔒<span>鎖車</span></button><button class="cb" data-r="UNLOCK" data-q="開鎖？">🔓<span>開鎖</span></button>
-        <button class="cb" data-r="WINDOW_UP" data-q="升起所有車窗？">⬆︎<span>升窗</span></button><button class="cb" data-r="WINDOW_DOWN" data-q="降下所有車窗？">⬇︎<span>降窗</span></button>
-        <button class="cb" data-r="TRUNK_OPEN" data-q="打開後車廂？">🧳<span>開尾箱</span></button><button class="cb" data-r="AC_ON" data-q="開空調？">❄︎<span>開空調</span></button>
-        <button class="cb" data-r="AC_OFF" data-q="關空調？">⏻<span>關空調</span></button><button class="cb" data-c="ambient_power" data-a="1">💡<span>氛圍燈開</span></button>
-        <button class="cb" data-c="ambient_power" data-a="0">○<span>氛圍燈關</span></button>
+        <button class="cb" data-h="lock" data-q="鎖車？">🔒<span>鎖車</span></button><button class="cb" data-h="unlock" data-q="開鎖？">🔓<span>開鎖</span></button>
+        <button class="cb" data-h="windows_up" data-q="升起所有車窗？">⬆︎<span>升窗</span></button><button class="cb" data-h="windows_down" data-q="降下所有車窗？">⬇︎<span>降窗</span></button>
+        <button class="cb" data-h="trunk_open" data-q="打開後車廂？">🧳<span>開尾箱</span></button><button class="cb" data-h="trunk_close" data-q="關後車廂？">🧳<span>關尾箱</span></button>
+        <button class="cb" data-h="start_engine" data-q="遠端發動引擎？請確認車在通風處、P 檔。室內／地下室勿發動（廢氣）。">🔑<span>發動</span></button>
+        <button class="cb" data-h="stop_engine" data-q="遠端熄火？">⏹<span>熄火</span></button>
       </div>
+      <div id="hySt" class="muted" style="font-size:12px;margin-top:10px"></div>
       <div class="sw" style="margin-top:12px"><div>允許 AI 透過 MCP 控制<div class="muted">關著時 AI 只能看、不能控制（預設關）</div></div><div class="tg" id="aiCtl"></div></div>
-      <div style="margin-top:10px"><button class="btn ghost" id="ctlUnpair">取消車控配對</button></div>
-      <div class="muted" style="font-size:12px;margin-top:6px">車機要開著（ACC）才收得到；不能發動或熄火。</div>
+      <div class="muted" style="font-size:12px;margin-top:8px">發動擋非 P 檔、熄火擋移動中。登入後憑證也會同步給 relay，AI／中控台一起新鮮。</div>
     </div>
-    <div class="err" id="ctlErr"></div>
+    <div class="err" id="hyErr"></div>
   </div>
   <div class="card"><h2>遠端 AI（MCP）</h2>
     <div id="rlPaired" hidden>
@@ -384,17 +386,29 @@ function renderCar(info){
   if(a){const st=(on,t)=>on===false?'關閉':(t||'—');
     $('accs').innerHTML=k('氛圍燈',st(a.ambientOn,a.ambient))+k('後擋看板',st(a.rearOn,a.rear))+k('遠端模組',a.remoteReady?(a.remote||'—'):'未設定');$('accs').className='';}
 }
-// 車控（手機直接按；AI 要另外允許）
-function renderCtl(){let c={};try{c=JSON.parse(App.ctlInfo());}catch(e){return;}
-  $('ctlNew').hidden=c.paired;$('ctlOk').hidden=!c.paired;$('aiCtl').classList.toggle('on',c.aiAllowed);}
-$('ctlPair').onclick=async()=>{$('ctlErr').textContent='';let r={};try{r=JSON.parse(await req('carpair',$('ctlPin').value));}catch(e){r={err:'沒有回應'};}
-  if(r.err)$('ctlErr').textContent=r.err;else{$('ctlPin').value='';renderCtl();}};
-async function ctl(cmd,arg,label){$('ctlErr').textContent='';let r={};try{r=JSON.parse(await req('control',JSON.stringify({cmd,arg})));}catch(e){r={err:'沒有回應'};}
-  $('ctlErr').style.color=r.err?'':'var(--ok)';$('ctlErr').textContent=r.err?r.err:'已送出：'+label;renderCtl();}
-document.querySelectorAll('.cb').forEach(b=>b.onclick=()=>{const label=b.querySelector('span').textContent;
-  if(b.dataset.r){if(confirm(b.dataset.q))ctl('remote',b.dataset.r,label);}else ctl(b.dataset.c,b.dataset.a,label);});
-$('aiCtl').onclick=()=>{const on=!$('aiCtl').classList.contains('on');if(on&&!confirm('允許 AI（透過 MCP）鎖車／開鎖、車窗、尾箱、空調？AI 每次動作前應該會先問你。'))return;App.setAiControl(on);renderCtl();};
-$('ctlUnpair').onclick=()=>{if(confirm('取消這支手機的車控配對？'))App.ctlUnpair();renderCtl();};
+// 遠端控制（亮波雲端：手機自己登入→直接控車／看車況）
+function callId(invoke){return new Promise(r=>{const id=++rid;pend[id]=r;try{invoke(id);}catch(e){delete pend[id];r('');}});}
+let hyOn=false;
+function renderCtl(){let c={};try{c=JSON.parse(App.hyllInfo());}catch(e){return;}
+  hyOn=!!c.configured;$('hyNew').hidden=hyOn;$('hyOk').hidden=!hyOn;$('hyAccName').textContent=c.account||'';
+  try{$('aiCtl').classList.toggle('on',JSON.parse(App.ctlInfo()).aiAllowed);}catch(e){}
+  if(hyOn&&tab==='sCar')hyRefreshStatus();}
+let hyStAt=0;
+async function hyRefreshStatus(){if(Date.now()-hyStAt<8000)return;hyStAt=Date.now();
+  let t='';try{t=await callId(id=>App.hyllStatus(id));}catch(e){}
+  if(!t){$('hySt').textContent='';return;}let s={};try{s=JSON.parse(t);}catch(e){return;}
+  const bits=[s.speed!=null?Math.round(s.speed)+' km/h':null,s.volt?(s.volt/10).toFixed(1)+' V':null,s.temp?s.temp+'°C':null,s.fuel?'油 '+s.fuel+' L':null,s.gsmol==='1'?'模組在線':'模組離線'].filter(Boolean);
+  $('hySt').textContent='車況：'+bits.join('　')+(s.lat?`　📍${s.lat.toFixed(4)},${s.lng.toFixed(4)}`:'');}
+$('hyLogin').onclick=async()=>{$('hyErr').textContent='';const a=$('hyAcc').value.trim(),p=$('hyPw').value;if(!a||!p){$('hyErr').textContent='輸入帳號密碼';return;}
+  $('hyLogin').disabled=true;$('hyLogin').textContent='登入中…';
+  let r={};try{r=JSON.parse(await callId(id=>App.hyllLogin(id,a,p)));}catch(e){r={err:'沒有回應'};}
+  $('hyLogin').disabled=false;$('hyLogin').textContent='登入';
+  if(r.err)$('hyErr').textContent=r.err;else{$('hyPw').value='';renderCtl();}};
+$('hyOut').onclick=()=>{if(confirm('登出亮波？憑證會從這支手機清除。')){App.hyllLogout();renderCtl();}};
+async function hyCtl(action){$('hyErr').textContent='';let r={};try{r=JSON.parse(await callId(id=>App.hyllControl(id,action)));}catch(e){r={err:'沒有回應'};}
+  $('hyErr').style.color=r.err?'':'var(--ok)';$('hyErr').textContent=r.err?r.err:'已送出';setTimeout(()=>{hyStAt=0;hyRefreshStatus();},1500);}
+document.querySelectorAll('.cb[data-h]').forEach(b=>b.onclick=()=>{if(confirm(b.dataset.q))hyCtl(b.dataset.h);});
+$('aiCtl').onclick=()=>{const on=!$('aiCtl').classList.contains('on');if(on&&!confirm('允許 AI（透過 MCP）鎖車／開鎖、車窗、尾箱、發動／熄火？AI 每次動作前應該會先問你。'))return;App.setAiControl(on);renderCtl();};
 // 遠端 AI（MCP）
 function renderRelay(){let r={};try{r=JSON.parse(App.relayInfo());}catch(e){return;}
   $('rlPaired').hidden=!r.paired;$('rlNew').hidden=!!r.paired;

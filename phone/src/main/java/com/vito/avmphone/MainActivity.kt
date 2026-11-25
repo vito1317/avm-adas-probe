@@ -127,6 +127,44 @@ class MainActivity : Activity() {
         @JavascriptInterface fun ctlUnpair() { CarLink.controlUnpair() }
         @JavascriptInterface fun setAiControl(on: Boolean) { RelayService.prefs(this@MainActivity).edit().putBoolean("allowControl", on).apply() }
         @JavascriptInterface fun wantShare(): Boolean = getSharedPreferences("car", MODE_PRIVATE).getBoolean("share", true)
+
+        // ── 亮波雲端（手機自己登入取憑證，直接控車／看車況；車熄火也能用）──
+        @JavascriptInterface fun hyllInfo(): String = JSONObject()
+            .put("configured", HyllCloud.configured(this@MainActivity)).put("account", HyllCloud.account(this@MainActivity)).toString()
+        /** 登入；非同步，結果回 window.__res(id, '{"ok":true}' 或 '{"err":...}')。成功順便把憑證推給 relay。 */
+        @JavascriptInterface fun hyllLogin(id: Int, account: String, password: String) {
+            kotlin.concurrent.thread {
+                val err = HyllCloud.login(this@MainActivity, account, password)
+                if (err == null) pushCredsToRelay()
+                reply(id, (if (err == null) JSONObject().put("ok", true) else JSONObject().put("err", err)).toString())
+            }
+        }
+        @JavascriptInterface fun hyllControl(id: Int, action: String) {
+            kotlin.concurrent.thread {
+                val (ok, msg) = HyllCloud.control(this@MainActivity, action)
+                if (ok) pushCredsToRelay()   // 重登過的話把新憑證也推給 relay
+                reply(id, (if (ok) JSONObject().put("ok", true).put("msg", msg) else JSONObject().put("err", msg)).toString())
+            }
+        }
+        @JavascriptInterface fun hyllStatus(id: Int) {
+            kotlin.concurrent.thread { reply(id, HyllCloud.status(this@MainActivity) ?: "") }
+        }
+        @JavascriptInterface fun hyllLogout() { HyllCloud.logout(this@MainActivity) }
+    }
+
+    /** 登入後把 cyhy 憑證推給 Spark relay（讓 MCP／中控台也新鮮）。走 relay 的裝置 token 認證。 */
+    private fun pushCredsToRelay() {
+        try {
+            val creds = HyllCloud.creds(this) ?: return
+            val rp = RelayService.prefs(this)
+            val tok = rp.getString("token", null) ?: return
+            val base = rp.getString("server", RelayService.DEFAULT_SERVER) ?: return
+            val c = (java.net.URL("$base/api/cyhy").openConnection() as java.net.HttpURLConnection)
+            c.connectTimeout = 6000; c.readTimeout = 8000; c.requestMethod = "POST"; c.doOutput = true
+            c.setRequestProperty("Authorization", "Bearer $tok"); c.setRequestProperty("Content-Type", "application/json")
+            c.outputStream.use { it.write(creds.toString().toByteArray()) }
+            c.inputStream.use { it.read() }
+        } catch (_: Throwable) {}
     }
 
     override fun onRequestPermissionsResult(rc: Int, perms: Array<out String>, res: IntArray) {

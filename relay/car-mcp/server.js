@@ -543,6 +543,14 @@ async function handleApi(req, res, url) {
     const who = await loginVerify(req, body);
     return sendJson(res, 200, who, { 'set-cookie': startSession(res, who) });
   }
+  if (url.pathname === '/api/cyhy' && req.method === 'POST') {
+    const tok = bearer(req);
+    const rec = tok ? store.findDeviceToken(tok) : null;
+    if (!rec) return sendJson(res, 401, { error: 'bad device token' });
+    hyll.setCreds({ ssk: body.ssk, uid: body.uid, tid: body.tid, txnkey: body.txnkey });
+    log(`cyhy creds updated by ${rec.user}/${rec.name}`);
+    return sendJson(res, 200, { ok: true });
+  }
   if (url.pathname === '/api/device-pair' && req.method === 'POST') {
     const user = usePairCode(req, body.code);
     const name = String(body.device_name || 'android').replace(/[^\w.\-]/g, '_').slice(0, 64);
