@@ -260,7 +260,7 @@ const RO = { readOnlyHint: true, openWorldHint: false };
 
 const TOOLS = [
   { name: 'list_cars', description: 'List the cars (phone apps paired in the car) that are online now.', inputSchema: obj({}), annotations: { ...RO, title: '列出車輛' } },
-  { name: 'car_status', description: 'Current vehicle state from the head unit: speed, gear, rpm, fuel, range, coolant/oil temp, battery voltage, outside temp, fuel economy, doors/hood/trunk, lights, turn signals, handbrake, seatbelt, current road name + speed limit, navigation progress, accessories. Values may be missing when the CAN bus has not reported them.', inputSchema: obj({ ...DEV, raw: { type: 'boolean', default: false, description: 'Also return the raw JSON' } }), annotations: { ...RO, title: '車況' } },
+  { name: 'car_status', description: 'Vehicle state. Always available via the car\'s cellular module (cyhy cloud): lock state, engine on/off, doors/trunk/hood open, windows, battery voltage, inside temp, fuel, mileage, A/C, handbrake, lights, GPS location (with a map link), module online. When the phone app is also connected in the car it adds the head-unit CAN view: speed, gear, rpm, road name + speed limit, navigation progress, accessories. Some fields are missing when not reported.', inputSchema: obj({ ...DEV, raw: { type: 'boolean', default: false, description: 'Also return the raw JSON' } }), annotations: { ...RO, title: '車況' } },
   { name: 'car_surroundings', description: 'What the 360 cameras detect right now (relative to the car: x = metres to the right, z = metres forward from the car centre): vehicles, motorbikes, pedestrians and cones with distance/lane, lane lines and their type, blind-spot warnings, lead-car braking, traffic light, driver-aid warnings, parking slots, parking sensor distances.', inputSchema: obj({ ...DEV, raw: { type: 'boolean', default: false } }), annotations: { ...RO, title: '周圍狀況' } },
   { name: 'car_camera', description: 'Actual 360 camera imagery stitched by the head unit: "top" = bird\'s-eye ground image around the car, "panorama" = the surround (bowl) texture unwrapped 360° around the car. Takes a few seconds the first time (the head unit starts producing it on request).', inputSchema: obj({ ...DEV, view: { type: 'string', enum: ['top', 'panorama', 'both'], default: 'top' } }), annotations: { ...RO, title: '360 畫面' } },
   { name: 'phone_location', description: 'GPS position of the phone in the car (lat, lon, accuracy, speed, heading, age) with an OpenStreetMap link.', inputSchema: obj({ ...DEV }), annotations: { ...RO, title: '手機定位' } },
@@ -299,6 +299,30 @@ function where(x, z) {
   const lane = Math.abs(x) < 1.75 ? '同車道' : x < 0 ? (x > -5.25 ? '左邊車道' : '更左邊') : (x < 5.25 ? '右邊車道' : '更右邊');
   const fb = z > 2.4 ? '前方' : z < -2.4 ? '後方' : '旁邊';
   return `${lane}${fb}`;
+}
+
+// 亮波雲端車況（隨時可讀）
+function cloudStatusText(s) {
+  const L = [];
+  L.push(`🔒 ${s.locked ? '已鎖車' : '未上鎖'}　引擎 ${s.engine ? '運轉中' : '熄火'}${s.acc ? '（ACC 開）' : ''}`);
+  const m = [];
+  if (s.temp != null) m.push(`車溫 ${Math.round(s.temp)}°C`);
+  if (s.volt != null) m.push(`電瓶 ${s.volt.toFixed(1)} V`);
+  if (has(s.fuel)) m.push(`油量 ${s.fuel} L`);
+  if (has(s.mileage)) m.push(`里程 ${s.mileage} km`);
+  if (m.length) L.push(m.join('　'));
+  const dn = { lf: '左前門', lb: '左後門', rf: '右前門', rb: '右後門', trunk: '後車廂', hood: '引擎蓋' };
+  const dopen = Object.entries(dn).filter(([k]) => s.doors && s.doors[k]).map(([, v]) => v);
+  L.push(dopen.length ? `⚠ 沒關：${dopen.join('、')}` : '車門都關著');
+  const wn = { lf: '左前', lb: '左後', rf: '右前', rb: '右後', top: '天窗' };
+  const wopen = Object.entries(wn).filter(([k]) => s.windows && s.windows[k]).map(([, v]) => v);
+  if (wopen.length) L.push(`車窗開：${wopen.join('、')}`);
+  const flags = [];
+  if (s.handbrake) flags.push('手煞車'); if (s.ac) flags.push('空調開'); if (s.highBeam) flags.push('大燈'); if (s.charging) flags.push('充電中');
+  if (flags.length) L.push(flags.join('、'));
+  if (s.lat && s.lng) L.push(`📍 ${s.lat}, ${s.lng}　https://www.openstreetmap.org/?mlat=${s.lat}&mlon=${s.lng}#map=16/${s.lat}/${s.lng}`);
+  if (!s.gsmol) L.push('（模組離線，資料可能是最後一次）');
+  return L.join('\n');
 }
 
 function statusText(s) {
@@ -388,8 +412,14 @@ async function callTool(ctx, name, args = {}) {
   switch (name) {
     case 'list_cars': return text(JSON.stringify(deviceList(ctx), null, 2));
     case 'car_status': {
-      const { result } = await one(ctx, dev, 'status', {});
-      return text(statusText(result) + (args.raw ? '\n\n' + JSON.stringify(result) : ''));
+      // 雲端車況（亮波模組的車聯網）：隨時可讀，不靠車機連線。車機有連上就再附車速/路名/導航
+      const cloud = hyll.configured() ? await hyll.status().catch(() => null) : null;
+      const hu = await one(ctx, dev, 'status', {}).then((r) => r.result).catch(() => null);
+      if (!cloud && !hu) return { content: [{ type: 'text', text: '讀不到車況：亮波雲端沒設定、車機也沒連上。' }], isError: true };
+      const parts = [];
+      if (cloud) parts.push(cloudStatusText(cloud));
+      if (hu) parts.push('── 車機（CAN，即時）──\n' + statusText(hu));
+      return text(parts.join('\n\n') + (args.raw ? '\n\n' + JSON.stringify({ cloud, headUnit: hu }) : ''));
     }
     case 'car_surroundings': {
       const { result } = await one(ctx, dev, 'scene', {});
