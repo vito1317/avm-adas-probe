@@ -109,7 +109,28 @@ details summary{color:var(--dim);font-size:13px}
 .cc-big button{flex:1;padding:14px;border-radius:14px;border:1px solid var(--line);background:var(--p2);color:var(--fg);font-size:16px;font-weight:600;display:flex;align-items:center;justify-content:center;gap:8px}
 .cc-big button.lock{border-color:var(--ok);color:var(--ok)}.cc-big button.unlock{border-color:var(--amb);color:var(--amb)}
 .cc-big button:active{transform:scale(.97)}
+.cc-car img{filter:drop-shadow(0 0 12px rgba(120,140,170,.18))}
+.cc-car.eng img{filter:drop-shadow(0 0 16px rgba(255,120,40,.5))}
+.ic{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;flex:none}
+.cc-big button .ic{width:20px;height:20px}.cb .ic{width:24px;height:24px}
+.cc-lock svg{width:20px;height:20px;stroke:var(--ok);fill:none;stroke-width:2}.cc-lock.open svg{stroke:var(--amb)}
+.loc{margin-top:12px;border-radius:14px;overflow:hidden;border:1px solid var(--line);background:var(--p2)}
+.loc iframe{display:block;width:100%;height:150px;border:0;filter:grayscale(.25) brightness(.9)}
+.loc-bar{display:flex;align-items:center;justify-content:space-between;padding:9px 12px;font-size:13px}
+.loc-bar .a{color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:62%}
+.loc-bar a{color:var(--acc)}
 </style></head><body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+<g id="i-lock"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></g>
+<g id="i-unlock"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 7.5-2"/></g>
+<g id="i-key"><circle cx="8" cy="15" r="3.5"/><path d="M10.5 12.5 20 3M17 6l2 2M15 8l1.5 1.5"/></g>
+<g id="i-power"><path d="M12 4v8"/><path d="M6.5 7a8 8 0 1 0 11 0"/></g>
+<g id="i-trunk"><path d="M4 18V9a8 8 0 0 1 16 0v9"/><path d="M4 15h16"/></g>
+<g id="i-pack"><path d="M4 8l8-4 8 4v8l-8 4-8-4z"/><path d="M4 8l8 4 8-4M12 12v8"/></g>
+<g id="i-winup"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 13l4-4 4 4"/></g>
+<g id="i-windn"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 11l4 4 4-4"/></g>
+<g id="i-pin"><path d="M12 21s7-6.2 7-11a7 7 0 0 0-14 0c0 4.8 7 11 7 11z"/><circle cx="12" cy="10" r="2.5"/></g>
+</defs></svg>
 <div class="top"><span class="dot" id="dot"></span><b id="title">尋找車機…</b><span class="sub" id="sub"></span></div>
 <main>
 <!-- 行駛 -->
@@ -182,7 +203,7 @@ details summary{color:var(--dim);font-size:13px}
       <div class="cc">
         <div class="cc-car" id="ccCar">
           <img src="e60_top.png" alt="">
-          <div class="cc-lock" id="ccLock">🔒</div>
+          <div class="cc-lock" id="ccLock"><svg viewBox="0 0 24 24"><use href="#i-lock"/></svg></div>
           <i class="cc-ind" id="ccHood" style="left:39px;top:6px"></i>
           <i class="cc-ind" id="ccDfl" style="left:-5px;top:66px"></i><i class="cc-ind" id="ccDfr" style="right:-5px;top:66px"></i>
           <i class="cc-ind" id="ccDrl" style="left:-5px;top:118px"></i><i class="cc-ind" id="ccDrr" style="right:-5px;top:118px"></i>
@@ -192,16 +213,20 @@ details summary{color:var(--dim);font-size:13px}
       </div>
       <div id="ccBadges" style="margin-bottom:6px"></div>
       <div class="cc-big">
-        <button id="ccLockBtn" data-h="lock" data-q="鎖車？">🔒 鎖車</button>
-        <button id="ccUnlockBtn" data-h="unlock" data-q="開鎖？">🔓 開鎖</button>
+        <button id="ccLockBtn" data-h="lock" data-q="鎖車？"><svg class="ic" viewBox="0 0 24 24"><use href="#i-lock"/></svg>鎖車</button>
+        <button id="ccUnlockBtn" data-h="unlock" data-q="開鎖？"><svg class="ic" viewBox="0 0 24 24"><use href="#i-unlock"/></svg>開鎖</button>
       </div>
       <div class="cgrid">
-        <button class="cb" data-h="start_engine" data-q="遠端發動引擎？請確認車在通風處、P 檔。室內／地下室勿發動（廢氣）。">🔑<span>發動</span></button>
-        <button class="cb" data-h="stop_engine" data-q="遠端熄火？">⏹<span>熄火</span></button>
-        <button class="cb" data-h="trunk_open" data-q="打開後車廂？">🧳<span>開尾箱</span></button>
-        <button class="cb" data-h="windows_up" data-q="升起所有車窗？">⬆︎<span>升窗</span></button>
-        <button class="cb" data-h="windows_down" data-q="降下所有車窗？">⬇︎<span>降窗</span></button>
-        <button class="cb" data-h="trunk_close" data-q="關後車廂？">📦<span>關尾箱</span></button>
+        <button class="cb" data-h="start_engine" data-q="遠端發動引擎？請確認車在通風處、P 檔。室內／地下室勿發動（廢氣）。"><svg class="ic" viewBox="0 0 24 24"><use href="#i-key"/></svg><span>發動</span></button>
+        <button class="cb" data-h="stop_engine" data-q="遠端熄火？"><svg class="ic" viewBox="0 0 24 24"><use href="#i-power"/></svg><span>熄火</span></button>
+        <button class="cb" data-h="trunk_open" data-q="打開後車廂？"><svg class="ic" viewBox="0 0 24 24"><use href="#i-trunk"/></svg><span>開尾箱</span></button>
+        <button class="cb" data-h="windows_up" data-q="升起所有車窗？"><svg class="ic" viewBox="0 0 24 24"><use href="#i-winup"/></svg><span>升窗</span></button>
+        <button class="cb" data-h="windows_down" data-q="降下所有車窗？"><svg class="ic" viewBox="0 0 24 24"><use href="#i-windn"/></svg><span>降窗</span></button>
+        <button class="cb" data-h="trunk_close" data-q="關後車廂？"><svg class="ic" viewBox="0 0 24 24"><use href="#i-pack"/></svg><span>關尾箱</span></button>
+      </div>
+      <div class="loc" id="ccLoc" hidden>
+        <iframe id="ccMap" loading="lazy" referrerpolicy="no-referrer"></iframe>
+        <div class="loc-bar"><span class="a" id="ccAddr"><svg class="ic" viewBox="0 0 24 24" style="width:14px;height:14px;vertical-align:-2px"><use href="#i-pin"/></svg> <span id="ccAddrT">定位中…</span></span><a id="ccOpen" target="_blank">開啟地圖</a></div>
       </div>
       <div class="cc-upd" id="hySt"></div>
       <div class="sw" style="margin-top:10px"><div>允許 AI 透過 MCP 控制<div class="muted">關著時 AI 只能看、不能控制（預設關）</div></div><div class="tg" id="aiCtl"></div></div>
@@ -439,7 +464,7 @@ async function hyRefreshStatus(force){if(hyBusy)return;if(!force&&Date.now()-hyS
   let s={};try{s=JSON.parse(t);}catch(e){return;}
   // 車鎖徽章
   const locked=s.locked!==false&&s.locked!==undefined?s.locked:null;
-  $('ccLock').textContent=locked===false?'🔓':'🔒';$('ccLock').classList.toggle('open',locked===false);
+  $('ccLock').querySelector('use').setAttribute('href',locked===false?'#i-unlock':'#i-lock');$('ccLock').classList.toggle('open',locked===false);
   $('ccCar').classList.toggle('eng',!!s.engine);
   // 車門／引擎蓋／尾箱指示
   const d=s.doors||{};
@@ -463,7 +488,17 @@ async function hyRefreshStatus(force){if(hyBusy)return;if(!force&&Date.now()-hyS
   if(s.highBeam)bg.push(['大燈','b']);if(s.charging)bg.push(['充電中','g']);
   if(s.gsmol!=='1')bg.push(['模組離線','a']);
   $('ccBadges').innerHTML=bg.map(x=>`<span class="cc-badge ${x[1]}">${x[0]}</span>`).join('')||'<span class="cc-badge g">一切正常</span>';
-  const now=new Date();$('hySt').textContent='更新於 '+now.toTimeString().slice(0,8)+(s.lat?`　📍${s.lat.toFixed(4)},${s.lng.toFixed(4)}`:'');}
+  hyLoc(s.lat,s.lng);
+  const now=new Date();$('hySt').textContent='更新於 '+now.toTimeString().slice(0,8);}
+let hyLast=null;
+function hyLoc(lat,lng){
+  if(!lat||!lng){$('ccLoc').hidden=true;return;}$('ccLoc').hidden=false;
+  if(hyLast&&Math.abs(hyLast[0]-lat)<1e-4&&Math.abs(hyLast[1]-lng)<1e-4)return;hyLast=[lat,lng];
+  const d=0.004;$('ccMap').src=`https://www.openstreetmap.org/export/embed.html?bbox=${lng-d},${lat-d/2},${lng+d},${lat+d/2}&layer=mapnik&marker=${lat},${lng}`;
+  $('ccOpen').href=`https://www.openstreetmap.org/?mlat=${lat}&mlon=${lng}#map=16/${lat}/${lng}`;
+  $('ccAddrT').textContent=lat.toFixed(5)+', '+lng.toFixed(5);
+  fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&accept-language=zh-TW&lat=${lat}&lon=${lng}`,{headers:{'Accept':'application/json'}})
+    .then(r=>r.json()).then(j=>{const a=j.address||{};const t=[a.suburb||a.neighbourhood||a.village||a.town||a.city_district,a.road,a.house_number].filter(Boolean).join('');if(t)$('ccAddrT').textContent=t;}).catch(()=>{});}
 $('hyLogin').onclick=async()=>{$('hyErr').textContent='';const a=$('hyAcc').value.trim(),p=$('hyPw').value;if(!a||!p){$('hyErr').textContent='輸入帳號密碼';return;}
   $('hyLogin').disabled=true;$('hyLogin').textContent='登入中…';
   let r={};try{r=JSON.parse(await callId(id=>App.hyllLogin(id,a,p)));}catch(e){r={err:'沒有回應'};}
