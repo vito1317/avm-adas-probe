@@ -157,12 +157,35 @@ object HyllCloud {
             if (resp.optJSONObject("sys_head")?.optString("ret_code") != "000000") { if (relogin(ctx)) return status(ctx) else return null }
             val row = resp.optJSONObject("body")?.optJSONArray("rows")?.optJSONObject(0) ?: resp.optJSONObject("body")
             row?.let {
-                JSONObject().put("speed", it.optDouble("speed", 0.0)).put("volt", it.optString("volt")).put("temp", it.optString("temp"))
+                val o = JSONObject().put("speed", it.optDouble("speed", 0.0)).put("volt", it.optString("volt")).put("temp", it.optString("temp"))
                     .put("fuel", it.optString("fuel_avg").ifEmpty { it.optString("fuel") }).put("mileage", it.optString("mileage"))
                     .put("lat", it.optDouble("lat", 0.0)).put("lng", it.optDouble("lng", 0.0))
-                    .put("gsmol", it.optString("gsmol")).put("gpsol", it.optString("gpsol")).put("vst", it.optString("vst")).toString()
+                    .put("gsmol", it.optString("gsmol")).put("gpsol", it.optString("gpsol")).put("vst", it.optString("vst"))
+                decodeVst(it.optString("vst"), o)
+                o.toString()
             }
         } catch (_: Throwable) { null }
+    }
+
+    /** 解 vst（8 bytes hex）→ 車鎖／引擎／車門／車窗／手煞車／空調／燈（照官方 parseVstStatusCy，CY103）。 */
+    private fun decodeVst(vst: String, o: JSONObject) {
+        if (vst.length < 16) return
+        val b = IntArray(8) { try { vst.substring(it * 2, it * 2 + 2).toInt(16) } catch (_: Throwable) { 0 } }
+        val b0 = b[0]; val b1 = b[1]; val b2 = b[2]; val b5 = b[5]
+        o.put("locked", (b2 and 0x20) == 0)            // bit5 清除＝鎖著
+        o.put("engine", (b2 and 0x10) != 0)
+        o.put("acc", (b2 and 0x08) != 0)
+        o.put("ac", (b2 and 0x04) != 0)
+        o.put("handbrake", (b2 and 0x01) != 0)
+        o.put("highBeam", (b0 and 0x40) != 0)
+        o.put("parkLight", (b0 and 0x80) != 0)
+        o.put("charging", (b5 and 0x01) != 0)
+        o.put("doors", JSONObject().put("lf", (b0 and 1) != 0).put("lb", (b0 and 2) != 0).put("rf", (b0 and 4) != 0)
+            .put("rb", (b0 and 8) != 0).put("trunk", (b0 and 16) != 0).put("hood", (b0 and 32) != 0))
+        o.put("anyDoor", (b0 and 0x3f) != 0)
+        o.put("windows", JSONObject().put("lf", (b1 and 1) != 0).put("lb", (b1 and 2) != 0).put("rf", (b1 and 4) != 0)
+            .put("rb", (b1 and 8) != 0).put("top", (b1 and 16) != 0))
+        o.put("anyWindow", (b1 and 0x1f) != 0)
     }
 
     fun logout(ctx: Context) { p(ctx).edit().clear().apply() }
